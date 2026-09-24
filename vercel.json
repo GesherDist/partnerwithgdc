@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/cma-cgm-sync",
+      "schedule": "0 6 * * *"
+    }
+  ]
+}

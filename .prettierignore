@@ -1,0 +1,35 @@
+# Dependencies
+node_modules
+
+# Build outputs
+.next
+out
+dist
+build
+
+# Cache
+.cache
+*.tsbuildinfo
+
+# Environment files
+.env*
+
+# Lock files
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Generated files
+*.generated.*
+next-env.d.ts
+
+# Coverage
+coverage
+
+# IDE
+.idea
+.vscode
+
+# Misc
+*.min.js
+*.min.css
