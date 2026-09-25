@@ -369,11 +369,6 @@ export default function OperationsPage() {
           {/* KPI Stats */}
           <OperationsStatsGrid stats={data.stats} />
 
-          {/* 🆕 NEW: Fulfillment Source Breakdown - Sept 25, 2026 */}
-          {data.fulfillmentSourceBreakdown && data.fulfillmentSourceBreakdown.length > 0 && (
-            <FulfillmentSourceBreakdown data={data.fulfillmentSourceBreakdown} />
-          )}
-
           {/* REMOVED: Story in Brief - per user request Aug 31, 2025 */}
 
           {/* Immediate Attention - This is what Jenny checks FIRST */}
@@ -383,6 +378,11 @@ export default function OperationsPage() {
             onEdit={handleEditAttentionItem}
             onRefresh={handleRefresh}
           />
+
+          {/* 🆕 NEW: Fulfillment Source Breakdown - Sept 25, 2026 */}
+          {data.fulfillmentSourceBreakdown && data.fulfillmentSourceBreakdown.length > 0 && (
+            <FulfillmentSourceBreakdown data={data.fulfillmentSourceBreakdown} />
+          )}
 
           {/* Two column layout for breakdown and status */}
           <div className="grid gap-6 lg:grid-cols-[1.5fr_1fr]">

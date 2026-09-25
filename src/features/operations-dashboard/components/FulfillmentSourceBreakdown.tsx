@@ -53,7 +53,7 @@ export function FulfillmentSourceBreakdown({ data }: FulfillmentSourceBreakdownP
       <CardContent>
         <div className="grid gap-6 md:grid-cols-2">
           {/* Pie Chart */}
-          <ResponsiveContainer width="100%" height={300}>
+          <ResponsiveContainer width="100%" height={220}>
             <PieChart>
               <Pie
                 data={chartData}
@@ -61,7 +61,7 @@ export function FulfillmentSourceBreakdown({ data }: FulfillmentSourceBreakdownP
                 cy="50%"
                 labelLine={false}
                 label={({ percentage }) => `${percentage.toFixed(1)}%`}
-                outerRadius={80}
+                outerRadius={60}
                 fill="#8884d8"
                 dataKey="value"
               >

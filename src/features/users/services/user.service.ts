@@ -203,15 +203,47 @@ export const userService = {
         : await adminAuth.inviteUser(data.email, resetRedirectUrl(), metadata);
 
       if (authResult.error || !authResult.data?.user) {
-        console.error('UserService.create auth error:', authResult.error);
+        // Store error in variable to avoid TypeScript narrowing issues
+        const authError = authResult.error;
+
+        console.error('UserService.create auth error:', {
+          error: authError,
+          errorType: typeof authError,
+          errorKeys: authError ? Object.keys(authError) : [],
+          fullError: JSON.stringify(authError, null, 2),
+        });
+
+        // Extract error message properly - authError might be a string or object
+        let errorMessage = 'Failed to create the login account';
+        if (authError) {
+          if (typeof authError === 'string') {
+            errorMessage = authError;
+          } else if (typeof authError === 'object' && authError !== null) {
+            // Type assertion for error object
+            const errorObj = authError as { message?: string; error_description?: string };
+            if (errorObj.message && typeof errorObj.message === 'string') {
+              errorMessage = errorObj.message;
+            } else if (errorObj.error_description && typeof errorObj.error_description === 'string') {
+              errorMessage = errorObj.error_description;
+            } else {
+              // Fallback: try to stringify the error
+              try {
+                const errorStr = JSON.stringify(authError);
+                if (errorStr && errorStr !== '{}') {
+                  errorMessage = errorStr;
+                }
+              } catch (e) {
+                // If stringify fails, use default message
+              }
+            }
+          }
+        }
+
         return {
           success: false,
-          error:
-            authResult.error?.message || 'Failed to create the login account',
+          error: errorMessage,
           errors: {
-            email: [
-              authResult.error?.message || 'Failed to create the login account',
-            ],
+            email: [errorMessage],
           },
         };
       }
