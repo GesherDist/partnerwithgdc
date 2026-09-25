@@ -1,19 +1,20 @@
 /**
- * Document Storage Service
+ * Document Storage Service - AWS S3
  *
  * Handles file uploads, downloads for customer documents.
- * Uses local server storage (uploads folder).
+ * Uses AWS S3 for cloud storage.
  */
 
-import { writeFile, mkdir, readFile, stat, unlink, readdir } from 'fs/promises';
-import { existsSync } from 'fs';
-import path from 'path';
-
-// ============================================
-// CONSTANTS
-// ============================================
-
-const UPLOAD_DIR = path.join(process.cwd(), 'uploads', 'customer-documents');
+import {
+  PutObjectCommand,
+  GetObjectCommand,
+  DeleteObjectCommand,
+  DeleteObjectsCommand,
+  ListObjectsV2Command,
+  HeadBucketCommand,
+} from '@aws-sdk/client-s3';
+import { getSignedUrl as getS3SignedUrl } from '@aws-sdk/s3-request-presigner';
+import { getS3Client, AWS_S3_BUCKET } from '@/shared/lib/aws/s3-client';
 
 // ============================================
 // TYPES
@@ -34,15 +35,6 @@ export interface StorageError {
 // ============================================
 
 /**
- * Ensure upload directory exists
- */
-async function ensureDir(dirPath: string): Promise<void> {
-  if (!existsSync(dirPath)) {
-    await mkdir(dirPath, { recursive: true });
-  }
-}
-
-/**
  * Generate storage path for a document
  */
 export function generateStoragePath(
@@ -53,7 +45,7 @@ export function generateStoragePath(
 ): string {
   const date = new Date().toISOString().split('T')[0];
   const sanitizedFileName = fileName.replace(/[^a-zA-Z0-9.-]/g, '_');
-  return `${customerId}/${documentTypeCode.toLowerCase()}/v${version}_${date}_${sanitizedFileName}`;
+  return `customer-documents/${customerId}/${documentTypeCode.toLowerCase()}/v${version}_${date}_${sanitizedFileName}`;
 }
 
 /**
@@ -61,7 +53,21 @@ export function generateStoragePath(
  */
 export function extractCustomerIdFromPath(path: string): string | null {
   const parts = path.split('/');
-  return parts[0] ?? null;
+  // Path format: customer-documents/customer-id/document-type/filename
+  return parts[1] ?? null;
+}
+
+/**
+ * Convert S3 stream to Buffer
+ */
+async function streamToBuffer(stream: any): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+
+  return new Promise((resolve, reject) => {
+    stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+    stream.on('error', reject);
+    stream.on('end', () => resolve(Buffer.concat(chunks)));
+  });
 }
 
 // ============================================
@@ -69,30 +75,39 @@ export function extractCustomerIdFromPath(path: string): string | null {
 // ============================================
 
 /**
- * Upload a file to storage
+ * Upload a file to S3
  */
 export async function uploadFile(
   file: File,
   storagePath: string
 ): Promise<UploadResult> {
   try {
-    const fullPath = path.join(UPLOAD_DIR, storagePath);
-    const dirPath = path.dirname(fullPath);
+    const s3Client = getS3Client();
 
-    // Ensure directory exists
-    await ensureDir(dirPath);
-
-    // Convert File to Buffer and write
+    // Convert File to Buffer
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
-    await writeFile(fullPath, buffer);
+
+    // Upload to S3
+    const command = new PutObjectCommand({
+      Bucket: AWS_S3_BUCKET,
+      Key: storagePath,
+      Body: buffer,
+      ContentType: file.type,
+      Metadata: {
+        originalName: file.name,
+        uploadedAt: new Date().toISOString(),
+      },
+    });
+
+    await s3Client.send(command);
 
     return {
       path: storagePath,
-      fullPath: `customer-documents/${storagePath}`,
+      fullPath: `s3://${AWS_S3_BUCKET}/${storagePath}`,
     };
   } catch (error) {
-    console.error('Storage upload error:', error);
+    console.error('S3 upload error:', error);
     throw new Error(`Failed to upload file: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
@@ -103,38 +118,58 @@ export async function uploadFile(
 export async function uploadFileBuffer(
   buffer: Buffer,
   storagePath: string,
-  _mimeType: string
+  mimeType: string
 ): Promise<UploadResult> {
   try {
-    const fullPath = path.join(UPLOAD_DIR, storagePath);
-    const dirPath = path.dirname(fullPath);
+    const s3Client = getS3Client();
 
-    // Ensure directory exists
-    await ensureDir(dirPath);
+    // Upload to S3
+    const command = new PutObjectCommand({
+      Bucket: AWS_S3_BUCKET,
+      Key: storagePath,
+      Body: buffer,
+      ContentType: mimeType,
+      Metadata: {
+        uploadedAt: new Date().toISOString(),
+      },
+    });
 
-    // Write buffer to file
-    await writeFile(fullPath, buffer);
+    await s3Client.send(command);
 
     return {
       path: storagePath,
-      fullPath: `customer-documents/${storagePath}`,
+      fullPath: `s3://${AWS_S3_BUCKET}/${storagePath}`,
     };
   } catch (error) {
-    console.error('Storage upload error:', error);
+    console.error('S3 upload error:', error);
     throw new Error(`Failed to upload file: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
 
 /**
- * Get URL for downloading/viewing a file
- * Returns API endpoint URL for serving the file
+ * Get signed URL for downloading/viewing a file
+ * Returns a pre-signed URL valid for 1 hour
  */
 export async function getSignedUrl(
   storagePath: string,
-  _expiresIn?: number
+  expiresIn: number = 3600 // 1 hour default
 ): Promise<string> {
-  // Return API endpoint URL
-  return `/api/documents/file?path=${encodeURIComponent(storagePath)}`;
+  try {
+    const s3Client = getS3Client();
+
+    const command = new GetObjectCommand({
+      Bucket: AWS_S3_BUCKET,
+      Key: storagePath,
+    });
+
+    // Generate signed URL
+    const signedUrl = await getS3SignedUrl(s3Client, command, { expiresIn });
+
+    return signedUrl;
+  } catch (error) {
+    console.error('S3 signed URL error:', error);
+    throw new Error(`Failed to generate signed URL: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
 }
 
 /**
@@ -142,13 +177,22 @@ export async function getSignedUrl(
  */
 export async function getSignedUrls(
   storagePaths: string[],
-  _expiresIn?: number
+  expiresIn: number = 3600
 ): Promise<Record<string, string>> {
   const urlMap: Record<string, string> = {};
 
-  for (const storagePath of storagePaths) {
-    urlMap[storagePath] = `/api/documents/file?path=${encodeURIComponent(storagePath)}`;
-  }
+  // Generate signed URLs in parallel
+  const promises = storagePaths.map(async (storagePath) => {
+    try {
+      const url = await getSignedUrl(storagePath, expiresIn);
+      urlMap[storagePath] = url;
+    } catch (error) {
+      console.error(`Failed to get signed URL for ${storagePath}:`, error);
+      urlMap[storagePath] = '';
+    }
+  });
+
+  await Promise.all(promises);
 
   return urlMap;
 }
@@ -158,47 +202,79 @@ export async function getSignedUrls(
  */
 export async function downloadFile(storagePath: string): Promise<Buffer> {
   try {
-    const fullPath = path.join(UPLOAD_DIR, storagePath);
+    const s3Client = getS3Client();
 
-    // Check if file exists
-    await stat(fullPath);
+    const command = new GetObjectCommand({
+      Bucket: AWS_S3_BUCKET,
+      Key: storagePath,
+    });
 
-    // Read and return file
-    return await readFile(fullPath);
+    const response = await s3Client.send(command);
+
+    if (!response.Body) {
+      throw new Error('No file content returned from S3');
+    }
+
+    // Convert stream to buffer
+    const buffer = await streamToBuffer(response.Body);
+
+    return buffer;
   } catch (error) {
-    console.error('Download error:', error);
+    console.error('S3 download error:', error);
     throw new Error(`Failed to download file: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
 
 /**
- * Delete a file from storage
+ * Delete a file from S3
  */
 export async function deleteFile(storagePath: string): Promise<void> {
   try {
-    const fullPath = path.join(UPLOAD_DIR, storagePath);
-    await unlink(fullPath);
+    const s3Client = getS3Client();
+
+    const command = new DeleteObjectCommand({
+      Bucket: AWS_S3_BUCKET,
+      Key: storagePath,
+    });
+
+    await s3Client.send(command);
   } catch (error) {
-    console.error('Delete error:', error);
+    console.error('S3 delete error:', error);
     throw new Error(`Failed to delete file: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
 
 /**
- * Delete multiple files from storage
+ * Delete multiple files from S3
  */
 export async function deleteFiles(storagePaths: string[]): Promise<void> {
   if (storagePaths.length === 0) {
     return;
   }
 
-  for (const storagePath of storagePaths) {
-    try {
-      const fullPath = path.join(UPLOAD_DIR, storagePath);
-      await unlink(fullPath);
-    } catch (error) {
-      console.error(`Delete error for ${storagePath}:`, error);
-      // Continue deleting other files even if one fails
+  try {
+    const s3Client = getS3Client();
+
+    // S3 DeleteObjects can delete up to 1000 objects at once
+    const command = new DeleteObjectsCommand({
+      Bucket: AWS_S3_BUCKET,
+      Delete: {
+        Objects: storagePaths.map(path => ({ Key: path })),
+        Quiet: true,
+      },
+    });
+
+    await s3Client.send(command);
+  } catch (error) {
+    console.error('S3 batch delete error:', error);
+    // Continue even if batch delete fails
+    // Try deleting individually as fallback
+    for (const storagePath of storagePaths) {
+      try {
+        await deleteFile(storagePath);
+      } catch (err) {
+        console.error(`Failed to delete ${storagePath}:`, err);
+      }
     }
   }
 }
@@ -208,45 +284,48 @@ export async function deleteFiles(storagePaths: string[]): Promise<void> {
  */
 export async function listCustomerFiles(customerId: string): Promise<string[]> {
   try {
-    const customerDir = path.join(UPLOAD_DIR, customerId);
+    const s3Client = getS3Client();
 
-    if (!existsSync(customerDir)) {
+    const prefix = `customer-documents/${customerId}/`;
+
+    const command = new ListObjectsV2Command({
+      Bucket: AWS_S3_BUCKET,
+      Prefix: prefix,
+    });
+
+    const response = await s3Client.send(command);
+
+    if (!response.Contents || response.Contents.length === 0) {
       return [];
     }
 
-    const files: string[] = [];
+    // Extract file keys
+    const files = response.Contents
+      .map(item => item.Key)
+      .filter((key): key is string => key !== undefined);
 
-    // Recursively list files
-    async function listDir(dir: string, prefix: string): Promise<void> {
-      const entries = await readdir(dir, { withFileTypes: true });
-
-      for (const entry of entries) {
-        const entryPath = prefix ? `${prefix}/${entry.name}` : entry.name;
-
-        if (entry.isDirectory()) {
-          await listDir(path.join(dir, entry.name), entryPath);
-        } else {
-          files.push(`${customerId}/${entryPath}`);
-        }
-      }
-    }
-
-    await listDir(customerDir, '');
     return files;
   } catch (error) {
-    console.error('List files error:', error);
+    console.error('S3 list files error:', error);
     throw new Error(`Failed to list files: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
 
 /**
- * Check if storage directory exists and is accessible
+ * Check if S3 bucket exists and is accessible
  */
 export async function checkBucketAccess(): Promise<boolean> {
   try {
-    await ensureDir(UPLOAD_DIR);
+    const s3Client = getS3Client();
+
+    const command = new HeadBucketCommand({
+      Bucket: AWS_S3_BUCKET,
+    });
+
+    await s3Client.send(command);
     return true;
-  } catch {
+  } catch (error) {
+    console.error('S3 bucket access check failed:', error);
     return false;
   }
 }
@@ -255,5 +334,5 @@ export async function checkBucketAccess(): Promise<boolean> {
 // EXPORT CONSTANTS
 // ============================================
 
-export const BUCKET_NAME = 'customer-documents';
-export const SIGNED_URL_EXPIRY = 60 * 60; // 1 hour (kept for compatibility)
+export const BUCKET_NAME = AWS_S3_BUCKET;
+export const SIGNED_URL_EXPIRY = 60 * 60; // 1 hour

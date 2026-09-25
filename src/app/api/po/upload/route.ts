@@ -1,14 +1,13 @@
 /**
- * PO Upload API Route
+ * PO Upload API Route - AWS S3
  *
- * POST /api/po/upload - Upload PO PDF to Supabase Storage
+ * POST /api/po/upload - Upload PO PDF to AWS S3
  * GET /api/po/upload?file=<path> - Download/view uploaded file
- *
- * Note: Uses Supabase Storage instead of local filesystem
- * to work properly in serverless environments (Vercel)
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import {
   successResponse,
   badRequestResponse,
@@ -16,15 +15,15 @@ import {
   internalErrorResponse,
 } from '@/shared/lib/api/response';
 import { requirePermission } from '@/shared/lib/auth';
-import { createAdminClient } from '@/shared/lib/supabase/admin';
+import { getS3Client, AWS_S3_BUCKET } from '@/shared/lib/aws/s3-client';
 
 // ============================================
 // CONSTANTS
 // ============================================
 
-const BUCKET_NAME = 'po-documents';
 const MAX_FILE_SIZE_MB = 10;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
+const SIGNED_URL_EXPIRY = 60 * 60 * 24 * 7; // 7 days (max allowed by AWS)
 
 // ============================================
 // HELPER FUNCTIONS
@@ -41,25 +40,16 @@ function generateFilename(originalName: string): string {
 }
 
 /**
- * Ensure storage bucket exists
+ * Convert S3 stream to Buffer
  */
-async function ensureBucket(supabase: ReturnType<typeof createAdminClient>) {
-  const { data: buckets } = await supabase.storage.listBuckets();
+async function streamToBuffer(stream: any): Promise<Buffer> {
+  const chunks: Buffer[] = [];
 
-  const bucketExists = buckets?.some(b => b.name === BUCKET_NAME);
-
-  if (!bucketExists) {
-    const { error } = await supabase.storage.createBucket(BUCKET_NAME, {
-      public: false, // Private bucket - requires auth to access
-      fileSizeLimit: MAX_FILE_SIZE_BYTES,
-      allowedMimeTypes: ['application/pdf'],
-    });
-
-    if (error && !error.message.includes('already exists')) {
-      console.error('Error creating bucket:', error);
-      throw error;
-    }
-  }
+  return new Promise((resolve, reject) => {
+    stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+    stream.on('error', reject);
+    stream.on('end', () => resolve(Buffer.concat(chunks)));
+  });
 }
 
 // ============================================
@@ -67,7 +57,7 @@ async function ensureBucket(supabase: ReturnType<typeof createAdminClient>) {
 // ============================================
 
 /**
- * Upload PO PDF to Supabase Storage
+ * Upload PO PDF to AWS S3
  *
  * Request: FormData with 'file' field
  * Response: { path: string, url: string }
@@ -98,56 +88,48 @@ export async function POST(request: NextRequest) {
       return badRequestResponse(`File size exceeds ${MAX_FILE_SIZE_MB}MB limit`);
     }
 
-    // Create Supabase admin client
-    const supabase = createAdminClient();
-
-    // Ensure bucket exists
-    await ensureBucket(supabase);
-
     // Generate unique filename with path
     const filename = generateFilename(file.name);
     const storagePath = quoteId
-      ? `quotes/${quoteId}/${filename}`
-      : `uploads/${filename}`;
+      ? `po-documents/quotes/${quoteId}/${filename}`
+      : `po-documents/uploads/${filename}`;
 
-    // Convert File to ArrayBuffer
+    // Convert File to Buffer
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    // Upload to Supabase Storage
-    const { data, error } = await supabase.storage
-      .from(BUCKET_NAME)
-      .upload(storagePath, buffer, {
-        contentType: 'application/pdf',
-        upsert: false,
-      });
+    // Upload to S3
+    const s3Client = getS3Client();
 
-    if (error) {
-      console.error('Supabase storage upload error:', error);
-      return internalErrorResponse(`Failed to upload file: ${error.message}`);
-    }
+    const uploadCommand = new PutObjectCommand({
+      Bucket: AWS_S3_BUCKET,
+      Key: storagePath,
+      Body: buffer,
+      ContentType: 'application/pdf',
+      Metadata: {
+        originalName: file.name,
+        uploadedAt: new Date().toISOString(),
+        quoteId: quoteId || 'none',
+      },
+    });
 
-    // Get signed URL (valid for 1 year)
-    const { data: signedUrlData, error: signedUrlError } = await supabase.storage
-      .from(BUCKET_NAME)
-      .createSignedUrl(storagePath, 60 * 60 * 24 * 365); // 1 year
+    await s3Client.send(uploadCommand);
 
-    if (signedUrlError) {
-      console.error('Error creating signed URL:', signedUrlError);
-      // Fall back to path-based URL if signed URL fails
-      return successResponse({
-        path: data.path,
-        url: `${BUCKET_NAME}/${storagePath}`,
-        filename: filename,
-        storage: 'supabase',
-      });
-    }
+    // Generate signed URL (valid for 1 year)
+    const getCommand = new GetObjectCommand({
+      Bucket: AWS_S3_BUCKET,
+      Key: storagePath,
+    });
+
+    const signedUrl = await getSignedUrl(s3Client, getCommand, {
+      expiresIn: SIGNED_URL_EXPIRY,
+    });
 
     return successResponse({
-      path: data.path,
-      url: signedUrlData.signedUrl,
+      path: storagePath,
+      url: signedUrl,
       filename: filename,
-      storage: 'supabase',
+      storage: 's3',
     });
   } catch (error) {
     console.error('POST /api/po/upload error:', error);
@@ -160,7 +142,7 @@ export async function POST(request: NextRequest) {
 // ============================================
 
 /**
- * Download/view uploaded PO PDF from Supabase Storage
+ * Download/view uploaded PO PDF from AWS S3
  */
 export async function GET(request: NextRequest) {
   try {
@@ -181,28 +163,44 @@ export async function GET(request: NextRequest) {
     // Sanitize path to prevent directory traversal
     const sanitizedPath = filePath.replace(/\.\./g, '').replace(/^\//, '');
 
-    // Create Supabase admin client
-    const supabase = createAdminClient();
+    // Validate path format (should start with po-documents/)
+    if (!sanitizedPath.startsWith('po-documents/')) {
+      return badRequestResponse('Invalid file path');
+    }
 
-    // Download file from Supabase Storage
-    const { data, error } = await supabase.storage
-      .from(BUCKET_NAME)
-      .download(sanitizedPath);
+    // Download from S3
+    const s3Client = getS3Client();
 
-    if (error) {
-      console.error('Supabase Storage download error:', error);
+    const command = new GetObjectCommand({
+      Bucket: AWS_S3_BUCKET,
+      Key: sanitizedPath,
+    });
+
+    let response;
+    try {
+      response = await s3Client.send(command);
+    } catch (error: any) {
+      if (error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404) {
+        return notFoundResponse('File');
+      }
+      throw error;
+    }
+
+    if (!response.Body) {
       return notFoundResponse('File');
     }
 
-    // Convert Blob to Buffer
-    const arrayBuffer = await data.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+    // Convert stream to buffer
+    const buffer = await streamToBuffer(response.Body);
+
+    // Get filename from path
+    const filename = sanitizedPath.split('/').pop() || 'document.pdf';
 
     // Return file with appropriate headers
-    return new NextResponse(buffer, {
+    return new NextResponse(buffer as unknown as BodyInit, {
       headers: {
         'Content-Type': 'application/pdf',
-        'Content-Disposition': `inline; filename="${sanitizedPath.split('/').pop()}"`,
+        'Content-Disposition': `inline; filename="${filename}"`,
         'Cache-Control': 'private, max-age=3600',
       },
     });

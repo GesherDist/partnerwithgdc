@@ -1,24 +1,22 @@
 /**
- * Document File API Route
+ * Document File API Route - AWS S3
  *
- * GET /api/documents/file?path=<path> - Download/view document file
+ * GET /api/documents/file?path=<path> - Download/view document file from S3
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { readFile, stat } from 'fs/promises';
-import path from 'path';
+import { GetObjectCommand } from '@aws-sdk/client-s3';
 import {
   badRequestResponse,
   notFoundResponse,
   internalErrorResponse,
 } from '@/shared/lib/api/response';
 import { requirePermission } from '@/shared/lib/auth';
+import { getS3Client, AWS_S3_BUCKET } from '@/shared/lib/aws/s3-client';
 
 // ============================================
 // CONSTANTS
 // ============================================
-
-const UPLOAD_DIR = path.join(process.cwd(), 'uploads', 'customer-documents');
 
 // MIME type mapping
 const MIME_TYPES: Record<string, string> = {
@@ -36,11 +34,44 @@ const MIME_TYPES: Record<string, string> = {
 };
 
 // ============================================
+// HELPER FUNCTIONS
+// ============================================
+
+/**
+ * Convert S3 stream to Buffer
+ */
+async function streamToBuffer(stream: any): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+
+  return new Promise((resolve, reject) => {
+    stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+    stream.on('error', reject);
+    stream.on('end', () => resolve(Buffer.concat(chunks)));
+  });
+}
+
+/**
+ * Get file extension from path
+ */
+function getFileExtension(filePath: string): string {
+  const lastDot = filePath.lastIndexOf('.');
+  return lastDot !== -1 ? filePath.substring(lastDot).toLowerCase() : '';
+}
+
+/**
+ * Get filename from S3 key
+ */
+function getFilename(key: string): string {
+  const parts = key.split('/');
+  return parts[parts.length - 1] || 'document';
+}
+
+// ============================================
 // GET /api/documents/file
 // ============================================
 
 /**
- * Download/view document file
+ * Download/view document file from S3
  */
 export async function GET(request: NextRequest) {
   try {
@@ -60,36 +91,51 @@ export async function GET(request: NextRequest) {
 
     // Sanitize path to prevent directory traversal
     const sanitizedPath = filePath.replace(/\.\./g, '').replace(/^\//, '');
-    const fullPath = path.join(UPLOAD_DIR, sanitizedPath);
 
-    // Ensure file is within upload directory (security check)
-    const normalizedUploadDir = path.normalize(UPLOAD_DIR);
-    const normalizedFullPath = path.normalize(fullPath);
-
-    if (!normalizedFullPath.startsWith(normalizedUploadDir)) {
+    // Validate path format (should start with customer-documents/)
+    if (!sanitizedPath.startsWith('customer-documents/')) {
       return badRequestResponse('Invalid file path');
     }
 
-    // Check if file exists
+    // Download from S3
+    const s3Client = getS3Client();
+
+    const command = new GetObjectCommand({
+      Bucket: AWS_S3_BUCKET,
+      Key: sanitizedPath,
+    });
+
+    let response;
     try {
-      await stat(fullPath);
-    } catch {
+      response = await s3Client.send(command);
+    } catch (error: any) {
+      if (error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404) {
+        return notFoundResponse('File');
+      }
+      throw error;
+    }
+
+    if (!response.Body) {
       return notFoundResponse('File');
     }
 
-    // Read file
-    const fileBuffer = await readFile(fullPath);
+    // Convert stream to buffer
+    const fileBuffer = await streamToBuffer(response.Body);
 
     // Determine MIME type
-    const ext = path.extname(fullPath).toLowerCase();
-    const mimeType = MIME_TYPES[ext] || 'application/octet-stream';
+    const ext = getFileExtension(sanitizedPath);
+    const mimeType = MIME_TYPES[ext] || response.ContentType || 'application/octet-stream';
+
+    // Get filename
+    const filename = getFilename(sanitizedPath);
 
     // Return file with appropriate headers
-    return new NextResponse(fileBuffer, {
+    return new NextResponse(fileBuffer as unknown as BodyInit, {
       headers: {
         'Content-Type': mimeType,
-        'Content-Disposition': `inline; filename="${path.basename(fullPath)}"`,
+        'Content-Disposition': `inline; filename="${filename}"`,
         'Cache-Control': 'private, max-age=3600',
+        'Content-Length': fileBuffer.length.toString(),
       },
     });
   } catch (error) {
