@@ -248,9 +248,8 @@ export function getQuotesTableColumns(
 
         // Add convert action
         if (canConvert && options.onConvert) {
-          const isBypassingApproval = options.isSuperAdmin && quote.status !== 'approved';
           actions.splice(insertIndex, 0, {
-            label: isBypassingApproval ? 'Convert to Order ⚡' : 'Convert to Order',
+            label: 'Convert to Order',
             onClick: () => options.onConvert?.(quote),
           });
         }

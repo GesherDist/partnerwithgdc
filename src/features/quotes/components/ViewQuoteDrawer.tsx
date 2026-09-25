@@ -481,7 +481,8 @@ export function ViewQuoteDrawer({
 
                 {/* Inventory Status - Show before selecting product source */}
                 {/* Only show if there are inventory-type products */}
-                {quote.status !== 'converted' && inventoryTypeItems.length > 0 && (
+                {/* HIDDEN: Inventory Status section - can be re-enabled by removing 'false &&' */}
+                {false && quote?.status !== 'converted' && inventoryTypeItems.length > 0 && (
                   <Section title="Inventory Status">
                     <div className="space-y-4">
                       <div className="flex items-center justify-between">

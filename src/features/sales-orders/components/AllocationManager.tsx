@@ -359,6 +359,7 @@ export function AllocationManager({
         onOpenChange={setCreateDialogOpen}
         salesOrderItemId={salesOrderItemId}
         productId={productId}
+        productName={productName}
         remainingToAllocate={remainingToAllocate}
         onSuccess={handleCreateSuccess}
       />

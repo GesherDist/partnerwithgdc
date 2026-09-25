@@ -57,6 +57,7 @@ interface CreateAllocationDialogProps {
   onOpenChange: (open: boolean) => void;
   salesOrderItemId: string;
   productId: string;
+  productName: string;
   remainingToAllocate: number;
   onSuccess: () => void;
 }
@@ -92,6 +93,7 @@ export function CreateAllocationDialog({
   onOpenChange,
   salesOrderItemId,
   productId,
+  productName,
   remainingToAllocate,
   onSuccess,
 }: CreateAllocationDialogProps) {
@@ -523,6 +525,11 @@ export function CreateAllocationDialog({
         <DialogHeader>
           <DialogTitle>Create Allocation</DialogTitle>
           <DialogDescription>
+            {productName && (
+              <div className="mb-2">
+                <span className="font-semibold">Product:</span> {productName}
+              </div>
+            )}
             Allocate fulfillment for this sales order item from a specific source.
           </DialogDescription>
         </DialogHeader>
@@ -578,9 +585,10 @@ export function CreateAllocationDialog({
                       <Input
                         type="number"
                         {...field}
+                        value={field.value || ''}
                         onChange={(e) => {
-                          const val = parseInt(e.target.value, 10);
-                          field.onChange(isNaN(val) ? undefined : val);
+                          const val = e.target.value;
+                          field.onChange(val === '' ? 0 : parseInt(val, 10));
                         }}
                       />
                     </FormControl>
@@ -778,9 +786,10 @@ export function CreateAllocationDialog({
                         <Input
                           type="number"
                           {...field}
+                          value={field.value || ''}
                           onChange={(e) => {
-                            const val = parseInt(e.target.value, 10);
-                            field.onChange(isNaN(val) ? undefined : val);
+                            const val = e.target.value;
+                            field.onChange(val === '' ? 0 : parseInt(val, 10));
                           }}
                         />
                       </FormControl>
@@ -803,9 +812,10 @@ export function CreateAllocationDialog({
                         <Input
                           type="number"
                           {...field}
+                          value={field.value || ''}
                           onChange={(e) => {
-                            const val = parseInt(e.target.value, 10);
-                            field.onChange(isNaN(val) ? undefined : val);
+                            const val = e.target.value;
+                            field.onChange(val === '' ? 0 : parseInt(val, 10));
                           }}
                         />
                       </FormControl>

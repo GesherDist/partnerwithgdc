@@ -391,6 +391,12 @@ export function EditAllocationDialog({
         <DialogHeader>
           <DialogTitle>Edit Allocation</DialogTitle>
           <DialogDescription>
+            {allocation.salesOrderItem?.description && (
+              <div className="mb-2">
+                <span className="font-semibold">Product:</span> {allocation.salesOrderItem.description}
+                {allocation.salesOrderItem.sku && ` (${allocation.salesOrderItem.sku})`}
+              </div>
+            )}
             Update the allocation quantity, status, or notes.
           </DialogDescription>
         </DialogHeader>
@@ -456,9 +462,10 @@ export function EditAllocationDialog({
                     <Input
                       type="number"
                       {...field}
+                      value={field.value || ''}
                       onChange={(e) => {
                         const value = e.target.value;
-                        field.onChange(value === '' ? undefined : parseInt(value, 10));
+                        field.onChange(value === '' ? 0 : parseInt(value, 10));
                       }}
                     />
                   </FormControl>
@@ -590,9 +597,10 @@ export function EditAllocationDialog({
                         <Input
                           type="number"
                           {...field}
+                          value={field.value || ''}
                           onChange={(e) => {
                             const value = e.target.value;
-                            field.onChange(value === '' ? undefined : parseInt(value, 10));
+                            field.onChange(value === '' ? 0 : parseInt(value, 10));
                           }}
                         />
                       </FormControl>

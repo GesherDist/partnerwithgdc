@@ -161,17 +161,28 @@ const QuoteItemRow = memo(function QuoteItemRow({
   );
 
   const handleQuantityChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => onItemChange(index, 'quantity', Number(e.target.value)),
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const value = e.target.value;
+      // If empty, set to 0 (will show as empty in input via value={item.quantity || ''})
+      // This prevents "050" issue while keeping type as number
+      onItemChange(index, 'quantity', value === '' ? 0 : Number(value));
+    },
     [index, onItemChange]
   );
 
   const handleUnitPriceChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => onItemChange(index, 'unitPrice', Number(e.target.value)),
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const value = e.target.value;
+      onItemChange(index, 'unitPrice', value === '' ? 0 : Number(value));
+    },
     [index, onItemChange]
   );
 
   const handleDiscountChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => onItemChange(index, 'discountPercent', Number(e.target.value)),
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const value = e.target.value;
+      onItemChange(index, 'discountPercent', value === '' ? 0 : Number(value));
+    },
     [index, onItemChange]
   );
 
@@ -236,7 +247,7 @@ const QuoteItemRow = memo(function QuoteItemRow({
             <Input
               type="number"
               min="1"
-              value={item.quantity}
+              value={item.quantity || ''}
               onChange={handleQuantityChange}
               className={`h-9 text-right ${rowErrors.quantity ? 'border-destructive' : ''}`}
             />
@@ -254,7 +265,7 @@ const QuoteItemRow = memo(function QuoteItemRow({
             type="number"
             step="0.01"
             min="0"
-            value={item.unitPrice}
+            value={item.unitPrice || ''}
             onChange={handleUnitPriceChange}
             className={`h-9 text-right ${rowErrors.unitPrice ? 'border-destructive' : ''}`}
           />
@@ -276,7 +287,7 @@ const QuoteItemRow = memo(function QuoteItemRow({
             step="0.1"
             min="0"
             max="100"
-            value={item.discountPercent}
+            value={item.discountPercent || ''}
             onChange={handleDiscountChange}
             className="h-9 text-right"
           />
@@ -350,15 +361,17 @@ function QuoteItemsTableComponent({
           updatedItem.discountPercent = 0;
         }
 
+        // ALWAYS set SKU and description immediately from local product data (instant UX)
+        if (product) {
+          updatedItem.sku = product.sku;
+          updatedItem.description = product.description || product.name;
+          // Set initial unit price from local data (will be updated by onProductSelect if price matrix applies)
+          updatedItem.unitPrice = product.unitPrice / 100;
+        }
+
+        // Trigger async price fetch in background (will update with correct price based on customer/quantity)
         if (onProductSelect) {
           onProductSelect(index, value);
-        } else {
-          // Fallback to local product data
-          if (product) {
-            updatedItem.sku = product.sku;
-            updatedItem.description = product.description || product.name; // Use description if available, fallback to name
-            updatedItem.unitPrice = product.unitPrice / 100;
-          }
         }
       }
 

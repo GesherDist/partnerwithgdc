@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSalesOrder } from '@/features/sales-orders/actions';
 import { generateSalesOrderPdf, type SalesOrderPdfData } from '@/features/sales-orders/services/pdf.service';
+import { getAllocationsByItemId } from '@/features/sales-orders/repositories/fulfillment-allocations.repository';
 
 export async function GET(
   _request: NextRequest,
@@ -27,6 +28,43 @@ export async function GET(
     }
 
     const order = result.data;
+
+    // Helper function to get fulfillment source label
+    const getFulfillmentSourceLabel = (source: string): string => {
+      const labels: Record<string, string> = {
+        direct: 'Manufacturer Direct',
+        gdc_inventory: 'GDC Inventory',
+        platinum_dealer_inventory: 'Dealer Inventory',
+        platinum_dealer_fulfillment: 'Dealer Fulfillment',
+      };
+      return labels[source] || source;
+    };
+
+    // Fetch allocations for all items
+    const itemsWithAllocations = await Promise.all(
+      order.items.map(async (item, index) => {
+        const { data: allocations } = await getAllocationsByItemId(item.id);
+
+        return {
+          rowNum: index + 1,
+          sku: item.sku,
+          description: item.description || item.sku,
+          quantity: item.quantity,
+          unitCode: item.unitCode,
+          unitPrice: item.unitPrice,
+          discountPercent: item.discountPercent,
+          lineTotal: item.lineTotal,
+          allocations: allocations?.map(allocation => ({
+            source: getFulfillmentSourceLabel(allocation.fulfillmentSource),
+            locationName: allocation.location?.name ||
+                         allocation.platinumDealer?.dealerName ||
+                         allocation.dealerLocation?.locationName ||
+                         null,
+            quantity: allocation.quantity,
+          })) || [],
+        };
+      })
+    );
 
     // Map to PDF data format
     const pdfData: SalesOrderPdfData = {
@@ -61,16 +99,7 @@ export async function GET(
       },
       shippingMethod: order.shippingMethod,
 
-      items: order.items.map((item, index) => ({
-        rowNum: index + 1,
-        sku: item.sku,
-        description: item.description || item.sku,
-        quantity: item.quantity,
-        unitCode: item.unitCode,
-        unitPrice: item.unitPrice,
-        discountPercent: item.discountPercent,
-        lineTotal: item.lineTotal,
-      })),
+      items: itemsWithAllocations,
 
       subtotal: order.subtotal,
       discountTotal: order.discountTotal,

@@ -60,11 +60,12 @@ export function DataTableRowActions({
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
+      <DropdownMenuTrigger asChild suppressHydrationWarning>
         {trigger || (
           <Button
             variant="ghost"
             className="flex h-8 w-8 p-0 data-[state=open]:bg-muted"
+            suppressHydrationWarning
           >
             <svg
               className="h-4 w-4"
@@ -221,7 +222,7 @@ export function createCommonRowActions({
       onClick: onDelete,
       disabled: !canDelete,
       destructive: true,
-      shortcut: '⌘⌫',
+      // Removed shortcut to clean up menu
       icon: (
         <svg
           className="h-4 w-4"

@@ -1,16 +1,17 @@
 /**
- * Sales Order PDF Template - Ankur's Design
+ * Invoice PDF Template
  *
- * Clean, professional template matching Ankur's provided PDF
+ * Clean, professional template for invoices (similar to Sales Order design)
  */
 
 import { getGesherLogoBase64 } from '@/shared/lib/logo-utils';
 
-export interface SalesOrderPdfData {
-  // Order Information
-  orderNumber: string;
-  orderDate: string;
-  requestedDeliveryDate: string | null;
+export interface InvoicePdfData {
+  // Invoice Information
+  invoiceNumber: string;
+  invoiceDate: string;
+  dueDate: string | null;
+  salesOrderNumber: string | null;
   customerPoNumber: string | null;
   status: string;
 
@@ -19,9 +20,6 @@ export interface SalesOrderPdfData {
   customerCode: string;
   customerEmail?: string | null;
   customerPhone?: string | null;
-
-  // Sales Rep
-  salesRepName?: string | null;
 
   // Addresses
   billingAddress: {
@@ -38,9 +36,8 @@ export interface SalesOrderPdfData {
     postalCode: string | null;
     country: string | null;
   };
-  shippingMethod?: string | null;
 
-  // Order Items
+  // Invoice Items
   items: Array<{
     rowNum: number;
     sku: string;
@@ -63,16 +60,18 @@ export interface SalesOrderPdfData {
   taxTotal: number;
   shippingCost: number;
   grandTotal: number;
+  amountPaid: number;
+  amountDue: number;
 
   // Additional
   customerNotes?: string | null;
-  internalNotes?: string | null;
+  paymentTerms?: string | null;
 }
 
 /**
- * Generate Sales Order HTML matching Ankur's template
+ * Generate Invoice HTML
  */
-export function generateSalesOrderHtml(data: SalesOrderPdfData): string {
+export function generateInvoiceHtml(data: InvoicePdfData): string {
   const logoBase64 = getGesherLogoBase64();
 
   const formatDate = (dateStr: string | null): string => {
@@ -107,7 +106,7 @@ export function generateSalesOrderHtml(data: SalesOrderPdfData): string {
     return parts.join('<br>') || 'Address not provided';
   };
 
-  // Items table rows
+  // Items table rows with allocation breakdown
   const itemsRows = data.items.map((item) => {
     const mainRow = `
       <tr>
@@ -156,7 +155,7 @@ export function generateSalesOrderHtml(data: SalesOrderPdfData): string {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sales Order - ${data.orderNumber}</title>
+  <title>Invoice - ${data.invoiceNumber}</title>
   <style>
     * {
       margin: 0;
@@ -269,12 +268,12 @@ export function generateSalesOrderHtml(data: SalesOrderPdfData): string {
 
     /* Customer Section */
     .customer-section {
-      // margin-bottom: 25px;
       border-bottom: dotted 1px black;
     }
-      .info-section{
-        background: #f3f4f6;
-      }
+
+    .info-section{
+      background: #f3f4f6;
+    }
 
     .customer-box {
       background: #f3f4f6;
@@ -296,7 +295,7 @@ export function generateSalesOrderHtml(data: SalesOrderPdfData): string {
       font-weight: 400;
     }
 
-    /* Order Details Section */
+    /* Details Section */
     .details-section {
       margin-bottom: 30px;
     }
@@ -319,28 +318,6 @@ export function generateSalesOrderHtml(data: SalesOrderPdfData): string {
       color: #374151;
       margin-bottom: 3px;
       line-height: 1.4;
-    }
-
-    .details-label {
-      color: #6b7280;
-    }
-
-    .customer-po-box {
-      background: #f3f4f6;
-      padding: 12px 15px;
-      border-radius: 0;
-    }
-
-    .customer-po-label {
-      font-size: 13px;
-      font-weight: 700;
-      color: #111827;
-      margin-bottom: 6px;
-    }
-
-    .customer-po-text {
-      font-size: 11px;
-      color: #374151;
     }
 
     /* Items Table */
@@ -386,7 +363,6 @@ export function generateSalesOrderHtml(data: SalesOrderPdfData): string {
 
     /* Total Section */
     .total-section {
-      // margin-top: 5px;
       text-align: right;
       padding: 10px 12px;
       border-top: 2px solid #e5e7eb;
@@ -398,15 +374,40 @@ export function generateSalesOrderHtml(data: SalesOrderPdfData): string {
     }
 
     .total-label {
-      font-weight: 700;
+      font-weight: 600;
       color: #111827;
       margin-right: 40px;
     }
 
     .total-value {
-      font-weight: 700;
+      font-weight: 600;
       color: #111827;
+      font-size: 13px;
+    }
+
+    .total-row.grand {
+      border-top: 2px solid #e5e7eb;
+      margin-top: 10px;
+      padding-top: 10px;
+    }
+
+    .total-row.grand .total-label,
+    .total-row.grand .total-value {
+      font-weight: 700;
       font-size: 14px;
+    }
+
+    .total-row.due {
+      background: #fef3c7;
+      padding: 10px;
+      margin-top: 10px;
+    }
+
+    .total-row.due .total-label,
+    .total-row.due .total-value {
+      font-weight: 700;
+      font-size: 15px;
+      color: #92400e;
     }
   </style>
 </head>
@@ -414,33 +415,27 @@ export function generateSalesOrderHtml(data: SalesOrderPdfData): string {
   <div class="container">
     <!-- Header -->
     <div class="header">
-      <!-- Row 1: SALES ORDER Title (Col-12) -->
       <div class="row">
         <div class="col-6">
-            <div class="header-title">SALES ORDER</div>
-            <!-- Row 2: Address + Contact + Logo -->
-            <div class="row">
-              <!-- Col-3: Company & Address -->
-              <div class="col-6">
-                <div class="company-name">Gesher Distribution, Inc</div>
-                <div class="company-address">
-                  11511 E Caley Ave<br>
-                  Attn: Travis Vap<br>
-                  Centennial, CO 80111-6935
-                </div>
-              </div>
-
-              <!-- Col-3: Contact Info -->
-              <div class="col-6">
-                <div class="contact-info">
-                  accounting@partnerwithgdc.com<br>
-                  +1 (917) 374-7389<br>
-                  https://partnerwithgdc.com
-                </div>
+          <div class="header-title">INVOICE</div>
+          <div class="row">
+            <div class="col-6">
+              <div class="company-name">Gesher Distribution, Inc</div>
+              <div class="company-address">
+                11511 E Caley Ave<br>
+                Attn: Travis Vap<br>
+                Centennial, CO 80111-6935
               </div>
             </div>
+            <div class="col-6">
+              <div class="contact-info">
+                accounting@partnerwithgdc.com<br>
+                +1 (917) 374-7389<br>
+                https://partnerwithgdc.com
+              </div>
+            </div>
+          </div>
         </div>
-        <!-- Col-6: Logo -->
         <div class="col-6" style="padding-top: 0; margin-top: 0;">
           <div class="logo-wrapper">
             <div class="logo-container">
@@ -452,70 +447,63 @@ export function generateSalesOrderHtml(data: SalesOrderPdfData): string {
           </div>
         </div>
       </div>
-
-      
     </div>
 
-    <!-- Customer Section: Bill to | Ship to -->
+    <!-- Customer Section -->
     <div class="info-section">
-    <div class="customer-section">
-      <div class="row">
-        <!-- Col-6: Bill to -->
-        <div class="col-6">
-          <div class="customer-box">
-            <div class="customer-box-title">Bill to</div>
-            <div class="customer-box-content">
-              ${data.customerName}<br>
-              ${formatAddress(data.billingAddress)}
+      <div class="customer-section">
+        <div class="row">
+          <div class="col-6">
+            <div class="customer-box">
+              <div class="customer-box-title">Bill to</div>
+              <div class="customer-box-content">
+                ${data.customerName}<br>
+                ${formatAddress(data.billingAddress)}
+              </div>
+            </div>
+          </div>
+          <div class="col-6">
+            <div class="customer-box">
+              <div class="customer-box-title">Ship to</div>
+              <div class="customer-box-content">
+                ${data.customerName}<br>
+                ${formatAddress(data.shippingAddress)}
+              </div>
             </div>
           </div>
         </div>
+      </div>
 
-        <!-- Col-6: Ship to -->
-        <div class="col-6">
-          <div class="customer-box">
-            <div class="customer-box-title">Ship to</div>
-            <div class="customer-box-content">
-              ${data.customerName}<br>
-              ${formatAddress(data.shippingAddress)}
+      <!-- Invoice Details -->
+      <div class="details-section">
+        <div class="row">
+          <div class="col-4">
+            <div class="details-box">
+              <div class="details-title">Invoice details</div>
+              <div class="details-row">Invoice no.: ${data.invoiceNumber}</div>
+              <div class="details-row">Invoice date: ${formatDate(data.invoiceDate)}</div>
+              <div class="details-row">Terms: ${data.paymentTerms || 'Net 30'}</div>
+            </div>
+          </div>
+          <div class="col-4">
+            <div class="details-box">
+              <div class="details-title">Due date</div>
+              <div class="details-row" style="font-weight: 700; color: #dc2626;">
+                ${formatDate(data.dueDate)}
+              </div>
+            </div>
+          </div>
+          <div class="col-4">
+            <div class="details-box">
+              <div class="details-title">Reference</div>
+              <div class="details-row">Sales Order: ${data.salesOrderNumber || '-'}</div>
+              <div class="details-row">Customer PO: ${data.customerPoNumber || '-'}</div>
             </div>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Order Details Section: 3 Columns -->
-    <div class="details-section">
-      <div class="row">
-        <!-- Col-4: Shipping info -->
-        <div class="col-4">
-          <div class="details-box">
-            <div class="details-title">Shipping info</div>
-            <div class="details-row">Ship via: ${data.shippingMethod || 'OCEAN'}</div>
-            <div class="details-row">Ship date: ${formatDate(data.requestedDeliveryDate)}</div>
-          </div>
-        </div>
-
-        <!-- Col-4: Sales Order details -->
-        <div class="col-4">
-          <div class="details-box">
-            <div class="details-title">Sales Order details</div>
-            <div class="details-row">Sales Order no.: ${data.orderNumber}</div>
-            <div class="details-row">Terms: Net 30</div>
-            <div class="details-row">Date: ${formatDate(data.orderDate)}</div>
-          </div>
-        </div>
-
-        <!-- Col-4: Customer PO -->
-        <div class="col-4">
-          <div class="customer-po-box">
-            <div class="customer-po-label">Customer PO Number:</div>
-            <div class="customer-po-text">${data.customerPoNumber || '-'}</div>
-          </div>
-        </div>
-      </div>
-    </div>
-    </div>
     <!-- Items Table -->
     <table class="items-table">
       <thead>
@@ -533,13 +521,52 @@ export function generateSalesOrderHtml(data: SalesOrderPdfData): string {
       </tbody>
     </table>
 
-    <!-- Total -->
+    <!-- Totals -->
     <div class="total-section">
       <div class="total-row">
+        <span class="total-label">Subtotal</span>
+        <span class="total-value">${formatCurrency(data.subtotal)}</span>
+      </div>
+      ${data.discountTotal > 0 ? `
+      <div class="total-row">
+        <span class="total-label">Discount</span>
+        <span class="total-value">-${formatCurrency(data.discountTotal)}</span>
+      </div>
+      ` : ''}
+      ${data.taxTotal > 0 ? `
+      <div class="total-row">
+        <span class="total-label">Tax</span>
+        <span class="total-value">${formatCurrency(data.taxTotal)}</span>
+      </div>
+      ` : ''}
+      ${data.shippingCost > 0 ? `
+      <div class="total-row">
+        <span class="total-label">Shipping</span>
+        <span class="total-value">${formatCurrency(data.shippingCost)}</span>
+      </div>
+      ` : ''}
+      <div class="total-row grand">
         <span class="total-label">Total</span>
         <span class="total-value">${formatCurrency(data.grandTotal)}</span>
       </div>
+      ${data.amountPaid > 0 ? `
+      <div class="total-row">
+        <span class="total-label">Amount Paid</span>
+        <span class="total-value">-${formatCurrency(data.amountPaid)}</span>
+      </div>
+      ` : ''}
+      <div class="total-row due">
+        <span class="total-label">Amount Due</span>
+        <span class="total-value">${formatCurrency(data.amountDue)}</span>
+      </div>
     </div>
+
+    ${data.customerNotes ? `
+    <div style="margin-top: 30px; padding: 15px; background: #f9fafb; border-left: 3px solid #2563eb;">
+      <div style="font-size: 12px; font-weight: 600; color: #111827; margin-bottom: 5px;">Notes:</div>
+      <div style="font-size: 11px; color: #374151; line-height: 1.6;">${data.customerNotes}</div>
+    </div>
+    ` : ''}
   </div>
 </body>
 </html>

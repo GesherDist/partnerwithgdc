@@ -8,7 +8,7 @@
  */
 
 import { useState } from 'react';
-import { Loader2, Download, ExternalLink, X } from 'lucide-react';
+import { Loader2, Download, ExternalLink } from 'lucide-react';
 
 import {
   Dialog,
@@ -70,14 +70,6 @@ export function PdfViewerModal({
               >
                 <ExternalLink className="mr-1.5 h-4 w-4" />
                 New Tab
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={onClose}
-                className="h-8 w-8"
-              >
-                <X className="h-4 w-4" />
               </Button>
             </div>
           </div>

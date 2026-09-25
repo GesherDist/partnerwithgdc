@@ -35,8 +35,8 @@ interface QuoteSummaryCardsProps {
 // ============================================
 
 function formatCurrency(value: number, symbol: string = '$'): string {
-  // Simple format with symbol
-  return `${symbol}${Math.abs(value).toFixed(2)}`;
+  // Format with commas and 2 decimal places
+  return `${symbol}${Math.abs(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 // ============================================
