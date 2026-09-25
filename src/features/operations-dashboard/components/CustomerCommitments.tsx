@@ -90,6 +90,9 @@ export function CustomerCommitments({ data, onViewCustomer: _onViewCustomer }: C
               <TableHead>Customer</TableHead>
               <TableHead className="text-right">Loads</TableHead>
               <TableHead className="text-right">Outstanding Qty</TableHead>
+              <TableHead className="text-right">GDC Qty</TableHead> {/* 🆕 NEW */}
+              <TableHead className="text-right">Dealer Qty</TableHead> {/* 🆕 NEW */}
+              <TableHead className="text-right">Direct Qty</TableHead> {/* 🆕 NEW */}
               <TableHead className="text-right">Invoice Amount</TableHead>
               <TableHead className="text-right">In Transit / 7 Days</TableHead>
               <TableHead className="text-right">Actions</TableHead>
@@ -101,6 +104,12 @@ export function CustomerCommitments({ data, onViewCustomer: _onViewCustomer }: C
                 <TableCell className="font-medium">{item.customer}</TableCell>
                 <TableCell className="text-right">{item.loads}</TableCell>
                 <TableCell className="text-right">{formatNumber(item.outstandingQty)}</TableCell>
+                {/* 🆕 NEW: Fulfillment breakdown columns */}
+                <TableCell className="text-right">{formatNumber(item.gdcQty)}</TableCell>
+                <TableCell className="text-right">
+                  {formatNumber(item.dealerInventoryQty + item.dealerFulfillmentQty)}
+                </TableCell>
+                <TableCell className="text-right">{formatNumber(item.manufacturerDirectQty)}</TableCell>
                 <TableCell className="text-right font-medium text-emerald-600">
                   {formatCurrency(item.invoiceAmount)}
                 </TableCell>

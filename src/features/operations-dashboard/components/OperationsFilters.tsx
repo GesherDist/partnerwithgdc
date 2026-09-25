@@ -187,6 +187,50 @@ export function OperationsFilters({
         </Select>
       </div>
 
+      {/* 🆕 NEW: Fulfillment Source Filter */}
+      <div className="flex flex-col gap-1">
+        <label className="text-xs font-medium text-muted-foreground">Fulfillment Source</label>
+        <Select
+          value={filters.fulfillmentSource || ''}
+          onValueChange={(value) => handleFilterChange('fulfillmentSource', value || undefined)}
+          disabled={isLoading}
+        >
+          <SelectTrigger className="w-[180px]">
+            <SelectValue placeholder="All Sources" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">All Sources</SelectItem>
+            {filterOptions.fulfillmentSources?.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* 🆕 NEW: Platinum Dealer Filter */}
+      <div className="flex flex-col gap-1">
+        <label className="text-xs font-medium text-muted-foreground">Platinum Dealer</label>
+        <Select
+          value={filters.platinumDealerId || ''}
+          onValueChange={(value) => handleFilterChange('platinumDealerId', value || undefined)}
+          disabled={isLoading}
+        >
+          <SelectTrigger className="w-[180px]">
+            <SelectValue placeholder="All Dealers" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">All Dealers</SelectItem>
+            {filterOptions.dealers?.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
       {/* Clear Filters Button */}
       {hasActiveFilters && (
         <div className="flex flex-col gap-1">

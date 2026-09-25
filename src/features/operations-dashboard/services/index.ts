@@ -17,8 +17,9 @@ import {
   getRimInstallationRequired,
   generateStoryInBrief,
   getFilterOptions,
+  getFulfillmentSourceBreakdown,  // 🆕 NEW
 } from '../repositories';
-import type { OperationsData, OperationsFilters, FilterOptions } from '../types';
+import type { OperationsData, OperationsFilters, FilterOptions, FulfillmentSourceBreakdown } from '../types';
 
 // ============================================
 // GET FULL OPERATIONS DATA
@@ -40,6 +41,9 @@ export async function getOperationsData(filters?: OperationsFilters): Promise<Op
     openLoads: 0,
     outstandingQty: 0,
     invoiceAmount: 0,
+    // 🆕 NEW: Dealer KPIs
+    dealerAllocationsCount: 0,
+    dealerPendingQty: 0,
   };
 
   // Fetch all data in parallel - use allSettled so one failure doesn't break everything
@@ -52,6 +56,7 @@ export async function getOperationsData(filters?: OperationsFilters): Promise<Op
     getGDC1Inventory(filters),             // 5
     getAllGDCInventories(filters),         // 6
     getRimInstallationRequired(filters),   // 7
+    getFulfillmentSourceBreakdown(filters), // 8 🆕 NEW
   ]);
 
   // Extract results with fallbacks for failed queries
@@ -99,6 +104,15 @@ export async function getOperationsData(filters?: OperationsFilters): Promise<Op
     console.error('getRimInstallationRequired failed:', results[7].reason);
   }
 
+  // 🆕 NEW: Fulfillment source breakdown
+  const fulfillmentBreakdownResult = results[8].status === 'fulfilled'
+    ? results[8].value
+    : { data: [], error: null };
+  if (results[8].status === 'rejected') {
+    console.error('getFulfillmentSourceBreakdown failed:', results[8].reason);
+  }
+  const fulfillmentSourceBreakdown = fulfillmentBreakdownResult.data || [];
+
   // HIDDEN: Supplier Schedule - return empty data
   const supplierShipmentSchedule: never[] = [];
   const supplierScheduleSkus: never[] = [];
@@ -131,6 +145,7 @@ export async function getOperationsData(filters?: OperationsFilters): Promise<Op
     rimInstallationRequired,
     rimInstallationSkus,
     storyInBrief,
+    fulfillmentSourceBreakdown,  // 🆕 NEW
   };
 }
 
@@ -195,6 +210,23 @@ export async function getWarehouseInventory() {
 export async function getRimItems() {
   const result = await getRimInstallationRequired();
   return { data: result.data, uniqueSkus: result.uniqueSkus };
+}
+
+/**
+ * Get fulfillment source breakdown
+ * 🆕 NEW - Sept 25, 2026
+ */
+export async function getFulfillmentBreakdownData(
+  filters?: OperationsFilters
+): Promise<FulfillmentSourceBreakdown[]> {
+  const { data, error } = await getFulfillmentSourceBreakdown(filters);
+
+  if (error || !data) {
+    console.error('getFulfillmentSourceBreakdown failed:', error);
+    return [];
+  }
+
+  return data;
 }
 
 // ============================================

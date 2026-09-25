@@ -149,6 +149,8 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
                   <TableHead className="text-right whitespace-nowrap">Invoice Amt</TableHead>
                   <TableHead className="whitespace-nowrap min-w-[150px]">Delivery Address</TableHead>
                   <TableHead className="whitespace-nowrap">Status</TableHead>
+                  <TableHead className="whitespace-nowrap min-w-[130px]">Fulfillment Source</TableHead> {/* 🆕 NEW */}
+                  <TableHead className="whitespace-nowrap min-w-[130px]">Allocated To</TableHead> {/* 🆕 NEW */}
                   <TableHead className="min-w-[150px]">Notes</TableHead>
                   <TableHead className="relative sticky right-0 z-20 w-[100px] bg-white dark:bg-gray-950 border-l shadow-[-2px_0_5px_-2px_rgba(0,0,0,0.1)] after:absolute after:inset-0 after:w-[100px] after:bg-white after:dark:bg-gray-950 after:-z-10">Actions</TableHead>
                 </TableRow>
@@ -229,6 +231,35 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
                       <Badge className={PO_STATUS_COLORS[item.status] || 'bg-gray-100 text-gray-700'}>
                         {item.status}
                       </Badge>
+                    </TableCell>
+                    {/* 🆕 NEW: Fulfillment Source */}
+                    <TableCell>
+                      <Badge
+                        variant="outline"
+                        className={`text-xs ${
+                          item.fulfillmentSource === 'platinum_dealer_inventory' || item.fulfillmentSource === 'platinum_dealer_fulfillment'
+                            ? 'bg-purple-50 text-purple-700 border-purple-200'
+                            : ''
+                        }`}
+                      >
+                        {item.fulfillmentSource === 'gdc_inventory' && 'GDC Inv.'}
+                        {item.fulfillmentSource === 'platinum_dealer_inventory' && 'Dealer Inv.'}
+                        {item.fulfillmentSource === 'platinum_dealer_fulfillment' && 'Dealer Fulfill.'}
+                        {item.fulfillmentSource === 'direct' && 'Direct'}
+                      </Badge>
+                    </TableCell>
+                    {/* 🆕 NEW: Allocated To */}
+                    <TableCell>
+                      {item.allocatedToDealerName ? (
+                        <div>
+                          <div className="text-sm font-medium">{item.allocatedToDealerName}</div>
+                          {item.allocatedToDealerLocation && (
+                            <div className="text-xs text-muted-foreground">{item.allocatedToDealerLocation}</div>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground text-xs">-</span>
+                      )}
                     </TableCell>
                     <TableCell className="max-w-[150px]">
                       {item.actionRequired ? (

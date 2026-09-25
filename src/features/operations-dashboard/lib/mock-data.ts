@@ -31,6 +31,8 @@ export const operationsStats: OperationsStats = {
   openLoads: 9,
   outstandingQty: 2220,
   invoiceAmount: 2661096, // $26,61,096
+  dealerAllocationsCount: 0,   // 🆕 NEW
+  dealerPendingQty: 0,          // 🆕 NEW
 };
 
 // ============================================
@@ -76,6 +78,10 @@ export const customerCommitments: CustomerCommitment[] = [
     outstandingQty: 1044,
     invoiceAmount: 1212480, // $12,12,480
     inTransitNext7Days: 1,
+    gdcQty: 1044,                      // 🆕 NEW
+    dealerInventoryQty: 0,             // 🆕 NEW
+    dealerFulfillmentQty: 0,           // 🆕 NEW
+    manufacturerDirectQty: 0,          // 🆕 NEW
   },
   {
     id: 'cust-2',
@@ -84,6 +90,10 @@ export const customerCommitments: CustomerCommitment[] = [
     outstandingQty: 648,
     invoiceAmount: 669312, // $6,69,312
     inTransitNext7Days: 4,
+    gdcQty: 648,                       // 🆕 NEW
+    dealerInventoryQty: 0,             // 🆕 NEW
+    dealerFulfillmentQty: 0,           // 🆕 NEW
+    manufacturerDirectQty: 0,          // 🆕 NEW
   },
   {
     id: 'cust-3',
@@ -92,6 +102,10 @@ export const customerCommitments: CustomerCommitment[] = [
     outstandingQty: 456,
     invoiceAmount: 682104, // $6,82,104
     inTransitNext7Days: 4,
+    gdcQty: 456,                       // 🆕 NEW
+    dealerInventoryQty: 0,             // 🆕 NEW
+    dealerFulfillmentQty: 0,           // 🆕 NEW
+    manufacturerDirectQty: 0,          // 🆕 NEW
   },
   {
     id: 'cust-4',
@@ -100,6 +114,10 @@ export const customerCommitments: CustomerCommitment[] = [
     outstandingQty: 72,
     invoiceAmount: 97200, // $97,200
     inTransitNext7Days: 1,
+    gdcQty: 72,                        // 🆕 NEW
+    dealerInventoryQty: 0,             // 🆕 NEW
+    dealerFulfillmentQty: 0,           // 🆕 NEW
+    manufacturerDirectQty: 0,          // 🆕 NEW
   },
 ];
 
@@ -134,6 +152,9 @@ export const immediateAttention: ImmediateAttentionItem[] = [
     actionRequired: 'Galileo will invoice | DELAYED',
     isOverdue: true,
     isThisWeek: true,
+    fulfillmentSource: null,              // 🆕 NEW
+    allocatedToDealerName: null,          // 🆕 NEW
+    allocatedToDealerLocation: null,      // 🆕 NEW
   },
   {
     id: 'attn-2',
@@ -147,6 +168,9 @@ export const immediateAttention: ImmediateAttentionItem[] = [
     actionRequired: 'Combined PO, 24s on this PO | 24s still needed? TOTAL PO $541,200|Galileo will invoice | In Transit to Port',
     isOverdue: false,
     isThisWeek: true,
+    fulfillmentSource: null,              // 🆕 NEW
+    allocatedToDealerName: null,          // 🆕 NEW
+    allocatedToDealerLocation: null,      // 🆕 NEW
   },
   {
     id: 'attn-3',
@@ -160,6 +184,9 @@ export const immediateAttention: ImmediateAttentionItem[] = [
     actionRequired: 'Combined PO, 24s on this PO | 24s still needed? TOTAL PO $541,200|Galileo will invoice | In Transit to Port',
     isOverdue: false,
     isThisWeek: true,
+    fulfillmentSource: null,              // 🆕 NEW
+    allocatedToDealerName: null,          // 🆕 NEW
+    allocatedToDealerLocation: null,      // 🆕 NEW
   },
   {
     id: 'attn-4',
@@ -173,6 +200,9 @@ export const immediateAttention: ImmediateAttentionItem[] = [
     actionRequired: 'Galileo will Invoice | In Transit to Port',
     isOverdue: false,
     isThisWeek: true,
+    fulfillmentSource: null,              // 🆕 NEW
+    allocatedToDealerName: null,          // 🆕 NEW
+    allocatedToDealerLocation: null,      // 🆕 NEW
   },
   {
     id: 'attn-5',
@@ -186,6 +216,9 @@ export const immediateAttention: ImmediateAttentionItem[] = [
     actionRequired: 'Galileo will Invoice|In Transit to Port|MWI address need to update (ALON)',
     isOverdue: false,
     isThisWeek: true,
+    fulfillmentSource: null,              // 🆕 NEW
+    allocatedToDealerName: null,          // 🆕 NEW
+    allocatedToDealerLocation: null,      // 🆕 NEW
   },
   {
     id: 'attn-6',
@@ -199,6 +232,9 @@ export const immediateAttention: ImmediateAttentionItem[] = [
     actionRequired: 'Galileo will Invoice |Need 6-8:24s pull from MWI inventory(Jenny) | In Transit to Port',
     isOverdue: false,
     isThisWeek: false,
+    fulfillmentSource: null,              // 🆕 NEW
+    allocatedToDealerName: null,          // 🆕 NEW
+    allocatedToDealerLocation: null,      // 🆕 NEW
   },
   {
     id: 'attn-7',
@@ -212,6 +248,9 @@ export const immediateAttention: ImmediateAttentionItem[] = [
     actionRequired: 'Galileo will Invoice|In Transit to Port|MWI address need to update (ALON)',
     isOverdue: false,
     isThisWeek: false,
+    fulfillmentSource: null,              // 🆕 NEW
+    allocatedToDealerName: null,          // 🆕 NEW
+    allocatedToDealerLocation: null,      // 🆕 NEW
   },
   {
     id: 'attn-8',
@@ -225,6 +264,9 @@ export const immediateAttention: ImmediateAttentionItem[] = [
     actionRequired: 'Galileo will Invoice | In Transit to Port',
     isOverdue: false,
     isThisWeek: false,
+    fulfillmentSource: null,              // 🆕 NEW
+    allocatedToDealerName: null,          // 🆕 NEW
+    allocatedToDealerLocation: null,      // 🆕 NEW
   },
   {
     id: 'attn-9',
@@ -238,6 +280,9 @@ export const immediateAttention: ImmediateAttentionItem[] = [
     actionRequired: 'REDUCED PRICE | In Transit to Port',
     isOverdue: false,
     isThisWeek: false,
+    fulfillmentSource: null,              // 🆕 NEW
+    allocatedToDealerName: null,          // 🆕 NEW
+    allocatedToDealerLocation: null,      // 🆕 NEW
   },
   {
     id: 'attn-10',
@@ -251,6 +296,9 @@ export const immediateAttention: ImmediateAttentionItem[] = [
     actionRequired: "Galileo will Invoice - Lindsay's OFFSET | In Transit to Port",
     isOverdue: false,
     isThisWeek: false,
+    fulfillmentSource: null,              // 🆕 NEW
+    allocatedToDealerName: null,          // 🆕 NEW
+    allocatedToDealerLocation: null,      // 🆕 NEW
   },
 ];
 
@@ -1157,4 +1205,5 @@ export const operationsData: OperationsData = {
   rimInstallationRequired,
   rimInstallationSkus,
   storyInBrief,
+  fulfillmentSourceBreakdown: [],  // 🆕 NEW - Empty for mock data
 };

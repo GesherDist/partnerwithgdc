@@ -280,6 +280,38 @@ export async function getOperationsStats(filters?: OperationsFilters): Promise<O
     }
   });
 
+  // ============================================
+  // DEALER ALLOCATION KPIs (NEW - Sept 25, 2026)
+  // Get dealer allocation stats from fulfillment_allocations table
+  // ============================================
+  let dealerStatsQuery = supabase
+    .from('fulfillment_allocations')
+    .select('id, quantity, status, fulfillment_source', { count: 'exact' })
+    .in('fulfillment_source', ['platinum_dealer_inventory', 'platinum_dealer_fulfillment']);
+
+  // Apply filters if provided
+  if (filters?.customerId) {
+    // Note: Need to join through sales_order_items -> sales_orders to filter by customer
+    // For now, skip customer filter on dealer stats (would require complex join)
+  }
+  if (filters?.fulfillmentSource) {
+    dealerStatsQuery = dealerStatsQuery.eq('fulfillment_source', filters.fulfillmentSource);
+  }
+  if (filters?.platinumDealerId) {
+    dealerStatsQuery = dealerStatsQuery.eq('platinum_dealer_id', filters.platinumDealerId);
+  }
+
+  const { data: dealerAllocations, count: dealerCount, error: dealerError } = await dealerStatsQuery;
+
+  if (dealerError) {
+    console.error('Error fetching dealer allocations for stats:', dealerError);
+    // Don't throw - just log and continue with partial data
+  }
+
+  const dealerPendingQty = dealerAllocations
+    ?.filter(a => a.status === 'pending' || a.status === 'allocated')
+    .reduce((sum, a) => sum + a.quantity, 0) || 0;
+
   return {
     availableInventoryQty,
     availableLoads,
@@ -289,7 +321,80 @@ export async function getOperationsStats(filters?: OperationsFilters): Promise<O
     openLoads,
     outstandingQty,
     invoiceAmount,
+    dealerAllocationsCount: dealerCount || 0,  // 🆕 NEW
+    dealerPendingQty: dealerPendingQty,         // 🆕 NEW
   };
+}
+
+// ============================================
+// GET FULFILLMENT SOURCE BREAKDOWN (NEW - Sept 25, 2026)
+// Get distribution of allocations across fulfillment sources
+// ============================================
+
+export async function getFulfillmentSourceBreakdown(
+  filters?: OperationsFilters
+): Promise<{ data: import('../types').FulfillmentSourceBreakdown[] | null; error: Error | null }> {
+  try {
+    const supabase = createAdminClient();
+
+    let query = supabase
+      .from('fulfillment_allocations')
+      .select(`
+        fulfillment_source,
+        quantity,
+        sales_order_item:sales_order_items!inner(
+          sales_order:sales_orders!inner(
+            customer_id,
+            id
+          ),
+          product_id
+        )
+      `);
+
+    // Apply filters
+    if (filters?.customerId) {
+      query = query.eq('sales_order_item.sales_order.customer_id', filters.customerId);
+    }
+    if (filters?.productId) {
+      query = query.eq('sales_order_item.product_id', filters.productId);
+    }
+    if (filters?.fulfillmentSource) {
+      query = query.eq('fulfillment_source', filters.fulfillmentSource);
+    }
+    if (filters?.platinumDealerId) {
+      query = query.eq('platinum_dealer_id', filters.platinumDealerId);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      return { data: null, error: new Error(error.message) };
+    }
+
+    // Group by fulfillment_source
+    const breakdown = new Map<string, number>();
+    data?.forEach(alloc => {
+      const source = alloc.fulfillment_source;
+      breakdown.set(source, (breakdown.get(source) || 0) + alloc.quantity);
+    });
+
+    const result: import('../types').FulfillmentSourceBreakdown[] = Array.from(breakdown.entries()).map(([source, qty]) => ({
+      source: source as import('../types').FulfillmentSource,
+      quantity: qty,
+      percentage: 0 // Will calculate after getting total
+    }));
+
+    // Calculate percentages
+    const total = result.reduce((sum, item) => sum + item.quantity, 0);
+    result.forEach(item => {
+      item.percentage = total > 0 ? (item.quantity / total) * 100 : 0;
+    });
+
+    return { data: result, error: null };
+  } catch (error) {
+    console.error('getFulfillmentSourceBreakdown error:', error);
+    return { data: null, error: error as Error };
+  }
 }
 
 // ============================================
@@ -592,10 +697,62 @@ export async function getCustomerCommitments(filters?: OperationsFilters): Promi
     }
   });
 
-  // Convert to array
+  // ============================================
+  // 🆕 NEW: Get fulfillment breakdown per customer
+  // ============================================
+  const allocationsQuery = supabase
+    .from('fulfillment_allocations')
+    .select(`
+      quantity,
+      fulfillment_source,
+      sales_order_item:sales_order_items!inner(
+        sales_order:sales_orders!inner(
+          customer_id
+        )
+      )
+    `);
+
+  const { data: allocations } = await allocationsQuery;
+
+  // Map allocations by customer + source
+  const customerSourceMap = new Map<string, Record<string, number>>();
+  allocations?.forEach(alloc => {
+    const soItem = toOne(alloc.sales_order_item);
+    const so = soItem ? toOne((soItem as any).sales_order) : null;
+    const customerId = so?.customer_id;
+
+    if (!customerId) return;
+
+    if (!customerSourceMap.has(customerId)) {
+      customerSourceMap.set(customerId, {
+        gdc_inventory: 0,
+        platinum_dealer_inventory: 0,
+        platinum_dealer_fulfillment: 0,
+        direct: 0
+      });
+    }
+    const sources = customerSourceMap.get(customerId)!;
+    sources[alloc.fulfillment_source] = (sources[alloc.fulfillment_source] || 0) + alloc.quantity;
+  });
+
+  // Convert to array and add fulfillment breakdown
   const result: CustomerCommitment[] = [];
   customerMap.forEach((val) => {
-    result.push(val);
+    const fulfillmentBreakdown = customerSourceMap.get(val.id) || {
+      gdc_inventory: 0,
+      platinum_dealer_inventory: 0,
+      platinum_dealer_fulfillment: 0,
+      direct: 0
+    };
+
+    result.push({
+      ...val,
+      // 🆕 NEW: Fulfillment breakdown
+      gdcQty: fulfillmentBreakdown.gdc_inventory || 0,
+      dealerInventoryQty: fulfillmentBreakdown.platinum_dealer_inventory || 0,
+      dealerFulfillmentQty: fulfillmentBreakdown.platinum_dealer_fulfillment || 0,
+      manufacturerDirectQty: fulfillmentBreakdown.direct || 0,
+    });
   });
 
   // Sort by loads descending
@@ -813,7 +970,16 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
         customer_po_number,
         requested_delivery_date,
         customer_id,
-        customers(id, name)
+        customers(id, name),
+        sales_order_items(
+          id,
+          fulfillment_allocations(
+            fulfillment_source,
+            quantity,
+            platinum_dealer:platinum_dealers(dealer_name),
+            dealer_location:platinum_dealer_locations(location_name)
+          )
+        )
       )
     `)
     .is('deleted_at', null)
@@ -904,6 +1070,18 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
     const shouldIncludeFinal = shouldInclude || hasLFDAlert || isDelayed;
 
     if (shouldIncludeFinal) {
+      // 🆕 Extract fulfillment allocation data
+      const soItems = salesOrderData?.sales_order_items as Array<{
+        fulfillment_allocations?: Array<{
+          fulfillment_source: string;
+          quantity: number;
+          platinum_dealer?: { dealer_name: string } | { dealer_name: string }[];
+          dealer_location?: { location_name: string } | { location_name: string }[];
+        }>;
+      }> | undefined;
+      const allocations = soItems?.[0]?.fulfillment_allocations || [];
+      const primaryAllocation = allocations[0]; // Get first allocation as primary
+
       result.push({
         id: s.id,
         loadNumber: salesOrderData?.order_number || s.shipment_number || 'N/A',
@@ -929,6 +1107,10 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
         ].filter(Boolean).join(', ') || undefined,
         // Delay Alert fields
         isDelayed: isDelayed || false,
+        // 🆕 NEW: Fulfillment allocation fields
+        fulfillmentSource: primaryAllocation?.fulfillment_source as import('../types').FulfillmentSource || null,
+        allocatedToDealerName: toOne(primaryAllocation?.platinum_dealer)?.dealer_name || null,
+        allocatedToDealerLocation: toOne(primaryAllocation?.dealer_location)?.location_name || null,
       });
     }
   });
@@ -958,7 +1140,16 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
       internal_notes,
       customer_id,
       customers(id, name),
-      sales_order_items(quantity, product_id)
+      sales_order_items(
+        quantity,
+        product_id,
+        fulfillment_allocations(
+          fulfillment_source,
+          quantity,
+          platinum_dealer:platinum_dealers(dealer_name),
+          dealer_location:platinum_dealer_locations(location_name)
+        )
+      )
     `)
     .is('deleted_at', null)
     .order('requested_delivery_date', { ascending: true });
@@ -1051,6 +1242,20 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
         displayStatus = 'DELIVERED';
       }
 
+      // 🆕 Extract fulfillment allocation data
+      const soItems = so.sales_order_items as Array<{
+        quantity: number;
+        product_id?: string;
+        fulfillment_allocations?: Array<{
+          fulfillment_source: string;
+          quantity: number;
+          platinum_dealer?: { dealer_name: string } | { dealer_name: string }[];
+          dealer_location?: { location_name: string } | { location_name: string }[];
+        }>;
+      }> | undefined;
+      const allocations = soItems?.[0]?.fulfillment_allocations || [];
+      const primaryAllocation = allocations[0]; // Get first allocation as primary
+
       result.push({
         id: so.id,
         loadNumber: so.order_number || 'N/A',
@@ -1066,6 +1271,10 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
         productSource: 'direct', // Default value (product_source column removed)
         // Delay Alert
         isDelayed: isDelayed || false,
+        // 🆕 NEW: Fulfillment allocation fields
+        fulfillmentSource: primaryAllocation?.fulfillment_source as import('../types').FulfillmentSource || null,
+        allocatedToDealerName: toOne(primaryAllocation?.platinum_dealer)?.dealer_name || null,
+        allocatedToDealerLocation: toOne(primaryAllocation?.dealer_location)?.location_name || null,
       });
     }
   });
@@ -1715,7 +1924,19 @@ export async function getGDCInventoryByOrderSeries(
       quantity_ordered,
       unit_price,
       product_id,
-      products(id, name, item_type)
+      products(id, name, item_type),
+      sales_order_item_id,
+      sales_order_items(
+        id,
+        fulfillment_allocations(
+          id,
+          fulfillment_source,
+          quantity,
+          status,
+          platinum_dealer:platinum_dealers(dealer_name, code),
+          dealer_location:platinum_dealer_locations(location_name)
+        )
+      )
     `)
     .in('purchase_order_id', poIds);
 
@@ -1792,6 +2013,18 @@ export async function getGDCInventoryByOrderSeries(
 
     console.log(`[GDC] Row ${index + 1} - PO: ${po.po_number} (${po.id}), SO: ${linkedSO?.order_number || 'None'}, Customer: ${customerName}, Status: ${po.status}`);
 
+    // 🆕 Extract fulfillment allocation data from first PO item
+    const firstPoItem = poItems?.find(item => item.purchase_order_id === po.id);
+    const soItemData = firstPoItem?.sales_order_items ? toOne(firstPoItem.sales_order_items) : null;
+    const allocations = (soItemData as any)?.fulfillment_allocations as Array<{
+      fulfillment_source: string;
+      quantity: number;
+      status: string;
+      platinum_dealer?: { dealer_name: string; code: string } | { dealer_name: string; code: string }[];
+      dealer_location?: { location_name: string } | { location_name: string }[];
+    }> | undefined;
+    const primaryAllocation = allocations?.[0]; // Get first allocation as primary
+
     result.push({
       id: po.id, // Always use PO ID (not SO ID)
       no: index + 1,
@@ -1820,6 +2053,11 @@ export async function getGDCInventoryByOrderSeries(
       actionRequired: po.internal_notes || '',
       notes: '',
       isUnallocated: !isAllocated,
+      // 🆕 NEW: Fulfillment allocation fields
+      fulfillmentSource: (primaryAllocation?.fulfillment_source as import('../types').FulfillmentSource) || 'gdc_inventory',
+      allocatedToDealerName: toOne(primaryAllocation?.platinum_dealer)?.dealer_name || null,
+      allocatedToDealerLocation: toOne(primaryAllocation?.dealer_location)?.location_name || null,
+      allocationStatus: (primaryAllocation?.status as import('../types').AllocationStatus) || null,
     });
   });
 
@@ -2196,11 +2434,33 @@ export async function getFilterOptions(): Promise<FilterOptions> {
   // Status options are static and defined in the component
   const statuses: FilterOptions['statuses'] = [];
 
+  // 🆕 NEW: Fetch platinum dealers
+  const { data: dealers } = await supabase
+    .from('platinum_dealers')
+    .select('id, dealer_name, code')
+    .eq('status', 'active')
+    .order('dealer_name');
+
+  const dealerOptions = dealers?.map(d => ({
+    value: d.id,
+    label: `${d.dealer_name} (${d.code})`
+  })) || [];
+
+  // 🆕 NEW: Fulfillment source options (static)
+  const fulfillmentSources: FilterOptions['fulfillmentSources'] = [
+    { value: 'gdc_inventory', label: 'GDC Inventory' },
+    { value: 'platinum_dealer_inventory', label: 'Platinum Dealer Inventory' },
+    { value: 'platinum_dealer_fulfillment', label: 'Platinum Dealer Fulfillment' },
+    { value: 'direct', label: 'Manufacturer Direct' }
+  ];
+
   return {
     customers,
     products,
     statuses,
     salesOrders,
     customerPoNumbers,
+    dealers: dealerOptions,              // 🆕 NEW
+    fulfillmentSources,                  // 🆕 NEW
   };
 }

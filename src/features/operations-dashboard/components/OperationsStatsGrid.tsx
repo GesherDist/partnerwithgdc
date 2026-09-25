@@ -88,7 +88,7 @@ function StatCard({ title, value, subtitle, icon, iconBgColor, highlight }: Stat
 
 export function OperationsStatsGrid({ stats }: OperationsStatsGridProps) {
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
       <StatCard
         title="Available Inventory"
         value={formatNumber(stats.availableInventoryQty)}
@@ -123,6 +123,22 @@ export function OperationsStatsGrid({ stats }: OperationsStatsGridProps) {
         icon={<Clock className="h-4 w-4 text-white" />}
         iconBgColor="bg-red-600"
         highlight={stats.inTransitNext7Days > 0}
+      />
+      {/* 🆕 Card 6: Dealer Allocations */}
+      <StatCard
+        title="Dealer Allocations"
+        value={formatNumber(stats.dealerAllocationsCount)}
+        subtitle="items allocated to dealers"
+        icon={<Users className="h-4 w-4 text-white" />}
+        iconBgColor="bg-purple-600"
+      />
+      {/* 🆕 Card 7: Pending Dealer Items */}
+      <StatCard
+        title="Pending Dealer Items"
+        value={formatNumber(stats.dealerPendingQty)}
+        subtitle="units awaiting fulfillment"
+        icon={<Clock className="h-4 w-4 text-white" />}
+        iconBgColor="bg-indigo-600"
       />
     </div>
   );

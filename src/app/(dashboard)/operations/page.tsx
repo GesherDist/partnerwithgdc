@@ -26,6 +26,7 @@ import { ImmediateAttentionTable } from '@/features/operations-dashboard/compone
 import { SKUBreakdown } from '@/features/operations-dashboard/components/SKUBreakdown';
 import { CustomerCommitments } from '@/features/operations-dashboard/components/CustomerCommitments';
 import { ShipmentStatusMix } from '@/features/operations-dashboard/components/ShipmentStatusMix';
+import { FulfillmentSourceBreakdown } from '@/features/operations-dashboard/components/FulfillmentSourceBreakdown'; // 🆕 NEW
 // REMOVED: Story in Brief - per user request Aug 31, 2025
 // import { StoryInBrief } from '@/features/operations-dashboard/components/StoryInBrief';
 import { ShipmentOverviewTable } from '@/features/operations-dashboard/components/ShipmentOverviewTable';
@@ -82,6 +83,8 @@ const emptyData: OperationsData = {
     openLoads: 0,
     outstandingQty: 0,
     invoiceAmount: 0,
+    dealerAllocationsCount: 0,   // 🆕 NEW
+    dealerPendingQty: 0,          // 🆕 NEW
   },
   skuBreakdown: [],
   customerCommitments: [],
@@ -95,6 +98,7 @@ const emptyData: OperationsData = {
   rimInstallationRequired: [],
   rimInstallationSkus: [],
   storyInBrief: '',
+  fulfillmentSourceBreakdown: [],  // 🆕 NEW
 };
 
 // Empty filter options for initial state
@@ -104,6 +108,8 @@ const emptyFilterOptions: FilterOptions = {
   statuses: [],
   salesOrders: [],
   customerPoNumbers: [],
+  dealers: [],                // 🆕 NEW
+  fulfillmentSources: [],     // 🆕 NEW
 };
 
 export default function OperationsPage() {
@@ -362,6 +368,11 @@ export default function OperationsPage() {
         <TabsContent value="executive-summary" className={`space-y-6 ${isRefreshing ? 'hidden' : ''}`}>
           {/* KPI Stats */}
           <OperationsStatsGrid stats={data.stats} />
+
+          {/* 🆕 NEW: Fulfillment Source Breakdown - Sept 25, 2026 */}
+          {data.fulfillmentSourceBreakdown && data.fulfillmentSourceBreakdown.length > 0 && (
+            <FulfillmentSourceBreakdown data={data.fulfillmentSourceBreakdown} />
+          )}
 
           {/* REMOVED: Story in Brief - per user request Aug 31, 2025 */}
 

@@ -20,6 +20,7 @@ import {
   getRimItems,
   getExportData,
   getFilterOptionsData,
+  getFulfillmentBreakdownData,  // 🆕 NEW
   type ExportOptions,
 } from '../services';
 import type {
@@ -33,6 +34,7 @@ import type {
   SKUColumnInfo,
   OperationsFilters,
   FilterOptions,
+  FulfillmentSourceBreakdown,  // 🆕 NEW
 } from '../types';
 
 // ============================================
@@ -161,6 +163,28 @@ export async function fetchRimInstallation(): Promise<ActionResult<RimInstallati
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Failed to fetch rim installation items',
+    };
+  }
+}
+
+/**
+ * Fetch fulfillment source breakdown
+ * 🆕 NEW - Sept 25, 2026
+ */
+export async function fetchFulfillmentBreakdown(
+  filters?: OperationsFilters
+): Promise<ActionResult<FulfillmentSourceBreakdown[]>> {
+  try {
+    const data = await getFulfillmentBreakdownData(filters);
+    return {
+      success: true,
+      data
+    };
+  } catch (error) {
+    console.error('Error in fetchFulfillmentBreakdown:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
     };
   }
 }

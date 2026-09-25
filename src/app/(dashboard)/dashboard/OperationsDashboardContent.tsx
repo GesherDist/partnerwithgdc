@@ -45,6 +45,8 @@ const emptyData: OperationsData = {
     openLoads: 0,
     outstandingQty: 0,
     invoiceAmount: 0,
+    dealerAllocationsCount: 0,   // 🆕 NEW
+    dealerPendingQty: 0,          // 🆕 NEW
   },
   skuBreakdown: [],
   customerCommitments: [],
@@ -58,6 +60,7 @@ const emptyData: OperationsData = {
   rimInstallationRequired: [],
   rimInstallationSkus: [],
   storyInBrief: '',
+  fulfillmentSourceBreakdown: [],  // 🆕 NEW
 };
 
 export function OperationsDashboardContent() {

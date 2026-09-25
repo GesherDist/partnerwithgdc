@@ -18,6 +18,31 @@ export interface OperationsStats {
   openLoads: number;
   outstandingQty: number;
   invoiceAmount: number;
+  // 🆕 NEW: Dealer allocation KPIs
+  dealerAllocationsCount: number;    // Count of items allocated to dealers
+  dealerPendingQty: number;          // Quantity pending from dealers
+}
+
+// ============================================
+// FULFILLMENT SOURCE TYPES
+// ============================================
+
+export type FulfillmentSource =
+  | 'gdc_inventory'
+  | 'platinum_dealer_inventory'
+  | 'platinum_dealer_fulfillment'
+  | 'direct';
+
+export type AllocationStatus =
+  | 'pending'
+  | 'allocated'
+  | 'fulfilled'
+  | 'cancelled';
+
+export interface FulfillmentSourceBreakdown {
+  source: FulfillmentSource;
+  quantity: number;
+  percentage: number;
 }
 
 // ============================================
@@ -45,6 +70,11 @@ export interface CustomerCommitment {
   invoiceAmount: number;
   inTransitNext7Days: number;
   productSource?: 'direct' | 'warehouse';  // For filtering Shipment Overview
+  // 🆕 NEW: Fulfillment breakdown by source
+  gdcQty: number;                    // Quantity from GDC inventory
+  dealerInventoryQty: number;        // Quantity from dealer inventory
+  dealerFulfillmentQty: number;      // Quantity from dealer fulfillment
+  manufacturerDirectQty: number;     // Quantity from manufacturer direct
 }
 
 // ============================================
@@ -103,6 +133,10 @@ export interface ImmediateAttentionItem {
   // Delay Alert fields
   isDelayed?: boolean;            // Shipment is delayed (manual flag OR auto-detected from dates)
   delayReason?: string | null;    // Reason for delay (from Seaair email or manual entry)
+  // 🆕 NEW: Fulfillment allocation fields
+  fulfillmentSource: FulfillmentSource | null;       // Fulfillment source for this item
+  allocatedToDealerName: string | null;              // Dealer name if allocated
+  allocatedToDealerLocation: string | null;          // Dealer location if allocated
 }
 
 // ============================================
@@ -225,6 +259,8 @@ export interface OperationsData {
   rimInstallationRequired: RimInstallationItem[];
   rimInstallationSkus: SKUColumnInfo[];  // Dynamic SKU column headers for rim installation
   storyInBrief: string;
+  // 🆕 NEW: Fulfillment source breakdown
+  fulfillmentSourceBreakdown: FulfillmentSourceBreakdown[];  // Distribution across fulfillment sources
 }
 
 // ============================================
@@ -254,6 +290,11 @@ export interface GDCInventoryItem {
   actionRequired: string;
   notes: string;
   isUnallocated?: boolean;    // True if PO has no linked Sales Order (speculative inventory)
+  // 🆕 NEW: Fulfillment allocation fields
+  fulfillmentSource: FulfillmentSource;              // Fulfillment source for this item
+  allocatedToDealerName: string | null;              // Dealer name if allocated
+  allocatedToDealerLocation: string | null;          // Dealer location if allocated
+  allocationStatus: AllocationStatus | null;         // Allocation status
 }
 
 export interface GDCInventoryData {
@@ -273,6 +314,9 @@ export interface OperationsFilters {
   salesOrderId?: string;
   customerPoNumber?: string;  // Customer PO Number from sales_orders.customer_po_number
   orderSeries?: string;       // Filter by GDC order series
+  // 🆕 NEW: Fulfillment filters
+  fulfillmentSource?: FulfillmentSource;  // Filter by fulfillment source
+  platinumDealerId?: string;              // Filter by platinum dealer
 }
 
 export interface FilterOption {
@@ -286,4 +330,7 @@ export interface FilterOptions {
   statuses: FilterOption[];
   salesOrders: FilterOption[];
   customerPoNumbers: FilterOption[];
+  // 🆕 NEW: Fulfillment filter options
+  dealers: FilterOption[];                // Platinum dealers
+  fulfillmentSources: FilterOption[];     // Fulfillment sources
 }

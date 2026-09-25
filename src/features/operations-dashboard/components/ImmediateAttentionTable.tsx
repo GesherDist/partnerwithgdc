@@ -14,6 +14,7 @@ import { Truck, Pencil, Clock, AlertTriangle, Eye } from 'lucide-react';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/shared/components/ui/card';
 import { Button } from '@/shared/components/ui/button';
+import { Badge } from '@/shared/components/ui/badge';
 import {
   Table,
   TableBody,
@@ -157,6 +158,8 @@ export function ImmediateAttentionTable({
                 <TableHead>Customer ETA/Due</TableHead>
                 <TableHead>Delivery Address</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Fulfillment Source</TableHead> {/* 🆕 NEW */}
+                <TableHead>Allocated To</TableHead> {/* 🆕 NEW */}
                 <TableHead>Action Required / Notes</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
@@ -232,6 +235,32 @@ export function ImmediateAttentionTable({
                         )}
                       </TableCell>
                       <TableCell><StatusBadge status={item.status} isOverdue={item.isOverdue} isDelayed={item.isDelayed} /></TableCell>
+                      {/* 🆕 NEW: Fulfillment Source */}
+                      <TableCell>
+                        {item.fulfillmentSource ? (
+                          <Badge variant="outline" className="text-xs">
+                            {item.fulfillmentSource === 'gdc_inventory' && 'GDC Inv.'}
+                            {item.fulfillmentSource === 'platinum_dealer_inventory' && 'Dealer Inv.'}
+                            {item.fulfillmentSource === 'platinum_dealer_fulfillment' && 'Dealer Fulfill.'}
+                            {item.fulfillmentSource === 'direct' && 'Direct'}
+                          </Badge>
+                        ) : (
+                          <span className="text-muted-foreground">-</span>
+                        )}
+                      </TableCell>
+                      {/* 🆕 NEW: Allocated To */}
+                      <TableCell>
+                        {item.allocatedToDealerName ? (
+                          <div>
+                            <div className="text-sm font-medium">{item.allocatedToDealerName}</div>
+                            {item.allocatedToDealerLocation && (
+                              <div className="text-xs text-muted-foreground">{item.allocatedToDealerLocation}</div>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground">-</span>
+                        )}
+                      </TableCell>
                       <TableCell className="max-w-[200px]">
                         {item.actionRequired ? (
                           expandedNotesId === item.id ? (
