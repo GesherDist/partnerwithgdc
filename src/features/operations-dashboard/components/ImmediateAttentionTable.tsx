@@ -144,24 +144,28 @@ export function ImmediateAttentionTable({
           </div>
         </div>
       </CardHeader>
-      <CardContent>
-        <div className="rounded-md border">
-          <Table>
+      <CardContent className="p-0">
+        <div className="overflow-x-auto rounded-md border">
+          <Table className="min-w-[1400px]">
             <TableHeader>
-              <TableRow className="bg-muted/50">
-                <TableHead>Load #</TableHead>
-                <TableHead>Customer</TableHead>
-                <TableHead>PO</TableHead>
-                <TableHead className="text-right">Qty</TableHead>
-                <TableHead>ETA Port</TableHead>
-                <TableHead>LFD</TableHead>
-                <TableHead>Customer ETA/Due</TableHead>
-                <TableHead>Delivery Address</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Fulfillment Source</TableHead> {/* 🆕 NEW */}
-                <TableHead>Allocated To</TableHead> {/* 🆕 NEW */}
-                <TableHead>Action Required / Notes</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
+              <TableRow>
+                <TableHead className="sticky left-0 z-30 bg-muted w-[140px] shadow-[2px_0_4px_-2px_rgba(0,0,0,0.1)]">
+                  Load #
+                </TableHead>
+                <TableHead className="relative z-10 w-[160px]">
+                  Customer
+                </TableHead>
+                <TableHead className="relative z-10 w-[100px]">PO</TableHead>
+                <TableHead className="relative z-10 text-right w-[80px]">Qty</TableHead>
+                <TableHead className="relative z-10 w-[100px]">ETA Port</TableHead>
+                <TableHead className="relative z-10 w-[100px]">LFD</TableHead>
+                <TableHead className="relative z-10">Customer ETA/Due</TableHead>
+                <TableHead className="relative z-10">Delivery Address</TableHead>
+                <TableHead className="relative z-10">Status</TableHead>
+                <TableHead className="relative z-10">Fulfillment Source</TableHead> {/* 🆕 NEW */}
+                <TableHead className="relative z-10">Allocated To</TableHead> {/* 🆕 NEW */}
+                <TableHead className="relative z-10">Action Required / Notes</TableHead>
+                <TableHead className="relative z-10 text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -170,24 +174,35 @@ export function ImmediateAttentionTable({
                   // Determine row background color based on priority
                   // LFD Critical (red) > LFD Approaching (orange) > Delayed (yellow) > Overdue (red) > This Week (amber)
                   let rowClassName = '';
+                  let cellBgClass = 'bg-white'; // default white background
+
                   if (item.isLFDCritical) {
                     rowClassName = 'bg-red-100 hover:bg-red-200 border-l-4 border-l-red-500';
+                    cellBgClass = 'bg-red-100';
                   } else if (item.isLFDApproaching) {
                     rowClassName = 'bg-orange-50 hover:bg-orange-100 border-l-4 border-l-orange-500';
+                    cellBgClass = 'bg-orange-50';
                   } else if (item.isDelayed) {
                     rowClassName = 'bg-yellow-50 hover:bg-yellow-100 border-l-4 border-l-yellow-500';
+                    cellBgClass = 'bg-yellow-50';
                   } else if (item.isOverdue) {
                     rowClassName = 'bg-red-50 hover:bg-red-100';
+                    cellBgClass = 'bg-red-50';
                   } else if (item.isThisWeek) {
                     rowClassName = 'bg-amber-50 hover:bg-amber-100';
+                    cellBgClass = 'bg-amber-50';
                   }
 
                   return (
                     <TableRow key={item.id} className={rowClassName}>
-                      <TableCell className="font-medium">{item.loadNumber}</TableCell>
-                      <TableCell>{item.customer}</TableCell>
-                      <TableCell>{item.po}</TableCell>
-                      <TableCell className="text-right">{item.qty}</TableCell>
+                      <TableCell className={`sticky left-0 z-20 w-[140px] font-mono text-sm font-semibold text-primary whitespace-nowrap shadow-[2px_0_4px_-2px_rgba(0,0,0,0.1)] ${cellBgClass}`}>
+                        {item.loadNumber}
+                      </TableCell>
+                      <TableCell className="w-[160px] font-medium">
+                        {item.customer}
+                      </TableCell>
+                      <TableCell className="w-[100px]">{item.po}</TableCell>
+                      <TableCell className="text-right w-[80px]">{item.qty}</TableCell>
                       <TableCell>{formatDate(item.etaPort)}</TableCell>
                       <TableCell>
                         {item.lfdDate ? (

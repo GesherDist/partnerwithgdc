@@ -88,7 +88,7 @@ function StatCard({ title, value, subtitle, icon, iconBgColor, highlight }: Stat
 
 export function OperationsStatsGrid({ stats }: OperationsStatsGridProps) {
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+    <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-7">
       <StatCard
         title="Available Inventory"
         value={formatNumber(stats.availableInventoryQty)}

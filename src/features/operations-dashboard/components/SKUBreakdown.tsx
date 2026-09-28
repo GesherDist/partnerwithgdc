@@ -59,8 +59,9 @@ export function SKUBreakdown({ data }: SKUBreakdownProps) {
     .filter((name) => allGdcSeries.has(name));
 
   // Add any series not in ORDER_SERIES (fallback)
+  // Exclude "Available" column as it's redundant (Combined Qty already shows total)
   allGdcSeries.forEach((series) => {
-    if (!sortedGdcSeries.includes(series)) {
+    if (!sortedGdcSeries.includes(series) && series !== 'Available') {
       sortedGdcSeries.push(series);
     }
   });
@@ -99,19 +100,20 @@ export function SKUBreakdown({ data }: SKUBreakdownProps) {
           </div>
         </div>
       </CardHeader>
-      <CardContent className="overflow-x-auto px-6">
-        <Table>
+      <CardContent className="p-0">
+        <div className="overflow-x-auto">
+          <Table className="min-w-[700px]">
           <TableHeader>
             <TableRow className="bg-muted/50">
-              <TableHead className="min-w-[200px]">Product/SKU</TableHead>
-              <TableHead className="text-right min-w-[120px]">Supplier Outstanding</TableHead>
+              <TableHead className="min-w-[180px]">Product/SKU</TableHead>
+              <TableHead className="text-right min-w-[110px]">Supplier Outstanding</TableHead>
               {sortedGdcSeries.map((series) => (
-                <TableHead key={series} className="text-right min-w-[100px]">
-                  {series} Available
+                <TableHead key={series} className="text-right min-w-[90px]">
+                  {series}
                 </TableHead>
               ))}
-              <TableHead className="text-right min-w-[120px]">Combined Qty</TableHead>
-              <TableHead className="text-right w-[180px]">Share of Combined</TableHead>
+              <TableHead className="text-right min-w-[110px]">Combined Qty</TableHead>
+              <TableHead className="text-right w-[160px]">Share of Combined</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -158,7 +160,8 @@ export function SKUBreakdown({ data }: SKUBreakdownProps) {
               <TableCell className="text-right py-3">100%</TableCell>
             </TableRow>
           </TableBody>
-        </Table>
+          </Table>
+        </div>
       </CardContent>
     </Card>
   );

@@ -312,7 +312,7 @@ export default function OperationsPage() {
   }
 
   return (
-    <div className="flex flex-col gap-6 p-6 max-w-[1920px] mx-auto">
+    <div className="flex flex-col gap-4 p-3 sm:gap-6 sm:p-6 max-w-[1920px] mx-auto">
       {/* Error Message */}
       {error && (
         <div className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
@@ -331,7 +331,8 @@ export default function OperationsPage() {
 
       {/* Tabbed Content */}
       <Tabs defaultValue="executive-summary" className="w-full">
-        <TabsList className="grid w-full grid-cols-5 lg:w-auto lg:inline-flex">
+        <div className="overflow-x-auto">
+          <TabsList className="inline-flex w-auto min-w-full lg:min-w-0">
           <TabsTrigger value="executive-summary">Executive Summary</TabsTrigger>
           <TabsTrigger value="shipment-overview">Shipment Overview</TabsTrigger>
           {/* HIDDEN: Supplier Schedule tab - per Ankur/Jenny feedback Aug 26, 2025 */}
@@ -342,7 +343,8 @@ export default function OperationsPage() {
               {series.name}
             </TabsTrigger>
           ))}
-        </TabsList>
+          </TabsList>
+        </div>
 
         {/* Filters - Between tabs and content */}
         <div className="mt-4">
@@ -385,7 +387,7 @@ export default function OperationsPage() {
           )}
 
           {/* Two column layout for breakdown and status */}
-          <div className="grid gap-6 lg:grid-cols-[1.5fr_1fr]">
+          <div className="grid gap-6 grid-cols-1 xl:grid-cols-[1.5fr_1fr]">
             {/* SKU Breakdown - Wider column for better spacing */}
             <SKUBreakdown data={data.skuBreakdown} />
 

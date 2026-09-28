@@ -83,8 +83,9 @@ export function CustomerCommitments({ data, onViewCustomer: _onViewCustomer }: C
           </div>
         </div>
       </CardHeader>
-      <CardContent>
-        <Table>
+      <CardContent className="p-0">
+        <div className="overflow-x-auto">
+          <Table className="min-w-[1000px]">
           <TableHeader>
             <TableRow className="bg-muted/50">
               <TableHead>Customer</TableHead>
@@ -151,7 +152,8 @@ export function CustomerCommitments({ data, onViewCustomer: _onViewCustomer }: C
               <TableCell />
             </TableRow>
           </TableBody>
-        </Table>
+          </Table>
+        </div>
       </CardContent>
     </Card>
   );
