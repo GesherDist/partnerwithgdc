@@ -11,7 +11,10 @@ import { auditService } from '@/shared/lib/audit';
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
-  const { searchParams, origin } = url;
+  const { searchParams } = url;
+  // request.url reflects the internal address (localhost:3000) behind the
+  // reverse proxy, not the public host, so origin must come from env instead.
+  const origin = process.env.NEXT_PUBLIC_APP_URL || 'https://ops.partnerwithgdc.com';
 
   // Log all parameters for debugging
   console.log('=== Auth Callback Debug ===');

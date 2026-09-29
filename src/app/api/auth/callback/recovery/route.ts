@@ -9,7 +9,10 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@/shared/lib/supabase/server';
 
 export async function GET(request: Request) {
-  const { searchParams, origin } = new URL(request.url);
+  const { searchParams } = new URL(request.url);
+  // request.url reflects the internal address (localhost:3000) behind the
+  // reverse proxy, not the public host, so origin must come from env instead.
+  const origin = process.env.NEXT_PUBLIC_APP_URL || 'https://ops.partnerwithgdc.com';
   const code = searchParams.get('code');
   const error_description = searchParams.get('error_description');
 

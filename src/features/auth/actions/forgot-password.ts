@@ -37,7 +37,7 @@ export async function forgotPasswordAction(
   const supabase = await createClient();
 
   // Get the origin for redirect URL
-  const origin = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+  const origin = process.env.NEXT_PUBLIC_APP_URL || 'https://ops.partnerwithgdc.com';
 
   // Send password reset email.
   //

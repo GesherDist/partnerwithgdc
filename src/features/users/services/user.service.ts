@@ -72,7 +72,7 @@ function toTableRow(user: UserWithRole): UserTableRow {
  * session and every submit fails with "Auth session missing".
  */
 function resetRedirectUrl(): string {
-  const origin = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+  const origin = process.env.NEXT_PUBLIC_APP_URL || 'https://ops.partnerwithgdc.com';
   return `${origin}/api/auth/callback?next=/reset-password`;
 }
 
