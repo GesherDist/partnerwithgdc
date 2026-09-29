@@ -10,11 +10,18 @@
  */
 
 import { useState } from 'react';
-import { Truck, Pencil, Clock, AlertTriangle, Eye } from 'lucide-react';
+import { Truck, Pencil, Clock, AlertTriangle, Eye, ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/shared/components/ui/card';
 import { Button } from '@/shared/components/ui/button';
 import { Badge } from '@/shared/components/ui/badge';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/shared/components/ui/select';
 import {
   Table,
   TableBody,
@@ -70,6 +77,15 @@ export function ImmediateAttentionTable({
   const [expandedAddressId, setExpandedAddressId] = useState<string | null>(null);
   const [expandedNotesId, setExpandedNotesId] = useState<string | null>(null);
 
+  // Pagination state
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
+  // Sorting state
+  type SortColumn = 'loadNumber' | 'customer' | 'po' | 'qty' | 'etaPort' | 'customerEtaDue' | 'status';
+  const [sortColumn, setSortColumn] = useState<SortColumn | null>(null);
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+
   const toggleAddressExpand = (id: string) => {
     setExpandedAddressId(expandedAddressId === id ? null : id);
   };
@@ -78,8 +94,64 @@ export function ImmediateAttentionTable({
     setExpandedNotesId(expandedNotesId === id ? null : id);
   };
 
-  // Sort by priority: LFD critical > LFD approaching > Delayed > Overdue > This week
+  // Handle column sort
+  const handleSort = (column: SortColumn) => {
+    if (sortColumn === column) {
+      // Toggle direction if same column
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      // New column, default to asc
+      setSortColumn(column);
+      setSortDirection('asc');
+    }
+  };
+
+  // Sort items - if user selected a column, use that; otherwise use priority sort
   const sortedItems = [...items].sort((a, b) => {
+    // If user has selected a column to sort by, use that
+    if (sortColumn) {
+      let aVal: any;
+      let bVal: any;
+
+      switch (sortColumn) {
+        case 'loadNumber':
+          aVal = a.loadNumber;
+          bVal = b.loadNumber;
+          break;
+        case 'customer':
+          aVal = a.customer;
+          bVal = b.customer;
+          break;
+        case 'po':
+          aVal = a.po;
+          bVal = b.po;
+          break;
+        case 'qty':
+          aVal = a.qty;
+          bVal = b.qty;
+          break;
+        case 'etaPort':
+          aVal = a.etaPort ? new Date(a.etaPort).getTime() : 0;
+          bVal = b.etaPort ? new Date(b.etaPort).getTime() : 0;
+          break;
+        case 'customerEtaDue':
+          aVal = a.customerEtaDue ? new Date(a.customerEtaDue).getTime() : 0;
+          bVal = b.customerEtaDue ? new Date(b.customerEtaDue).getTime() : 0;
+          break;
+        case 'status':
+          aVal = a.status;
+          bVal = b.status;
+          break;
+        default:
+          return 0;
+      }
+
+      if (aVal < bVal) return sortDirection === 'asc' ? -1 : 1;
+      if (aVal > bVal) return sortDirection === 'asc' ? 1 : -1;
+      return 0;
+    }
+
+    // Default priority sort: LFD critical > LFD approaching > Delayed > Overdue > This week
     // LFD Critical items first (highest priority)
     if (a.isLFDCritical && !b.isLFDCritical) return -1;
     if (!a.isLFDCritical && b.isLFDCritical) return 1;
@@ -97,6 +169,13 @@ export function ImmediateAttentionTable({
     if (!a.isThisWeek && b.isThisWeek) return 1;
     return 0;
   });
+
+  // Pagination calculations
+  const totalItems = sortedItems.length;
+  const totalPages = Math.ceil(totalItems / pageSize);
+  const startIndex = (page - 1) * pageSize;
+  const endIndex = startIndex + pageSize;
+  const paginatedItems = sortedItems.slice(startIndex, endIndex);
 
   const overdueCount = items.filter(i => i.isOverdue).length;
   const thisWeekCount = items.filter(i => i.isThisWeek).length;
@@ -150,18 +229,98 @@ export function ImmediateAttentionTable({
             <TableHeader>
               <TableRow>
                 <TableHead className="sticky left-0 z-30 bg-muted w-[140px] shadow-[2px_0_4px_-2px_rgba(0,0,0,0.1)]">
-                  Load #
+                  <button
+                    onClick={() => handleSort('loadNumber')}
+                    className="flex items-center gap-1 hover:text-primary"
+                  >
+                    Load #
+                    {sortColumn === 'loadNumber' ? (
+                      sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                    ) : (
+                      <ArrowUpDown className="h-3 w-3 opacity-40" />
+                    )}
+                  </button>
                 </TableHead>
                 <TableHead className="relative z-10 w-[160px]">
-                  Customer
+                  <button
+                    onClick={() => handleSort('customer')}
+                    className="flex items-center gap-1 hover:text-primary"
+                  >
+                    Customer
+                    {sortColumn === 'customer' ? (
+                      sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                    ) : (
+                      <ArrowUpDown className="h-3 w-3 opacity-40" />
+                    )}
+                  </button>
                 </TableHead>
-                <TableHead className="relative z-10 w-[100px]">PO</TableHead>
-                <TableHead className="relative z-10 text-right w-[80px]">Qty</TableHead>
-                <TableHead className="relative z-10 w-[100px]">ETA Port</TableHead>
+                <TableHead className="relative z-10 w-[100px]">
+                  <button
+                    onClick={() => handleSort('po')}
+                    className="flex items-center gap-1 hover:text-primary"
+                  >
+                    PO
+                    {sortColumn === 'po' ? (
+                      sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                    ) : (
+                      <ArrowUpDown className="h-3 w-3 opacity-40" />
+                    )}
+                  </button>
+                </TableHead>
+                <TableHead className="relative z-10 text-right w-[80px]">
+                  <button
+                    onClick={() => handleSort('qty')}
+                    className="flex items-center gap-1 hover:text-primary ml-auto"
+                  >
+                    Qty
+                    {sortColumn === 'qty' ? (
+                      sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                    ) : (
+                      <ArrowUpDown className="h-3 w-3 opacity-40" />
+                    )}
+                  </button>
+                </TableHead>
+                <TableHead className="relative z-10 w-[100px]">
+                  <button
+                    onClick={() => handleSort('etaPort')}
+                    className="flex items-center gap-1 hover:text-primary"
+                  >
+                    ETA Port
+                    {sortColumn === 'etaPort' ? (
+                      sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                    ) : (
+                      <ArrowUpDown className="h-3 w-3 opacity-40" />
+                    )}
+                  </button>
+                </TableHead>
                 <TableHead className="relative z-10 w-[100px]">LFD</TableHead>
-                <TableHead className="relative z-10">Customer ETA/Due</TableHead>
+                <TableHead className="relative z-10">
+                  <button
+                    onClick={() => handleSort('customerEtaDue')}
+                    className="flex items-center gap-1 hover:text-primary"
+                  >
+                    Customer ETA/Due
+                    {sortColumn === 'customerEtaDue' ? (
+                      sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                    ) : (
+                      <ArrowUpDown className="h-3 w-3 opacity-40" />
+                    )}
+                  </button>
+                </TableHead>
                 <TableHead className="relative z-10">Delivery Address</TableHead>
-                <TableHead className="relative z-10">Status</TableHead>
+                <TableHead className="relative z-10">
+                  <button
+                    onClick={() => handleSort('status')}
+                    className="flex items-center gap-1 hover:text-primary"
+                  >
+                    Status
+                    {sortColumn === 'status' ? (
+                      sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                    ) : (
+                      <ArrowUpDown className="h-3 w-3 opacity-40" />
+                    )}
+                  </button>
+                </TableHead>
                 <TableHead className="relative z-10">Fulfillment Source</TableHead> {/* 🆕 NEW */}
                 <TableHead className="relative z-10">Allocated To</TableHead> {/* 🆕 NEW */}
                 <TableHead className="relative z-10">Action Required / Notes</TableHead>
@@ -169,8 +328,8 @@ export function ImmediateAttentionTable({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {sortedItems.length > 0 ? (
-                sortedItems.map((item) => {
+              {paginatedItems.length > 0 ? (
+                paginatedItems.map((item) => {
                   // Determine row background color based on priority
                   // LFD Critical (red) > LFD Approaching (orange) > Delayed (yellow) > Overdue (red) > This Week (amber)
                   let rowClassName = '';
@@ -334,6 +493,66 @@ export function ImmediateAttentionTable({
             </TableBody>
           </Table>
         </div>
+
+        {/* Pagination Controls */}
+        {totalItems > 0 && (
+          <div className="flex items-center justify-between px-4 py-3 border-t">
+            <div className="flex-1 text-sm text-muted-foreground">
+              Showing {startIndex + 1} to{' '}
+              {Math.min(endIndex, totalItems)} of{' '}
+              {totalItems} results
+            </div>
+            <div className="flex items-center space-x-6">
+              {/* Page Size Selector */}
+              <div className="flex items-center space-x-2">
+                <p className="text-sm font-medium">Rows per page</p>
+                <Select
+                  value={`${pageSize}`}
+                  onValueChange={(value) => {
+                    setPageSize(Number(value));
+                    setPage(1); // Reset to first page when changing page size
+                  }}
+                >
+                  <SelectTrigger className="h-8 w-[70px]">
+                    <SelectValue placeholder={pageSize} />
+                  </SelectTrigger>
+                  <SelectContent side="top">
+                    {[10, 20, 50, 100].map((size) => (
+                      <SelectItem key={size} value={`${size}`}>
+                        {size}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Page Navigation */}
+              <div className="flex items-center space-x-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage(page - 1)}
+                  disabled={page <= 1}
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  Previous
+                </Button>
+                <div className="text-sm font-medium">
+                  Page {page} of {totalPages}
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage(page + 1)}
+                  disabled={page >= totalPages}
+                >
+                  Next
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

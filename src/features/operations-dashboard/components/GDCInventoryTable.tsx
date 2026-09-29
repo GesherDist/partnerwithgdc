@@ -8,7 +8,7 @@
  */
 
 import { useState } from 'react';
-import { Eye, Pencil } from 'lucide-react';
+import { Eye, Pencil, ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 
 import {
   Card,
@@ -27,6 +27,13 @@ import {
 } from '@/shared/components/ui/table';
 import { Button } from '@/shared/components/ui/button';
 import { Badge } from '@/shared/components/ui/badge';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/shared/components/ui/select';
 import type { GDCInventoryItem, SKUColumnInfo } from '../types';
 
 interface GDCInventoryTableProps {
@@ -51,6 +58,16 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
   // State for expanded addresses and notes
   const [expandedAddressId, setExpandedAddressId] = useState<string | null>(null);
   const [expandedNotesId, setExpandedNotesId] = useState<string | null>(null);
+  const [expandedAllocationsId, setExpandedAllocationsId] = useState<string | null>(null);
+
+  // Pagination state
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
+  // Sorting state
+  type SortColumn = 'no' | 'soNumber' | 'customerPoNumber' | 'totalQty' | 'customer' | 'supplierName' | 'etaToUsPort' | 'confirmedEta' | 'expectedDelivery' | 'status';
+  const [sortColumn, setSortColumn] = useState<SortColumn | null>(null);
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
 
   const toggleAddressExpand = (id: string) => {
     setExpandedAddressId(expandedAddressId === id ? null : id);
@@ -58,6 +75,20 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
 
   const toggleNotesExpand = (id: string) => {
     setExpandedNotesId(expandedNotesId === id ? null : id);
+  };
+
+  const toggleAllocationsExpand = (id: string) => {
+    setExpandedAllocationsId(expandedAllocationsId === id ? null : id);
+  };
+
+  // Handle column sort
+  const handleSort = (column: SortColumn) => {
+    if (sortColumn === column) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortColumn(column);
+      setSortDirection('asc');
+    }
   };
 
   const formatDate = (dateString: string | null | undefined) => {
@@ -81,12 +112,74 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
     return 'bg-white dark:bg-gray-950';
   };
 
+  // Sort data if column selected
+  const sortedData = sortColumn ? [...data].sort((a, b) => {
+    let aVal: any;
+    let bVal: any;
+
+    switch (sortColumn) {
+      case 'no':
+        aVal = a.no;
+        bVal = b.no;
+        break;
+      case 'soNumber':
+        aVal = a.soNumber || '';
+        bVal = b.soNumber || '';
+        break;
+      case 'customerPoNumber':
+        aVal = a.customerPoNumber || '';
+        bVal = b.customerPoNumber || '';
+        break;
+      case 'totalQty':
+        aVal = a.totalQty;
+        bVal = b.totalQty;
+        break;
+      case 'customer':
+        aVal = a.customer || '';
+        bVal = b.customer || '';
+        break;
+      case 'supplierName':
+        aVal = a.supplierName || '';
+        bVal = b.supplierName || '';
+        break;
+      case 'etaToUsPort':
+        aVal = a.etaToUsPort ? new Date(a.etaToUsPort).getTime() : 0;
+        bVal = b.etaToUsPort ? new Date(b.etaToUsPort).getTime() : 0;
+        break;
+      case 'confirmedEta':
+        aVal = a.confirmedEta ? new Date(a.confirmedEta).getTime() : 0;
+        bVal = b.confirmedEta ? new Date(b.confirmedEta).getTime() : 0;
+        break;
+      case 'expectedDelivery':
+        aVal = a.expectedDelivery ? new Date(a.expectedDelivery).getTime() : 0;
+        bVal = b.expectedDelivery ? new Date(b.expectedDelivery).getTime() : 0;
+        break;
+      case 'status':
+        aVal = a.status;
+        bVal = b.status;
+        break;
+      default:
+        return 0;
+    }
+
+    if (aVal < bVal) return sortDirection === 'asc' ? -1 : 1;
+    if (aVal > bVal) return sortDirection === 'asc' ? 1 : -1;
+    return 0;
+  }) : data;
+
+  // Pagination calculations
+  const totalItems = sortedData.length;
+  const totalPages = Math.ceil(totalItems / pageSize);
+  const startIndex = (page - 1) * pageSize;
+  const endIndex = startIndex + pageSize;
+  const paginatedData = sortedData.slice(startIndex, endIndex);
+
   // Get quantity for a specific SKU from items array
   const getSkuQty = (items: { sku: string; qty: number }[], sku: string): number => {
     return items?.filter((i) => i.sku === sku).reduce((sum, i) => sum + i.qty, 0) || 0;
   };
 
-  // Calculate totals including per-SKU totals
+  // Calculate totals including per-SKU totals (from FULL data, not paginated)
   const totals = data.reduce(
     (acc, item) => {
       // Calculate per-SKU totals
@@ -128,27 +221,117 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
             <Table className="min-w-[1200px]">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="relative sticky left-0 z-20 w-[60px] bg-white dark:bg-gray-950 after:absolute after:inset-0 after:w-[60px] after:bg-white after:dark:bg-gray-950 after:-z-10">No.</TableHead>
-                  <TableHead className="relative sticky left-[60px] z-20 min-w-[120px] whitespace-nowrap bg-white dark:bg-gray-950 after:absolute after:inset-0 after:min-w-[120px] after:bg-white after:dark:bg-gray-950 after:-z-10">SO #</TableHead>
-                  <TableHead className="relative sticky left-[180px] z-20 min-w-[140px] whitespace-nowrap bg-white dark:bg-gray-950 border-r shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] after:absolute after:inset-0 after:min-w-[140px] after:bg-white after:dark:bg-gray-950 after:-z-10">Customer PO</TableHead>
+                  <TableHead className="relative sticky left-0 z-20 w-[60px] bg-white dark:bg-gray-950 after:absolute after:inset-0 after:w-[60px] after:bg-white after:dark:bg-gray-950 after:-z-10">
+                    <button onClick={() => handleSort('no')} className="flex items-center gap-1 hover:text-primary">
+                      No.
+                      {sortColumn === 'no' ? (
+                        sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                      ) : (
+                        <ArrowUpDown className="h-3 w-3 opacity-40" />
+                      )}
+                    </button>
+                  </TableHead>
+                  <TableHead className="relative sticky left-[60px] z-20 min-w-[120px] whitespace-nowrap bg-white dark:bg-gray-950 after:absolute after:inset-0 after:min-w-[120px] after:bg-white after:dark:bg-gray-950 after:-z-10">
+                    <button onClick={() => handleSort('soNumber')} className="flex items-center gap-1 hover:text-primary">
+                      SO #
+                      {sortColumn === 'soNumber' ? (
+                        sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                      ) : (
+                        <ArrowUpDown className="h-3 w-3 opacity-40" />
+                      )}
+                    </button>
+                  </TableHead>
+                  <TableHead className="relative sticky left-[180px] z-20 min-w-[140px] whitespace-nowrap bg-white dark:bg-gray-950 border-r shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] after:absolute after:inset-0 after:min-w-[140px] after:bg-white after:dark:bg-gray-950 after:-z-10">
+                    <button onClick={() => handleSort('customerPoNumber')} className="flex items-center gap-1 hover:text-primary">
+                      PO #
+                      {sortColumn === 'customerPoNumber' ? (
+                        sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                      ) : (
+                        <ArrowUpDown className="h-3 w-3 opacity-40" />
+                      )}
+                    </button>
+                  </TableHead>
                   {/* Dynamic SKU columns */}
                   {uniqueSkus.map((skuInfo) => (
-                    <TableHead key={skuInfo.sku} className="text-center text-xs whitespace-nowrap min-w-[180px]" title={skuInfo.sku}>
-                      {skuInfo.productName} Qty
+                    <TableHead key={skuInfo.sku} className="text-center text-xs whitespace-nowrap min-w-[220px]" title={skuInfo.sku}>
+                      {skuInfo.productName}
                     </TableHead>
                   ))}
-                  <TableHead className="text-right whitespace-nowrap">Total Qty</TableHead>
-                  <TableHead className="whitespace-nowrap min-w-[130px]">Customer</TableHead>
-                  <TableHead className="whitespace-nowrap min-w-[130px]">Supplier</TableHead>
-                  <TableHead className="whitespace-nowrap">ETA to US Port</TableHead>
-                  <TableHead className="whitespace-nowrap">Confirmed ETA</TableHead>
-                  <TableHead className="whitespace-nowrap">Expected Delivery</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">
+                    <button onClick={() => handleSort('totalQty')} className="flex items-center gap-1 hover:text-primary ml-auto">
+                      Total
+                      {sortColumn === 'totalQty' ? (
+                        sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                      ) : (
+                        <ArrowUpDown className="h-3 w-3 opacity-40" />
+                      )}
+                    </button>
+                  </TableHead>
+                  <TableHead className="whitespace-nowrap min-w-[200px]">
+                    <button onClick={() => handleSort('customer')} className="flex items-center gap-1 hover:text-primary">
+                      Customer/Warehouse
+                      {sortColumn === 'customer' ? (
+                        sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                      ) : (
+                        <ArrowUpDown className="h-3 w-3 opacity-40" />
+                      )}
+                    </button>
+                  </TableHead>
+                  <TableHead className="whitespace-nowrap min-w-[180px]">
+                    <button onClick={() => handleSort('supplierName')} className="flex items-center gap-1 hover:text-primary">
+                      Supplier
+                      {sortColumn === 'supplierName' ? (
+                        sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                      ) : (
+                        <ArrowUpDown className="h-3 w-3 opacity-40" />
+                      )}
+                    </button>
+                  </TableHead>
+                  <TableHead className="whitespace-nowrap">
+                    <button onClick={() => handleSort('etaToUsPort')} className="flex items-center gap-1 hover:text-primary">
+                      ETA to US Port
+                      {sortColumn === 'etaToUsPort' ? (
+                        sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                      ) : (
+                        <ArrowUpDown className="h-3 w-3 opacity-40" />
+                      )}
+                    </button>
+                  </TableHead>
+                  <TableHead className="whitespace-nowrap">
+                    <button onClick={() => handleSort('confirmedEta')} className="flex items-center gap-1 hover:text-primary">
+                      Confirmed ETA
+                      {sortColumn === 'confirmedEta' ? (
+                        sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                      ) : (
+                        <ArrowUpDown className="h-3 w-3 opacity-40" />
+                      )}
+                    </button>
+                  </TableHead>
+                  <TableHead className="whitespace-nowrap">
+                    <button onClick={() => handleSort('expectedDelivery')} className="flex items-center gap-1 hover:text-primary">
+                      Expected Delivery
+                      {sortColumn === 'expectedDelivery' ? (
+                        sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                      ) : (
+                        <ArrowUpDown className="h-3 w-3 opacity-40" />
+                      )}
+                    </button>
+                  </TableHead>
                   <TableHead className="whitespace-nowrap">Actual Delivery</TableHead>
                   <TableHead className="text-right whitespace-nowrap">Qty Delivered</TableHead>
                   <TableHead className="text-right whitespace-nowrap">Outstanding Qty</TableHead>
                   <TableHead className="text-right whitespace-nowrap">Invoice Amt</TableHead>
                   <TableHead className="whitespace-nowrap min-w-[150px]">Delivery Address</TableHead>
-                  <TableHead className="whitespace-nowrap">Status</TableHead>
+                  <TableHead className="whitespace-nowrap">
+                    <button onClick={() => handleSort('status')} className="flex items-center gap-1 hover:text-primary">
+                      Status
+                      {sortColumn === 'status' ? (
+                        sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                      ) : (
+                        <ArrowUpDown className="h-3 w-3 opacity-40" />
+                      )}
+                    </button>
+                  </TableHead>
                   <TableHead className="whitespace-nowrap min-w-[130px]">Fulfillment Source</TableHead> {/* 🆕 NEW */}
                   <TableHead className="whitespace-nowrap min-w-[130px]">Allocated To</TableHead> {/* 🆕 NEW */}
                   <TableHead className="min-w-[150px]">Notes</TableHead>
@@ -156,7 +339,7 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {data.map((item) => (
+                {paginatedData.map((item) => (
                   <TableRow
                     key={item.id}
                     className={
@@ -171,7 +354,7 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
                   >
                     <TableCell className={`relative sticky left-0 z-20 w-[60px] font-medium ${getStickyBgClass(item.status)} after:absolute after:inset-0 after:w-[60px] after:bg-inherit after:-z-10`}>{item.no}</TableCell>
                     <TableCell className={`relative sticky left-[60px] z-20 min-w-[120px] font-mono text-sm whitespace-nowrap ${getStickyBgClass(item.status)} after:absolute after:inset-0 after:min-w-[120px] after:bg-inherit after:-z-10`}>{item.soNumber || '-'}</TableCell>
-                    <TableCell className={`relative sticky left-[180px] z-20 min-w-[140px] font-mono text-sm whitespace-nowrap ${getStickyBgClass(item.status)} border-r shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] after:absolute after:inset-0 after:min-w-[140px] after:bg-inherit after:-z-10`}>{item.customerPoNumber || '-'}</TableCell>
+                    <TableCell className={`relative sticky left-[180px] z-20 min-w-[140px] font-mono text-sm whitespace-nowrap ${getStickyBgClass(item.status)} border-r shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] after:absolute after:inset-0 after:min-w-[140px] after:bg-inherit after:-z-10`}>{item.poNumber || '-'}</TableCell>
                     {/* Dynamic SKU quantity columns */}
                     {uniqueSkus.map((skuInfo) => {
                       const qty = getSkuQty(item.items, skuInfo.sku);
@@ -182,8 +365,111 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
                       );
                     })}
                     <TableCell className="text-right font-semibold">{item.totalQty}</TableCell>
-                    <TableCell>{item.customer || 'Unallocated'}</TableCell>
-                    <TableCell>{item.supplierName || '-'}</TableCell>
+                    <TableCell>{item.customer || '-'}</TableCell>
+                    <TableCell className="min-w-[180px]">
+                      {item.allocations && item.allocations.length > 0 ? (
+                        expandedAllocationsId === item.id ? (
+                          // Expanded view - show all allocations
+                          <div className="space-y-2">
+                            {item.allocations.map((allocation, idx) => (
+                              <div key={idx} className="flex flex-col gap-1">
+                                <div className="flex items-center gap-2 text-xs">
+                                  <Badge
+                                    variant="outline"
+                                    className={
+                                      allocation.source === 'gdc_inventory'
+                                        ? 'bg-blue-50 text-blue-700 border-blue-200'
+                                        : allocation.source === 'platinum_dealer_inventory'
+                                        ? 'bg-purple-50 text-purple-700 border-purple-200'
+                                        : allocation.source === 'platinum_dealer_fulfillment'
+                                        ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                                        : 'bg-green-50 text-green-700 border-green-200'
+                                    }
+                                  >
+                                    {allocation.source === 'gdc_inventory'
+                                      ? 'GDC Inventory'
+                                      : allocation.source === 'platinum_dealer_inventory'
+                                      ? 'Dealer Inventory'
+                                      : allocation.source === 'platinum_dealer_fulfillment'
+                                      ? 'Dealer Fulfillment'
+                                      : 'Manufacturer'}
+                                  </Badge>
+                                  <span className="text-muted-foreground">
+                                    {allocation.quantity} units
+                                  </span>
+                                </div>
+                                {allocation.supplierName && (
+                                  <div className="text-sm font-medium">
+                                    {allocation.supplierName}
+                                  </div>
+                                )}
+                                {allocation.locationOrDealer && (
+                                  <div className="text-xs text-muted-foreground">
+                                    {allocation.locationOrDealer}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                            <button
+                              className="text-primary hover:underline text-xs mt-1"
+                              onClick={() => toggleAllocationsExpand(item.id)}
+                            >
+                              Show less
+                            </button>
+                          </div>
+                        ) : item.allocations[0] ? (
+                          // Collapsed view - show first allocation + count
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <Badge
+                                variant="outline"
+                                className={
+                                  item.allocations[0].source === 'gdc_inventory'
+                                    ? 'bg-blue-50 text-blue-700 border-blue-200'
+                                    : item.allocations[0].source === 'platinum_dealer_inventory'
+                                    ? 'bg-purple-50 text-purple-700 border-purple-200'
+                                    : item.allocations[0].source === 'platinum_dealer_fulfillment'
+                                    ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                                    : 'bg-green-50 text-green-700 border-green-200'
+                                }
+                              >
+                                {item.allocations[0].source === 'gdc_inventory'
+                                  ? 'GDC Inventory'
+                                  : item.allocations[0].source === 'platinum_dealer_inventory'
+                                  ? 'Dealer Inventory'
+                                  : item.allocations[0].source === 'platinum_dealer_fulfillment'
+                                  ? 'Dealer Fulfillment'
+                                  : 'Manufacturer'}
+                              </Badge>
+                              <span className="text-xs text-muted-foreground">
+                                {item.allocations[0].quantity} units
+                              </span>
+                            </div>
+                            {item.allocations[0].supplierName && (
+                              <div className="text-sm font-medium">
+                                {item.allocations[0].supplierName}
+                              </div>
+                            )}
+                            {item.allocations[0].locationOrDealer && (
+                              <div className="text-xs text-muted-foreground">
+                                {item.allocations[0].locationOrDealer}
+                              </div>
+                            )}
+                            {item.allocations.length > 1 && (
+                              <button
+                                className="text-primary hover:underline text-xs"
+                                onClick={() => toggleAllocationsExpand(item.id)}
+                              >
+                                + {item.allocations.length - 1} more
+                              </button>
+                            )}
+                          </div>
+                        ) : null
+                      ) : (
+                        // No allocations array - fallback to old supplierName field
+                        <span className="text-sm">{item.supplierName || '-'}</span>
+                      )}
+                    </TableCell>
                     <TableCell>{formatDate(item.etaToUsPort)}</TableCell>
                     <TableCell>{formatDate(item.confirmedEta)}</TableCell>
                     <TableCell>{formatDate(item.expectedDelivery)}</TableCell>
@@ -337,6 +623,65 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
                 </TableRow>
               </TableBody>
             </Table>
+          </div>
+        )}
+        {/* Pagination Controls */}
+        {totalItems > 0 && (
+          <div className="flex items-center justify-between px-4 py-3 border-t">
+            <div className="flex-1 text-sm text-muted-foreground">
+              Showing {startIndex + 1} to{' '}
+              {Math.min(endIndex, totalItems)} of{' '}
+              {totalItems} results
+            </div>
+            <div className="flex items-center space-x-6">
+              {/* Page Size Selector */}
+              <div className="flex items-center space-x-2">
+                <p className="text-sm font-medium">Rows per page</p>
+                <Select
+                  value={`${pageSize}`}
+                  onValueChange={(value) => {
+                    setPageSize(Number(value));
+                    setPage(1); // Reset to first page
+                  }}
+                >
+                  <SelectTrigger className="h-8 w-[70px]">
+                    <SelectValue placeholder={pageSize} />
+                  </SelectTrigger>
+                  <SelectContent side="top">
+                    {[10, 20, 50, 100].map((size) => (
+                      <SelectItem key={size} value={`${size}`}>
+                        {size}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Page Navigation */}
+              <div className="flex items-center space-x-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage(page - 1)}
+                  disabled={page <= 1}
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  Previous
+                </Button>
+                <div className="text-sm font-medium">
+                  Page {page} of {totalPages}
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage(page + 1)}
+                  disabled={page >= totalPages}
+                >
+                  Next
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
           </div>
         )}
       </CardContent>

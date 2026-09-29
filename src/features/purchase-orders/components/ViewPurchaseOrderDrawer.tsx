@@ -37,7 +37,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/shared/components/ui/select';
-import { Pencil, Building2, MapPin, Send, Loader2, Calendar, X, Layers } from 'lucide-react';
+import { Pencil, Building2, MapPin, Send, Loader2, Calendar, X, Layers, Warehouse } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/shared/lib/utils';
 import { usePurchaseOrder } from '../hooks/usePurchaseOrder';
@@ -46,6 +46,20 @@ import { PO_STATUS_COLORS, PO_STATUS_LABELS } from '../types';
 import type { ViewPurchaseOrderDrawerProps, SupplierSummary } from '../types';
 import { ORDER_SERIES } from '@/shared/lib/global-data';
 import { updateSalesOrderSeries } from '@/features/sales-orders/actions';
+
+// ============================================
+// HELPER FUNCTIONS
+// ============================================
+
+/**
+ * Format cents to currency with thousand separators
+ */
+function formatCurrency(cents: number): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+  }).format(cents / 100);
+}
 
 export function ViewPurchaseOrderDrawer({
   open,
@@ -64,6 +78,8 @@ export function ViewPurchaseOrderDrawer({
   // Order Series edit - updates the linked Sales Order
   const [isEditingOrderSeries, setIsEditingOrderSeries] = useState(false);
   const [isUpdatingOrderSeries, setIsUpdatingOrderSeries] = useState(false);
+  // Warehouses state
+  const [warehouses, setWarehouses] = useState<Array<{ id: string; name: string }>>([]);
 
   // Load suppliers when editing
   useEffect(() => {
@@ -72,9 +88,33 @@ export function ViewPurchaseOrderDrawer({
     }
   }, [isEditingSupplier, suppliers.length]);
 
+  // Load warehouses on mount
+  useEffect(() => {
+    if (open) {
+      loadWarehouses();
+    }
+  }, [open]);
+
   const loadSuppliers = async () => {
     const data = await getSuppliersForDropdown();
     setSuppliers(data);
+  };
+
+  const loadWarehouses = async () => {
+    try {
+      const { getAllLocationsAction } = await import('@/features/locations/actions');
+      const result = await getAllLocationsAction({ type: 'warehouse' });
+
+      if (result.success && result.data) {
+        const locs = result.data.map((loc) => ({
+          id: loc.id,
+          name: `${loc.locationCode} - ${loc.name}`,
+        }));
+        setWarehouses(locs);
+      }
+    } catch (error) {
+      console.error('Failed to load warehouses:', error);
+    }
   };
 
   // Get current supplier from items (assuming all items have same supplier)
@@ -242,8 +282,8 @@ export function ViewPurchaseOrderDrawer({
 
             <Separator />
 
-            {/* Supplier & Order Series - Editable */}
-            <div className="grid grid-cols-2 gap-4">
+            {/* Supplier, Order Series & Warehouse - Editable */}
+            <div className="grid grid-cols-3 gap-4">
               {/* Supplier */}
               <div className="flex items-start gap-3">
                 <div className="text-muted-foreground mt-0.5 flex-shrink-0">
@@ -368,6 +408,26 @@ export function ViewPurchaseOrderDrawer({
                   )}
                 </div>
               </div>
+
+              {/* Warehouse */}
+              <div className="flex items-start gap-3">
+                <div className="text-muted-foreground mt-0.5 flex-shrink-0">
+                  <Warehouse className="h-4 w-4" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs text-muted-foreground mb-0.5">Warehouse</p>
+                  <p className="text-sm font-medium text-foreground">
+                    {po.warehouseId
+                      ? warehouses.find(w => w.id === po.warehouseId)?.name || 'Loading...'
+                      : 'Unallocated'}
+                  </p>
+                  {po.warehouseId && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Inventory received here
+                    </p>
+                  )}
+                </div>
+              </div>
             </div>
 
             <Separator />
@@ -424,8 +484,8 @@ export function ViewPurchaseOrderDrawer({
                               </>
                             )}
                           </TableCell>
-                          <TableCell className="text-right">${(item.unitPrice / 100).toFixed(2)}</TableCell>
-                          <TableCell className="text-right font-semibold">${(item.lineTotal / 100).toFixed(2)}</TableCell>
+                          <TableCell className="text-right">{formatCurrency(item.unitPrice)}</TableCell>
+                          <TableCell className="text-right font-semibold">{formatCurrency(item.lineTotal)}</TableCell>
                         </TableRow>
                       );
                     })}
@@ -440,20 +500,20 @@ export function ViewPurchaseOrderDrawer({
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Subtotal</span>
-                <span>${(po.subtotal / 100).toFixed(2)}</span>
+                <span>{formatCurrency(po.subtotal)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Tax</span>
-                <span>${(po.taxTotal / 100).toFixed(2)}</span>
+                <span>{formatCurrency(po.taxTotal)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Shipping</span>
-                <span>${(po.shippingCost / 100).toFixed(2)}</span>
+                <span>{formatCurrency(po.shippingCost)}</span>
               </div>
               <Separator />
               <div className="flex justify-between font-semibold text-base">
                 <span>Grand Total</span>
-                <span>${(po.grandTotal / 100).toFixed(2)}</span>
+                <span>{formatCurrency(po.grandTotal)}</span>
               </div>
             </div>
 

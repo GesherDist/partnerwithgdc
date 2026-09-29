@@ -120,10 +120,14 @@ class PurchaseOrderRepositoryImpl {
         currency_code,
         created_at,
         sales_order_id,
+        warehouse_id,
         sales_orders:sales_order_id (
           order_series,
           order_number,
           customers:customer_id (name)
+        ),
+        locations:warehouse_id (
+          name
         )
       `,
         { count: 'exact' }
@@ -214,8 +218,8 @@ class PurchaseOrderRepositoryImpl {
 
     return {
       ...this.mapToPurchaseOrder(po as DbPurchaseOrder),
-      // orderSeries comes from linked Sales Order, not PO table
-      orderSeries: salesOrder?.orderSeries || null,
+      // orderSeries: prefer linked Sales Order's order_series, fallback to PO's own order_series
+      orderSeries: salesOrder?.orderSeries || po.order_series || null,
       items,
       salesOrder: salesOrder || undefined,
       warehouse: warehouse || undefined,
@@ -686,8 +690,11 @@ class PurchaseOrderRepositoryImpl {
       currency_code: string;
       created_at: string;
       sales_order_id: string | null;
+      warehouse_id: string | null;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       sales_orders: any; // Joined data from sales_orders table
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      locations: any; // Joined data from locations table
     },
     itemCounts: Record<string, number>,
     itemSuppliers: Record<string, string[]>
@@ -709,6 +716,7 @@ class PurchaseOrderRepositoryImpl {
       suppliers: itemSuppliers[data.id] || [],
       salesOrderNumber: data.sales_orders?.order_number || null,
       customerName: data.sales_orders?.customers?.name || null,
+      warehouseLocationName: data.locations?.name || null,
     };
   }
 

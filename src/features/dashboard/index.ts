@@ -55,6 +55,7 @@ export type {
   PipelineStage,
   InventoryByLocation,
   InventoryBySKU,
+  CommissionRevenueStats,
   // Date range types
   DateRange,
   DateRangePreset,
@@ -93,4 +94,5 @@ export {
   getDashboardStatsData,
   getMarginAnalysisData,
   getRevenueTrendData,
+  getCommissionStatsData,
 } from './actions';

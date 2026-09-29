@@ -141,6 +141,7 @@ class QuoteRepositoryImpl {
         id,
         quote_number,
         customer_id,
+        customer_po_number,
         quote_date,
         valid_until,
         status,
@@ -917,6 +918,7 @@ class QuoteRepositoryImpl {
       id: string;
       quote_number: string;
       customer_id: string;
+      customer_po_number: string | null;
       quote_date: string;
       valid_until: string | null;
       status: QuoteStatus;
@@ -934,6 +936,7 @@ class QuoteRepositoryImpl {
       quoteNumber: data.quote_number,
       customerId: data.customer_id,
       customerName: customer?.name || 'Unknown',
+      customerPoNumber: data.customer_po_number,
       quoteDate: data.quote_date,
       validUntil: data.valid_until,
       status: data.status,

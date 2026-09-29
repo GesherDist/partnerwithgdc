@@ -342,8 +342,19 @@ const handleReleaseHold = async () => {
         return;
       }
 
-      // All validations passed - open confirm allocations modal
-      setShowConfirmAllocationsModal(true);
+      // All validations passed
+      // Check if order has any inventory items that need allocations
+      const hasInventoryItems = order.items.some(
+        item => item.itemType !== 'service' && item.itemType !== 'non_inventory'
+      );
+
+      if (hasInventoryItems) {
+        // Has inventory items - show allocations modal
+        setShowConfirmAllocationsModal(true);
+      } else {
+        // Only service/non-inventory items - directly confirm without modal
+        handleConfirm();
+      }
     } finally {
       setIsValidating(false);
     }

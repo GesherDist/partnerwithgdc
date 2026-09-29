@@ -55,12 +55,15 @@ export function PurchaseOrdersTableColumns(options: ColumnsOptions = {}): Column
     },
     {
       accessorKey: 'customerName',
-      header: 'Customer',
-      cell: ({ row }) => (
-        <span className="text-sm font-medium">
-          {row.original.customerName || '-'}
-        </span>
-      ),
+      header: 'Customer/Warehouse',
+      cell: ({ row }) => {
+        const displayValue = row.original.customerName || row.original.warehouseLocationName || '-';
+        return (
+          <span className="text-sm font-medium">
+            {displayValue}
+          </span>
+        );
+      },
     },
     {
       accessorKey: 'suppliers',

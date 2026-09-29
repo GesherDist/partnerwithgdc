@@ -78,6 +78,10 @@ export function CreatePurchaseOrderDrawer({
   const [isLoadingSuppliers, setIsLoadingSuppliers] = useState(false);
   const [selectedSupplier, setSelectedSupplier] = useState<SupplierSummary | null>(null);
 
+  // Warehouses state
+  const [warehouses, setWarehouses] = useState<Array<{ id: string; name: string }>>([]);
+  const [isLoadingWarehouses, setIsLoadingWarehouses] = useState(false);
+
   // Items with extended properties for the table
   const [items, setItems] = useState<Array<CreatePOItemDTO & { id: string; lineTotal: number }>>(
     defaultItems.map((item, index) => ({
@@ -126,6 +130,7 @@ export function CreatePurchaseOrderDrawer({
   useEffect(() => {
     if (open) {
       loadSuppliers();
+      loadWarehouses();
     }
   }, [open]);
 
@@ -141,6 +146,28 @@ export function CreatePurchaseOrderDrawer({
       toast.error('Failed to load suppliers');
     } finally {
       setIsLoadingSuppliers(false);
+    }
+  };
+
+  const loadWarehouses = async () => {
+    setIsLoadingWarehouses(true);
+    try {
+      // Import and call locations action
+      const { getAllLocationsAction } = await import('@/features/locations/actions');
+      const result = await getAllLocationsAction({ type: 'warehouse' });
+
+      if (result.success && result.data) {
+        const locs = result.data.map((loc) => ({
+          id: loc.id,
+          name: `${loc.locationCode} - ${loc.name}`,
+        }));
+        setWarehouses(locs);
+      }
+    } catch (error) {
+      console.error('Failed to load warehouses:', error);
+      toast.error('Failed to load warehouses');
+    } finally {
+      setIsLoadingWarehouses(false);
     }
   };
 
@@ -297,10 +324,11 @@ export function CreatePurchaseOrderDrawer({
 
                 <Separator />
 
-                {/* Order Details - PO Number, PO Date, Expected Delivery, Order Series */}
+                {/* Order Details - PO Number, PO Date, Expected Delivery, Order Series, Warehouse */}
                 <div className="space-y-4">
                   <h3 className="text-sm font-medium">Order Details</h3>
-                  <div className="grid grid-cols-4 gap-4">
+                  {/* Row 1: PO Number, PO Date, Expected Delivery */}
+                  <div className="grid grid-cols-3 gap-4">
                     <FormField
                       control={form.control}
                       name="poNumber"
@@ -362,6 +390,9 @@ export function CreatePurchaseOrderDrawer({
                         </FormItem>
                       )}
                     />
+                  </div>
+                  {/* Row 2: Order Series, Warehouse */}
+                  <div className="grid grid-cols-2 gap-4">
                     <FormField
                       control={form.control}
                       name="orderSeries"
@@ -382,6 +413,38 @@ export function CreatePurchaseOrderDrawer({
                               ))}
                             </SelectContent>
                           </Select>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
+                      name="warehouseId"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Warehouse/Location</FormLabel>
+                          <Select
+                            onValueChange={field.onChange}
+                            value={field.value}
+                            disabled={isLoadingWarehouses}
+                          >
+                            <FormControl>
+                              <SelectTrigger>
+                                <SelectValue placeholder={isLoadingWarehouses ? 'Loading...' : 'Select warehouse'} />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              <SelectItem value="">None (Unallocated)</SelectItem>
+                              {warehouses.map((warehouse) => (
+                                <SelectItem key={warehouse.id} value={warehouse.id}>
+                                  {warehouse.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <p className="text-xs text-muted-foreground">
+                            Inventory will be received at this location
+                          </p>
                           <FormMessage />
                         </FormItem>
                       )}

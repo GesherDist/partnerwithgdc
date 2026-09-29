@@ -306,6 +306,8 @@ export interface POListItem {
   // Linked Sales Order info
   salesOrderNumber: string | null;
   customerName: string | null;
+  // Warehouse location (for unallocated inventory POs)
+  warehouseLocationName: string | null;
 }
 
 export interface PaginatedResult<T> {

@@ -9,7 +9,7 @@
 
 import { createClient } from '@/shared/lib/supabase/server';
 import * as dashboardRepo from '../repositories';
-import type { UnitsBySKUChartData, ChannelPerformanceDataPoint, InventoryByLocation, DashboardStat, MarginDataPoint, RevenueDataPoint, DateRange } from '../types';
+import type { UnitsBySKUChartData, ChannelPerformanceDataPoint, InventoryByLocation, DashboardStat, MarginDataPoint, RevenueDataPoint, DateRange, CommissionRevenueStats } from '../types';
 
 // ============================================
 // UNITS BY SKU
@@ -160,6 +160,32 @@ export async function getRevenueTrendData(dateRange?: DateRange): Promise<Action
   }
 
   const data = await dashboardRepo.getRevenueTrend(dateRange);
+
+  return {
+    success: true,
+    data,
+  };
+}
+
+// ============================================
+// COMMISSION REVENUE STATS
+// ============================================
+
+/**
+ * Get commission revenue statistics (YTD)
+ * Tracks expected and actual commission from service items
+ */
+export async function getCommissionStatsData(): Promise<ActionResult<CommissionRevenueStats>> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { success: false, error: 'Authentication required' };
+  }
+
+  const data = await dashboardRepo.getCommissionRevenue();
 
   return {
     success: true,

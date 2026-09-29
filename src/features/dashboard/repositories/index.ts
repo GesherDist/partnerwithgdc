@@ -8,7 +8,7 @@
  */
 
 import { createClient } from '@/shared/lib/supabase/server';
-import type { UnitsBySKUDataPoint, UnitsBySKUChartData, ProductLegendItem, ChannelPerformanceDataPoint, InventoryByLocation, DashboardStat, MarginDataPoint, RevenueDataPoint, DateRange } from '../types';
+import type { UnitsBySKUDataPoint, UnitsBySKUChartData, ProductLegendItem, ChannelPerformanceDataPoint, InventoryByLocation, DashboardStat, MarginDataPoint, RevenueDataPoint, DateRange, CommissionRevenueStats } from '../types';
 
 // Helper to format date as YYYY-MM-DD string
 function formatDateString(date: Date): string {
@@ -572,15 +572,38 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
       .select(`
         quantity,
         unit_price,
+        sku,
+        description,
         products (
           rim_size,
           name,
-          base_cost
+          base_cost,
+          item_type
         )
       `)
       .in('sales_order_id', ytdOrderIds);
 
     if (ytdItemsData) {
+      // Helper function to check if item is a commission item
+      const isCommissionItem = (item: {
+        sku: string | null;
+        description: string | null;
+        products: unknown;
+      }): boolean => {
+        const product = item.products as { item_type: string | null } | null;
+
+        // Must be a service item
+        if (product?.item_type !== 'service') {
+          return false;
+        }
+
+        // Check if sku or description contains "commission"
+        const skuLower = (item.sku || '').toLowerCase();
+        const descLower = (item.description || '').toLowerCase();
+
+        return skuLower.includes('commission') || descLower.includes('commission');
+      };
+
       // Helper function to detect tire size more accurately
       const detectTireSize = (rimSize: string | null | undefined, name: string | null | undefined): '38' | '24' | 'other' => {
         // First try rim_size field (most reliable)
@@ -603,12 +626,16 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
       for (const item of ytdItemsData) {
         const quantity = item.quantity || 0;
         const unitPrice = item.unit_price || 0;
-        const product = item.products as unknown as { rim_size: string | null; name: string | null; base_cost: number | null } | null;
+        const product = item.products as unknown as { rim_size: string | null; name: string | null; base_cost: number | null; item_type: string | null } | null;
         const baseCost = product?.base_cost || 0;
 
         ytdUnits += quantity;
-        ytdTotalRevenue += unitPrice * quantity;
-        ytdTotalCost += baseCost * quantity;
+
+        // EXCLUDE commission items from margin calculation (revenue and cost)
+        if (!isCommissionItem(item)) {
+          ytdTotalRevenue += unitPrice * quantity;
+          ytdTotalCost += baseCost * quantity;
+        }
 
         const tireSize = detectTireSize(product?.rim_size, product?.name);
         if (tireSize === '38') {
@@ -632,22 +659,49 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
       .select(`
         quantity,
         unit_price,
+        sku,
+        description,
         products (
-          base_cost
+          base_cost,
+          item_type
         )
       `)
       .in('sales_order_id', lastYearYtdOrderIds);
 
     if (lastYearYtdItemsData) {
+      // Helper function to check if item is a commission item
+      const isCommissionItem = (item: {
+        sku: string | null;
+        description: string | null;
+        products: unknown;
+      }): boolean => {
+        const product = item.products as { item_type: string | null } | null;
+
+        // Must be a service item
+        if (product?.item_type !== 'service') {
+          return false;
+        }
+
+        // Check if sku or description contains "commission"
+        const skuLower = (item.sku || '').toLowerCase();
+        const descLower = (item.description || '').toLowerCase();
+
+        return skuLower.includes('commission') || descLower.includes('commission');
+      };
+
       for (const item of lastYearYtdItemsData) {
         const quantity = item.quantity || 0;
         const unitPrice = item.unit_price || 0;
-        const product = item.products as unknown as { base_cost: number | null } | null;
+        const product = item.products as unknown as { base_cost: number | null; item_type: string | null } | null;
         const baseCost = product?.base_cost || 0;
 
         lastYearYtdUnits += quantity;
-        lastYearYtdTotalRevenue += unitPrice * quantity;
-        lastYearYtdTotalCost += baseCost * quantity;
+
+        // EXCLUDE commission items from margin calculation (revenue and cost)
+        if (!isCommissionItem(item)) {
+          lastYearYtdTotalRevenue += unitPrice * quantity;
+          lastYearYtdTotalCost += baseCost * quantity;
+        }
       }
     }
   }
@@ -1076,4 +1130,152 @@ export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDat
     });
 
   return result;
+}
+
+/**
+ * Get commission revenue statistics (YTD)
+ * Tracks expected and actual commission revenue from service items
+ * Commission items are identified by item_type='service' AND (sku or description contains 'commission')
+ */
+export async function getCommissionRevenue(): Promise<CommissionRevenueStats> {
+  const supabase = await createClient();
+
+  // Current year dates
+  const now = new Date();
+  const currentYearStart = new Date(now.getFullYear(), 0, 1); // Jan 1 of current year
+  const lastYearStart = new Date(now.getFullYear() - 1, 0, 1); // Jan 1 of last year
+  const lastYearSameDay = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate()); // Same day last year
+
+  // Query YTD commission items (all statuses for "expected")
+  const { data: ytdCommissionItems } = await supabase
+    .from('sales_order_items')
+    .select(`
+      quantity,
+      unit_price,
+      sku,
+      description,
+      products (
+        item_type
+      ),
+      sales_orders!inner (
+        status,
+        deleted_at,
+        order_date
+      )
+    `)
+    .gte('sales_orders.order_date', formatDateString(currentYearStart))
+    .is('sales_orders.deleted_at', null)
+    .in('sales_orders.status', ['confirmed', 'processing', 'shipped', 'delivered']);
+
+  // Query YTD delivered commission items (for "actual")
+  const { data: ytdDeliveredCommissionItems } = await supabase
+    .from('sales_order_items')
+    .select(`
+      quantity,
+      unit_price,
+      sku,
+      description,
+      products (
+        item_type
+      ),
+      sales_orders!inner (
+        status,
+        deleted_at,
+        order_date
+      )
+    `)
+    .gte('sales_orders.order_date', formatDateString(currentYearStart))
+    .is('sales_orders.deleted_at', null)
+    .eq('sales_orders.status', 'delivered');
+
+  // Query last year YTD delivered commission items (for comparison)
+  const { data: lastYearCommissionItems } = await supabase
+    .from('sales_order_items')
+    .select(`
+      quantity,
+      unit_price,
+      sku,
+      description,
+      products (
+        item_type
+      ),
+      sales_orders!inner (
+        status,
+        deleted_at,
+        order_date
+      )
+    `)
+    .gte('sales_orders.order_date', formatDateString(lastYearStart))
+    .lte('sales_orders.order_date', formatDateString(lastYearSameDay))
+    .is('sales_orders.deleted_at', null)
+    .eq('sales_orders.status', 'delivered');
+
+  // Helper function to check if item is a commission item
+  const isCommissionItem = (item: {
+    sku: string | null;
+    description: string | null;
+    products: unknown;
+  }): boolean => {
+    const product = item.products as { item_type: string | null } | null;
+
+    // Must be a service item
+    if (product?.item_type !== 'service') {
+      return false;
+    }
+
+    // Check if sku or description contains "commission"
+    const skuLower = (item.sku || '').toLowerCase();
+    const descLower = (item.description || '').toLowerCase();
+
+    return skuLower.includes('commission') || descLower.includes('commission');
+  };
+
+  // Calculate expected YTD (all open + delivered orders)
+  let expectedYTD = 0;
+  if (ytdCommissionItems) {
+    for (const item of ytdCommissionItems) {
+      if (isCommissionItem(item)) {
+        const quantity = item.quantity || 0;
+        const unitPrice = item.unit_price || 0; // in cents
+        expectedYTD += (unitPrice * quantity) / 100; // convert to dollars
+      }
+    }
+  }
+
+  // Calculate actual YTD (delivered orders only)
+  let actualYTD = 0;
+  if (ytdDeliveredCommissionItems) {
+    for (const item of ytdDeliveredCommissionItems) {
+      if (isCommissionItem(item)) {
+        const quantity = item.quantity || 0;
+        const unitPrice = item.unit_price || 0; // in cents
+        actualYTD += (unitPrice * quantity) / 100; // convert to dollars
+      }
+    }
+  }
+
+  // Calculate last year actual YTD (for comparison)
+  let lastYearActualYTD = 0;
+  if (lastYearCommissionItems) {
+    for (const item of lastYearCommissionItems) {
+      if (isCommissionItem(item)) {
+        const quantity = item.quantity || 0;
+        const unitPrice = item.unit_price || 0; // in cents
+        lastYearActualYTD += (unitPrice * quantity) / 100; // convert to dollars
+      }
+    }
+  }
+
+  // Calculate change percentage
+  const change = lastYearActualYTD > 0
+    ? ((actualYTD - lastYearActualYTD) / lastYearActualYTD) * 100
+    : 0;
+
+  return {
+    expectedYTD: Math.round(expectedYTD),
+    actualYTD: Math.round(actualYTD),
+    lastYearActualYTD: Math.round(lastYearActualYTD),
+    change: Math.round(change * 10) / 10, // Round to 1 decimal
+    trend: change >= 0 ? 'up' : 'down',
+  };
 }

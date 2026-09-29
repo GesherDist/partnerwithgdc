@@ -32,7 +32,7 @@ import {
 const customerContactFormSchema = z.object({
   firstName: z.string().min(1, 'First name is required').max(100),
   lastName: z.string().min(1, 'Last name is required').max(100),
-  contactType: z.enum(['purchasing', 'accounts_payable', 'receiving']),
+  contactType: z.enum(['primary', 'purchasing', 'accounts_payable', 'receiving', 'executive', 'sales', 'billing', 'other']),
   email: z.union([
     z.string().email('Invalid email'),
     z.literal(''),
@@ -48,7 +48,7 @@ export type ContactFormInput = z.infer<typeof customerContactFormSchema>;
 const DEFAULT_FORM_VALUES: ContactFormInput = {
   firstName: '',
   lastName: '',
-  contactType: 'purchasing',
+  contactType: 'primary',
   email: '',
   phone: '',
   mobile: '',

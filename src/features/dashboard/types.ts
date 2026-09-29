@@ -142,6 +142,14 @@ export interface DashboardStat {
   target?: string; // For target comparison
 }
 
+export interface CommissionRevenueStats {
+  expectedYTD: number; // Expected commission revenue (all open orders with commission items)
+  actualYTD: number; // Actual commission revenue received (delivered orders only)
+  lastYearActualYTD: number; // Last year same period for comparison
+  change: number; // Percentage change vs last year
+  trend: 'up' | 'down';
+}
+
 // ============================================
 // ACTIVITY TYPES
 // ============================================

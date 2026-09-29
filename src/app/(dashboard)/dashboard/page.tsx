@@ -26,6 +26,7 @@ import {
   getDashboardStatsData,
   getMarginAnalysisData,
   getRevenueTrendData,
+  getCommissionStatsData,
   // Types
   getDateRangeFromPreset,
 } from '@/features/dashboard';
@@ -103,14 +104,23 @@ export default async function DashboardPage() {
   const defaultDateRange = getDateRangeFromPreset('this_month');
 
   // Fetch real data from database with default date filter (no mock data fallback)
-  const [unitsBySKUResult, channelResult, inventoryResult, statsResult, marginResult, revenueResult] = await Promise.all([
+  const [unitsBySKUResult, channelResult, inventoryResult, statsResult, marginResult, revenueResult, commissionResult] = await Promise.all([
     getUnitsBySKUData(defaultDateRange),
     getChannelPerformanceData(defaultDateRange),
     getInventoryByLocationData(), // Inventory doesn't need date filter
     getDashboardStatsData(defaultDateRange),
     getMarginAnalysisData(defaultDateRange),
     getRevenueTrendData(defaultDateRange),
+    getCommissionStatsData(), // Commission is always YTD
   ]);
+
+  // Helper to format currency
+  const formatCurrency = (amount: number) => {
+    if (amount >= 1000000) {
+      return `$${(amount / 1000000).toFixed(1)}M`;
+    }
+    return `$${Math.round(amount).toLocaleString()}`;
+  };
 
   // Use real data only - empty arrays if no data
   const dynamicUnitsBySKU = unitsBySKUResult.success && unitsBySKUResult.data
@@ -118,9 +128,38 @@ export default async function DashboardPage() {
     : { data: [], products: [] };
   const dynamicChannelData = channelResult.success ? channelResult.data || [] : [];
   const dynamicInventory = inventoryResult.success ? inventoryResult.data || [] : [];
-  const dynamicStats = statsResult.success ? statsResult.data || [] : [];
+  let dynamicStats = statsResult.success ? statsResult.data || [] : [];
   const dynamicMarginData = marginResult.success ? marginResult.data || [] : [];
   const dynamicRevenueData = revenueResult.success ? revenueResult.data || [] : [];
+
+  // Add commission stats as additional KPI cards if available
+  if (commissionResult.success && commissionResult.data) {
+    const commission = commissionResult.data;
+
+    // Commission Expected (YTD) card
+    dynamicStats.push({
+      id: 'commission-expected-ytd',
+      title: 'Commission Expected (YTD)',
+      value: formatCurrency(commission.expectedYTD),
+      change: `${commission.change >= 0 ? '+' : ''}${commission.change.toFixed(1)}%`,
+      trend: commission.trend,
+      icon: 'credit-card',
+      color: 'bg-purple-500',
+      subtitle: 'vs same period last year',
+    });
+
+    // Commission Actual (YTD) card
+    dynamicStats.push({
+      id: 'commission-actual-ytd',
+      title: 'Commission Actual (YTD)',
+      value: formatCurrency(commission.actualYTD),
+      change: `${commission.change >= 0 ? '+' : ''}${commission.change.toFixed(1)}%`,
+      trend: commission.trend,
+      icon: 'dollar-sign',
+      color: 'bg-fuchsia-500',
+      subtitle: 'Delivered orders only',
+    });
+  }
 
   return (
     <DashboardContent

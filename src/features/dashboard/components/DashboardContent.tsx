@@ -21,6 +21,7 @@ import {
   getDashboardStatsData,
   getMarginAnalysisData,
   getRevenueTrendData,
+  getCommissionStatsData,
 } from '../actions';
 import type {
   DateRange,
@@ -88,6 +89,7 @@ export function DashboardContent({
         inventoryResult,
         marginResult,
         revenueResult,
+        commissionResult,
       ] = await Promise.all([
         getDashboardStatsData(dateRange),
         getUnitsBySKUData(dateRange),
@@ -95,11 +97,53 @@ export function DashboardContent({
         getInventoryByLocationData(), // Inventory doesn't need date filter
         getMarginAnalysisData(dateRange),
         getRevenueTrendData(dateRange),
+        getCommissionStatsData(), // Commission is always YTD
       ]);
 
+      // Process stats and add commission cards
       if (statsResult.success && statsResult.data) {
-        setStats(statsResult.data);
+        let updatedStats = [...statsResult.data];
+
+        // Add commission stats as additional KPI cards if available
+        if (commissionResult.success && commissionResult.data) {
+          const commission = commissionResult.data;
+
+          // Helper to format currency
+          const formatCurrency = (amount: number) => {
+            if (amount >= 1000000) {
+              return `$${(amount / 1000000).toFixed(1)}M`;
+            }
+            return `$${Math.round(amount).toLocaleString()}`;
+          };
+
+          // Commission Expected (YTD) card
+          updatedStats.push({
+            id: 'commission-expected-ytd',
+            title: 'Commission Expected (YTD)',
+            value: formatCurrency(commission.expectedYTD),
+            change: `${commission.change >= 0 ? '+' : ''}${commission.change.toFixed(1)}%`,
+            trend: commission.trend,
+            icon: 'credit-card',
+            color: 'bg-purple-500',
+            subtitle: 'vs same period last year',
+          });
+
+          // Commission Actual (YTD) card
+          updatedStats.push({
+            id: 'commission-actual-ytd',
+            title: 'Commission Actual (YTD)',
+            value: formatCurrency(commission.actualYTD),
+            change: `${commission.change >= 0 ? '+' : ''}${commission.change.toFixed(1)}%`,
+            trend: commission.trend,
+            icon: 'dollar-sign',
+            color: 'bg-fuchsia-500',
+            subtitle: 'Delivered orders only',
+          });
+        }
+
+        setStats(updatedStats);
       }
+
       if (unitsResult.success && unitsResult.data) {
         setUnitsBySKU(unitsResult.data);
       }

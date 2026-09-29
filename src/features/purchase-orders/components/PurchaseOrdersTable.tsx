@@ -16,6 +16,13 @@ import {
 } from '@/shared/components/ui/table';
 import { Skeleton } from '@/shared/components/ui/skeleton';
 import { Button } from '@/shared/components/ui/button';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/shared/components/ui/select';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { PurchaseOrdersTableColumns } from './PurchaseOrdersTableColumns';
 import type { PurchaseOrdersTableProps } from '../types';
@@ -159,28 +166,53 @@ export function PurchaseOrdersTable({
             {Math.min(pagination.page * pagination.pageSize, pagination.total)} of{' '}
             {pagination.total} results
           </div>
-          <div className="flex items-center space-x-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => pagination.onPageChange(pagination.page - 1)}
-              disabled={pagination.page <= 1}
-            >
-              <ChevronLeft className="h-4 w-4" />
-              Previous
-            </Button>
-            <div className="text-sm font-medium">
-              Page {pagination.page} of {pagination.totalPages}
+          <div className="flex items-center space-x-6">
+            {/* Page Size Selector */}
+            <div className="flex items-center space-x-2">
+              <p className="text-sm font-medium">Rows per page</p>
+              <Select
+                value={`${pagination.pageSize}`}
+                onValueChange={(value) => {
+                  pagination.onPageSizeChange(Number(value));
+                }}
+              >
+                <SelectTrigger className="h-8 w-[70px]">
+                  <SelectValue placeholder={pagination.pageSize} />
+                </SelectTrigger>
+                <SelectContent side="top">
+                  {[10, 20, 50, 100].map((pageSize) => (
+                    <SelectItem key={pageSize} value={`${pageSize}`}>
+                      {pageSize}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => pagination.onPageChange(pagination.page + 1)}
-              disabled={pagination.page >= pagination.totalPages}
-            >
-              Next
-              <ChevronRight className="h-4 w-4" />
-            </Button>
+
+            {/* Page Navigation */}
+            <div className="flex items-center space-x-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => pagination.onPageChange(pagination.page - 1)}
+                disabled={pagination.page <= 1}
+              >
+                <ChevronLeft className="h-4 w-4" />
+                Previous
+              </Button>
+              <div className="text-sm font-medium">
+                Page {pagination.page} of {pagination.totalPages}
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => pagination.onPageChange(pagination.page + 1)}
+                disabled={pagination.page >= pagination.totalPages}
+              >
+                Next
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
         </div>
       )}

@@ -15,6 +15,7 @@ export {
   type CustomerStatus,
   type CustomerChannel,
   type CreditStatus,
+  type ContactType,
   type Customer,
   type CustomerTableRow,
   type CustomerFormValues,
@@ -33,6 +34,8 @@ export {
   CREDIT_STATUSES,
   CREDIT_STATUS_LABELS,
   CREDIT_STATUS_COLORS,
+  CONTACT_TYPES,
+  CONTACT_TYPE_LABELS,
   DEFAULT_CUSTOMER_FORM_VALUES,
 } from './types';
 

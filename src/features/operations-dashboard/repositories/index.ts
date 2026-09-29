@@ -1858,6 +1858,7 @@ export async function getGDCInventoryByOrderSeries(
       internal_notes,
       order_series,
       sales_order_id,
+      warehouse_id,
       created_at,
       sales_orders (
         id,
@@ -1876,6 +1877,10 @@ export async function getGDCInventoryByOrderSeries(
         shipping_address_postal_code,
         grand_total,
         customers (id, name)
+      ),
+      locations:warehouse_id (
+        id,
+        name
       )
     `)
     .is('deleted_at', null)
@@ -1897,8 +1902,55 @@ export async function getGDCInventoryByOrderSeries(
 
   console.log(`[GDC] Found ${purchaseOrders?.length || 0} Purchase Orders for '${orderSeries}'`);
 
-  if (!purchaseOrders || purchaseOrders.length === 0) {
-    console.log(`[GDC] No Purchase Orders found for ${orderSeries}`);
+  // ============================================
+  // QUERY 1B: Fetch Sales Orders WITHOUT Purchase Orders
+  // (For orders with fulfillment allocations but no PO created yet)
+  // ============================================
+  let soQuery = supabase
+    .from('sales_orders')
+    .select(`
+      id,
+      order_number,
+      order_series,
+      customer_id,
+      customer_po_number,
+      eta_to_us_port,
+      confirmed_eta,
+      requested_delivery_date,
+      actual_delivery_date,
+      qty_delivered,
+      outstanding_qty,
+      shipping_address_street,
+      shipping_address_city,
+      shipping_address_state,
+      shipping_address_postal_code,
+      grand_total,
+      status,
+      internal_notes,
+      created_at,
+      customers (id, name)
+    `)
+    .eq('order_series', orderSeries)
+    .neq('status', 'cancelled')
+    .is('deleted_at', null)
+    .order('created_at', { ascending: false });
+
+  // Only fetch SOs that don't have POs
+  const poSalesOrderIds = purchaseOrders?.map(po => po.sales_order_id).filter(Boolean) || [];
+  if (poSalesOrderIds.length > 0) {
+    soQuery = soQuery.not('id', 'in', `(${poSalesOrderIds.join(',')})`);
+  }
+
+  const { data: salesOrdersWithoutPOs, error: soError } = await soQuery;
+
+  if (soError) {
+    console.error(`[GDC] Error fetching sales orders for ${orderSeries}:`, soError);
+  }
+
+  console.log(`[GDC] Found ${salesOrdersWithoutPOs?.length || 0} Sales Orders without POs for '${orderSeries}'`);
+
+  if ((!purchaseOrders || purchaseOrders.length === 0) && (!salesOrdersWithoutPOs || salesOrdersWithoutPOs.length === 0)) {
+    console.log(`[GDC] No Purchase Orders or Sales Orders found for ${orderSeries}`);
     return { orderSeries, items: [], uniqueSkus: [] };
   }
 
@@ -1924,6 +1976,8 @@ export async function getGDCInventoryByOrderSeries(
       quantity_ordered,
       unit_price,
       product_id,
+      supplier_id,
+      supplier_name,
       products(id, name, item_type),
       sales_order_item_id,
       sales_order_items(
@@ -1949,8 +2003,74 @@ export async function getGDCInventoryByOrderSeries(
 
   console.log(`[GDC] Found ${poItems?.length || 0} Purchase Order Items`);
 
+  // ============================================
+  // QUERY 2B: Get Sales Order Items (for SOs without POs)
+  // ============================================
+  const soIds = salesOrdersWithoutPOs?.map(so => so.id) || [];
+  let soItems: any[] = [];
+
+  if (soIds.length > 0) {
+    let soItemsQuery = supabase
+      .from('sales_order_items')
+      .select(`
+        sales_order_id,
+        sku,
+        description,
+        quantity,
+        unit_price,
+        product_id,
+        products(id, name, item_type),
+        fulfillment_allocations(
+          id,
+          fulfillment_source,
+          quantity,
+          status,
+          platinum_dealer:platinum_dealers(dealer_name, code),
+          dealer_location:platinum_dealer_locations(location_name)
+        )
+      `)
+      .in('sales_order_id', soIds);
+
+    // Apply product filter
+    if (filters?.productId) {
+      soItemsQuery = soItemsQuery.eq('product_id', filters.productId);
+    }
+
+    const { data: fetchedSOItems } = await soItemsQuery;
+    soItems = fetchedSOItems || [];
+    console.log(`[GDC] Found ${soItems.length} Sales Order Items (without POs)`);
+  }
+
+  // ============================================
+  // QUERY 3: Get Shipments for these POs (for ETA dates)
+  // ============================================
+  const { data: shipments } = await supabase
+    .from('shipments')
+    .select(`
+      id,
+      purchase_order_id,
+      eta_to_port,
+      confirmed_eta,
+      customer_expected_delivery,
+      actual_arrival,
+      qty_delivered,
+      outstanding_qty
+    `)
+    .in('purchase_order_id', poIds);
+
+  console.log(`[GDC] Found ${shipments?.length || 0} Shipments for POs`);
+
+  // Map shipments by purchase_order_id
+  const shipmentByPO = new Map<string, any>();
+  shipments?.forEach((shipment) => {
+    if (shipment.purchase_order_id && !shipmentByPO.has(shipment.purchase_order_id)) {
+      shipmentByPO.set(shipment.purchase_order_id, shipment);
+    }
+  });
+
   // Group items by purchase order and build SKU info map
   const itemsByPO = new Map<string, { sku: string; productName: string; qty: number; unitPrice: number }[]>();
+  const supplierNameByPO = new Map<string, string>(); // purchase_order_id -> supplier_name
   const skuInfoMap = new Map<string, string>(); // sku -> productName
 
   poItems?.forEach((item) => {
@@ -1961,6 +2081,11 @@ export async function getGDCInventoryByOrderSeries(
     // Store SKU info for column headers
     if (item.sku && !skuInfoMap.has(item.sku)) {
       skuInfoMap.set(item.sku, productName);
+    }
+
+    // Store supplier name for this PO (from first item)
+    if (item.supplier_name && !supplierNameByPO.has(item.purchase_order_id)) {
+      supplierNameByPO.set(item.purchase_order_id, item.supplier_name);
     }
 
     if (!itemsByPO.has(item.purchase_order_id)) {
@@ -1984,6 +2109,7 @@ export async function getGDCInventoryByOrderSeries(
   purchaseOrders.forEach((po, index) => {
     const linkedSO = po.sales_orders ? toOne(po.sales_orders) : null;
     const customerData = linkedSO?.customers ? toOne(linkedSO.customers) : null;
+    const warehouseData = (po as any).locations ? toOne((po as any).locations) : null;
     const isAllocated = !!linkedSO;
 
     const poItemsList = itemsByPO.get(po.id) || [];
@@ -1997,12 +2123,19 @@ export async function getGDCInventoryByOrderSeries(
       linkedSO.shipping_address_postal_code,
     ].filter(Boolean) : [];
 
-    // Determine customer name
-    let customerName = 'Gesher'; // Default for unallocated inventory
+    // Determine customer/warehouse name
+    let customerName: string;
     if (isAllocated && customerData?.name) {
+      // Allocated to customer - show customer name
       customerName = customerData.name;
       allocatedCount++;
+    } else if (warehouseData?.name) {
+      // Unallocated but has warehouse - show warehouse name
+      customerName = warehouseData.name;
+      unallocatedCount++;
     } else {
+      // No warehouse assigned - show "Unallocated"
+      customerName = 'Unallocated';
       unallocatedCount++;
     }
 
@@ -2016,14 +2149,30 @@ export async function getGDCInventoryByOrderSeries(
     // 🆕 Extract fulfillment allocation data from first PO item
     const firstPoItem = poItems?.find(item => item.purchase_order_id === po.id);
     const soItemData = firstPoItem?.sales_order_items ? toOne(firstPoItem.sales_order_items) : null;
-    const allocations = (soItemData as any)?.fulfillment_allocations as Array<{
+    const allocationsRaw = (soItemData as any)?.fulfillment_allocations as Array<{
       fulfillment_source: string;
       quantity: number;
       status: string;
       platinum_dealer?: { dealer_name: string; code: string } | { dealer_name: string; code: string }[];
       dealer_location?: { location_name: string } | { location_name: string }[];
     }> | undefined;
-    const primaryAllocation = allocations?.[0]; // Get first allocation as primary
+    const primaryAllocation = allocationsRaw?.[0]; // Get first allocation as primary
+
+    // Get supplier name for this PO
+    const poSupplierName = supplierNameByPO.get(po.id) || null;
+
+    // Map allocations to FulfillmentAllocationDetail array
+    const allocationDetails: import('../types').FulfillmentAllocationDetail[] | undefined = allocationsRaw?.map(alloc => ({
+      source: alloc.fulfillment_source as import('../types').FulfillmentSource,
+      quantity: alloc.quantity,
+      status: alloc.status as import('../types').AllocationStatus,
+      locationOrDealer: toOne(alloc.platinum_dealer)?.dealer_name || toOne(alloc.dealer_location)?.location_name || null,
+      // For 'direct' source, use PO supplier name; for others, use dealer/location name
+      supplierName: alloc.fulfillment_source === 'direct' ? poSupplierName : (toOne(alloc.platinum_dealer)?.dealer_name || null),
+    }));
+
+    // Get shipment data for this PO (for ETA dates)
+    const shipment = shipmentByPO.get(po.id);
 
     result.push({
       id: po.id, // Always use PO ID (not SO ID)
@@ -2040,15 +2189,15 @@ export async function getGDCInventoryByOrderSeries(
       })),
       totalQty,
       customer: customerName,
-      supplierName: 'Galileo Manufacturing',
-      etaToUsPort: linkedSO?.eta_to_us_port || null,
-      confirmedEta: linkedSO?.confirmed_eta || null,
-      actualDeliveryDate: linkedSO?.actual_delivery_date || null,
-      qtyDelivered: linkedSO?.qty_delivered || 0,
-      outstandingQty: linkedSO?.outstanding_qty || totalQty,
+      supplierName: supplierNameByPO.get(po.id) || null,
+      etaToUsPort: shipment?.eta_to_port || linkedSO?.eta_to_us_port || null,
+      confirmedEta: shipment?.confirmed_eta || linkedSO?.confirmed_eta || null,
+      actualDeliveryDate: shipment?.actual_arrival || linkedSO?.actual_delivery_date || null,
+      qtyDelivered: shipment?.qty_delivered || linkedSO?.qty_delivered || 0,
+      outstandingQty: shipment?.outstanding_qty || linkedSO?.outstanding_qty || totalQty,
       invoiceAmount: linkedSO?.grand_total ? linkedSO.grand_total / 100 : 0,
       deliveryAddress: addressParts.join(', '),
-      expectedDelivery: po.expected_delivery_date || linkedSO?.requested_delivery_date || null,
+      expectedDelivery: shipment?.customer_expected_delivery || po.expected_delivery_date || linkedSO?.requested_delivery_date || null,
       status: po.status, // Always use PO status (draft, sent, confirmed, partial, received, cancelled)
       actionRequired: po.internal_notes || '',
       notes: '',
@@ -2058,6 +2207,120 @@ export async function getGDCInventoryByOrderSeries(
       allocatedToDealerName: toOne(primaryAllocation?.platinum_dealer)?.dealer_name || null,
       allocatedToDealerLocation: toOne(primaryAllocation?.dealer_location)?.location_name || null,
       allocationStatus: (primaryAllocation?.status as import('../types').AllocationStatus) || null,
+      // 🆕 Multiple fulfillment allocations array
+      allocations: allocationDetails && allocationDetails.length > 0 ? allocationDetails : undefined,
+    });
+  });
+
+  // ============================================
+  // Build result items from Sales Orders WITHOUT Purchase Orders
+  // ============================================
+  const itemsBySO = new Map<string, { sku: string; productName: string; qty: number; unitPrice: number }[]>();
+
+  soItems?.forEach((item) => {
+    const productData = toOne(item.products);
+    const productName = productData?.name || item.description || item.sku;
+    const unitPrice = item.unit_price ? item.unit_price / 100 : 0;
+
+    // Store SKU info for column headers
+    if (item.sku && !skuInfoMap.has(item.sku)) {
+      skuInfoMap.set(item.sku, productName);
+    }
+
+    if (!itemsBySO.has(item.sales_order_id)) {
+      itemsBySO.set(item.sales_order_id, []);
+    }
+    itemsBySO.get(item.sales_order_id)!.push({
+      sku: item.sku || 'Unknown',
+      productName,
+      qty: item.quantity || 0,
+      unitPrice,
+    });
+  });
+
+  const soStartIndex = result.length;
+
+  salesOrdersWithoutPOs?.forEach((so, index) => {
+    const customerData = so.customers ? toOne(so.customers) : null;
+    const soItemsList = itemsBySO.get(so.id) || [];
+    const totalQty = soItemsList.reduce((sum, item) => sum + item.qty, 0);
+
+    // Build address
+    const addressParts = [
+      so.shipping_address_street,
+      so.shipping_address_city,
+      so.shipping_address_state,
+      so.shipping_address_postal_code,
+    ].filter(Boolean);
+
+    const customerName = customerData?.name || 'Unknown';
+    allocatedCount++;
+
+    // Apply customer filter
+    if (filters?.customerId && so.customer_id !== filters.customerId) {
+      return; // Skip this SO if it doesn't match customer filter
+    }
+
+    console.log(`[GDC] Row ${soStartIndex + index + 1} - SO: ${so.order_number} (${so.id}), No PO, Customer: ${customerName}`);
+
+    // Extract fulfillment allocations from first SO item
+    const firstSoItem = soItems?.find(item => item.sales_order_id === so.id);
+    const allocationsRaw = (firstSoItem as any)?.fulfillment_allocations as Array<{
+      fulfillment_source: string;
+      quantity: number;
+      status: string;
+      platinum_dealer?: { dealer_name: string; code: string } | { dealer_name: string; code: string }[];
+      dealer_location?: { location_name: string } | { location_name: string }[];
+    }> | undefined;
+    const primaryAllocation = allocationsRaw?.[0];
+
+    // Map allocations to FulfillmentAllocationDetail array
+    // Note: For SOs without POs, there's no supplier name for 'direct' source yet
+    const allocationDetails: import('../types').FulfillmentAllocationDetail[] | undefined = allocationsRaw?.map(alloc => ({
+      source: alloc.fulfillment_source as import('../types').FulfillmentSource,
+      quantity: alloc.quantity,
+      status: alloc.status as import('../types').AllocationStatus,
+      locationOrDealer: toOne(alloc.platinum_dealer)?.dealer_name || toOne(alloc.dealer_location)?.location_name || null,
+      // For 'direct' source without PO, we don't have supplier name yet
+      // For dealer sources, use dealer name
+      supplierName: toOne(alloc.platinum_dealer)?.dealer_name || null,
+    }));
+
+    result.push({
+      id: so.id,
+      no: soStartIndex + index + 1,
+      poNumber: null, // No PO for this SO
+      soNumber: so.order_number,
+      customerPoNumber: so.customer_po_number || null,
+      orderSeries: so.order_series,
+      items: soItemsList.map(item => ({
+        sku: item.sku,
+        productName: item.productName,
+        qty: item.qty,
+        unitPrice: item.unitPrice,
+      })),
+      totalQty,
+      customer: customerName,
+      supplierName: null, // No supplier since no PO
+      etaToUsPort: so.eta_to_us_port || null,
+      confirmedEta: so.confirmed_eta || null,
+      actualDeliveryDate: so.actual_delivery_date || null,
+      qtyDelivered: so.qty_delivered || 0,
+      outstandingQty: so.outstanding_qty || totalQty,
+      invoiceAmount: so.grand_total ? so.grand_total / 100 : 0,
+      deliveryAddress: addressParts.join(', '),
+      expectedDelivery: so.requested_delivery_date || null,
+      status: so.status, // Use SO status
+      actionRequired: so.internal_notes || '',
+      notes: '',
+      isUnallocated: false, // Always allocated (has customer)
+      // Fulfillment allocation fields
+      fulfillmentSource: (primaryAllocation?.fulfillment_source as import('../types').FulfillmentSource) || 'gdc_inventory',
+      allocatedToDealerName: toOne(primaryAllocation?.platinum_dealer)?.dealer_name || null,
+      allocatedToDealerLocation: toOne(primaryAllocation?.dealer_location)?.location_name || null,
+      allocationStatus: (primaryAllocation?.status as import('../types').AllocationStatus) || null,
+      // Multiple fulfillment allocations array
+      allocations: allocationDetails && allocationDetails.length > 0 ? allocationDetails : undefined,
     });
   });
 
@@ -2070,7 +2333,7 @@ export async function getGDCInventoryByOrderSeries(
   });
   uniqueSkus.sort((a, b) => a.sku.localeCompare(b.sku));
 
-  console.log(`[GDC] ========== Finished fetching ${orderSeries} (${result.length} POs, ${uniqueSkus.length} SKUs) ==========`);
+  console.log(`[GDC] ========== Finished fetching ${orderSeries} (${purchaseOrders?.length || 0} POs + ${salesOrdersWithoutPOs?.length || 0} SOs = ${result.length} rows, ${uniqueSkus.length} SKUs) ==========`);
 
   return { orderSeries, items: result, uniqueSkus };
 }

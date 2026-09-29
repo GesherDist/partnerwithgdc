@@ -591,22 +591,27 @@ export function ConfirmAllocationsModal({
     setIsProcessing(true);
 
     try {
-      // Check if ALL actions are already completed
-      const allActionsCompleted = Array.from(actions.values()).every((a) => a.status === 'completed');
+      // If no allocations (service/non-inventory only), skip action validation
+      if (allocations.length === 0) {
+        console.log('🚀 [Modal] No allocations - confirming service/non-inventory only order');
+      } else {
+        // Check if ALL actions are already completed
+        const allActionsCompleted = Array.from(actions.values()).every((a) => a.status === 'completed');
 
-      if (!allActionsCompleted) {
-        toast.error('Please assign all actions before confirming the order.');
-        setIsProcessing(false);
-        return;
-      }
+        if (!allActionsCompleted) {
+          toast.error('Please assign all actions before confirming the order.');
+          setIsProcessing(false);
+          return;
+        }
 
-      // Check if any actions failed
-      const hasFailures = Array.from(actions.values()).some((a) => a.status === 'failed');
+        // Check if any actions failed
+        const hasFailures = Array.from(actions.values()).some((a) => a.status === 'failed');
 
-      if (hasFailures) {
-        toast.error('Some actions failed. Please retry failed actions before confirming.');
-        setIsProcessing(false);
-        return;
+        if (hasFailures) {
+          toast.error('Some actions failed. Please retry failed actions before confirming.');
+          setIsProcessing(false);
+          return;
+        }
       }
 
       console.log('🚀 [Modal] Starting order confirmation for SO:', salesOrderId);
@@ -847,10 +852,10 @@ export function ConfirmAllocationsModal({
             <span className="ml-3 text-muted-foreground">Loading allocations...</span>
           </div>
         ) : allocations.length === 0 ? (
-          <Alert className="bg-amber-50 border-amber-200">
-            <AlertCircle className="h-4 w-4 text-amber-600" />
-            <AlertDescription className="text-amber-800">
-              <strong>No allocations found.</strong> Please create allocations before confirming the order.
+          <Alert className="bg-green-50 border-green-200">
+            <CheckCircle className="h-4 w-4 text-green-600" />
+            <AlertDescription className="text-green-800">
+              <strong>No allocations required.</strong> This order contains only service or non-inventory items. Click Confirm Order to proceed.
             </AlertDescription>
           </Alert>
         ) : (
@@ -1110,7 +1115,7 @@ export function ConfirmAllocationsModal({
           )}
           <Button
             onClick={handleConfirmAll}
-            disabled={isLoading || allocations.length === 0 || isProcessing || !allCompleted}
+            disabled={isLoading || isProcessing || (allocations.length > 0 && !allCompleted)}
           >
             {isProcessing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Confirm Order

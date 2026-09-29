@@ -117,6 +117,22 @@ export function getQuotesTableColumns(
       ),
     },
 
+    // Customer PO Number
+    {
+      accessorKey: 'customerPoNumber',
+      header: ({ column }) => (
+        <DataTableColumnHeader column={column} title="Customer PO" />
+      ),
+      cell: ({ row }) => {
+        const customerPo = row.getValue('customerPoNumber') as string | null;
+        return (
+          <div className="max-w-[150px] truncate text-sm font-mono">
+            {customerPo || '-'}
+          </div>
+        );
+      },
+    },
+
     // Quote Date
     {
       accessorKey: 'quoteDate',

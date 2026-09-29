@@ -256,6 +256,7 @@ export interface QuoteListItem {
   quoteNumber: string;
   customerId: string;
   customerName: string;
+  customerPoNumber: string | null;
   quoteDate: string;
   validUntil: string | null;
   status: QuoteStatus;

@@ -13,7 +13,7 @@
  * Warehouse orders are shown in GDC1 Inventory tab.
  */
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Card,
   CardContent,
@@ -29,6 +29,15 @@ import {
   TableRow,
 } from '@/shared/components/ui/table';
 import { Badge } from '@/shared/components/ui/badge';
+import { Button } from '@/shared/components/ui/button';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/shared/components/ui/select';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import type { ImmediateAttentionItem, CustomerCommitment } from '../types';
 import { StatusBadge } from '../lib/status-badge';
 
@@ -41,6 +50,16 @@ export function ShipmentOverviewTable({
   inTransitItems,
   customerSummary,
 }: ShipmentOverviewTableProps) {
+  // Pagination state for each section
+  const [immediateAttentionPage, setImmediateAttentionPage] = useState(1);
+  const [immediateAttentionPageSize, setImmediateAttentionPageSize] = useState(10);
+
+  const [inTransitPortPage, setInTransitPortPage] = useState(1);
+  const [inTransitPortPageSize, setInTransitPortPageSize] = useState(10);
+
+  const [customerSummaryPage, setCustomerSummaryPage] = useState(1);
+  const [customerSummaryPageSize, setCustomerSummaryPageSize] = useState(10);
+
   // Filter to only show DROPSHIP orders (not warehouse)
   const filteredItems = useMemo(() => {
     return inTransitItems.filter(item => item.productSource === 'direct');
@@ -106,6 +125,27 @@ export function ShipmentOverviewTable({
     };
   }, [filteredItems, customerSummary]);
 
+  // Pagination for Immediate Attention section
+  const immediateAttentionTotal = immediateAttentionItems.length;
+  const immediateAttentionTotalPages = Math.ceil(immediateAttentionTotal / immediateAttentionPageSize);
+  const immediateAttentionStartIndex = (immediateAttentionPage - 1) * immediateAttentionPageSize;
+  const immediateAttentionEndIndex = immediateAttentionStartIndex + immediateAttentionPageSize;
+  const paginatedImmediateAttention = immediateAttentionItems.slice(immediateAttentionStartIndex, immediateAttentionEndIndex);
+
+  // Pagination for In Transit to Port section
+  const inTransitPortTotal = inTransitToPortItems.length;
+  const inTransitPortTotalPages = Math.ceil(inTransitPortTotal / inTransitPortPageSize);
+  const inTransitPortStartIndex = (inTransitPortPage - 1) * inTransitPortPageSize;
+  const inTransitPortEndIndex = inTransitPortStartIndex + inTransitPortPageSize;
+  const paginatedInTransitPort = inTransitToPortItems.slice(inTransitPortStartIndex, inTransitPortEndIndex);
+
+  // Pagination for Customer Summary section
+  const customerSummaryTotal = filteredCustomerSummary.length;
+  const customerSummaryTotalPages = Math.ceil(customerSummaryTotal / customerSummaryPageSize);
+  const customerSummaryStartIndex = (customerSummaryPage - 1) * customerSummaryPageSize;
+  const customerSummaryEndIndex = customerSummaryStartIndex + customerSummaryPageSize;
+  const paginatedCustomerSummary = filteredCustomerSummary.slice(customerSummaryStartIndex, customerSummaryEndIndex);
+
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
@@ -170,8 +210,8 @@ export function ShipmentOverviewTable({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {immediateAttentionItems.length > 0 ? (
-                immediateAttentionItems.map((item) => (
+              {paginatedImmediateAttention.length > 0 ? (
+                paginatedImmediateAttention.map((item) => (
                   <TableRow
                     key={item.id}
                     className={item.isOverdue ? 'bg-red-50 dark:bg-red-950/20' : ''}
@@ -201,6 +241,62 @@ export function ShipmentOverviewTable({
               )}
             </TableBody>
           </Table>
+          {/* Pagination Controls */}
+          {immediateAttentionTotal > 0 && (
+            <div className="flex items-center justify-between px-4 py-3 border-t">
+              <div className="flex-1 text-sm text-muted-foreground">
+                Showing {immediateAttentionStartIndex + 1} to{' '}
+                {Math.min(immediateAttentionEndIndex, immediateAttentionTotal)} of{' '}
+                {immediateAttentionTotal} results
+              </div>
+              <div className="flex items-center space-x-6">
+                <div className="flex items-center space-x-2">
+                  <p className="text-sm font-medium">Rows per page</p>
+                  <Select
+                    value={`${immediateAttentionPageSize}`}
+                    onValueChange={(value) => {
+                      setImmediateAttentionPageSize(Number(value));
+                      setImmediateAttentionPage(1);
+                    }}
+                  >
+                    <SelectTrigger className="h-8 w-[70px]">
+                      <SelectValue placeholder={immediateAttentionPageSize} />
+                    </SelectTrigger>
+                    <SelectContent side="top">
+                      {[10, 20, 50, 100].map((size) => (
+                        <SelectItem key={size} value={`${size}`}>
+                          {size}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setImmediateAttentionPage(immediateAttentionPage - 1)}
+                    disabled={immediateAttentionPage <= 1}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                    Previous
+                  </Button>
+                  <div className="text-sm font-medium">
+                    Page {immediateAttentionPage} of {immediateAttentionTotalPages}
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setImmediateAttentionPage(immediateAttentionPage + 1)}
+                    disabled={immediateAttentionPage >= immediateAttentionTotalPages}
+                  >
+                    Next
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -224,8 +320,8 @@ export function ShipmentOverviewTable({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {inTransitToPortItems.length > 0 ? (
-                inTransitToPortItems.map((item) => (
+              {paginatedInTransitPort.length > 0 ? (
+                paginatedInTransitPort.map((item) => (
                   <TableRow
                     key={item.id}
                     className={item.isOverdue ? 'bg-red-50 dark:bg-red-950/20' : ''}
@@ -255,6 +351,62 @@ export function ShipmentOverviewTable({
               )}
             </TableBody>
           </Table>
+          {/* Pagination Controls */}
+          {inTransitPortTotal > 0 && (
+            <div className="flex items-center justify-between px-4 py-3 border-t">
+              <div className="flex-1 text-sm text-muted-foreground">
+                Showing {inTransitPortStartIndex + 1} to{' '}
+                {Math.min(inTransitPortEndIndex, inTransitPortTotal)} of{' '}
+                {inTransitPortTotal} results
+              </div>
+              <div className="flex items-center space-x-6">
+                <div className="flex items-center space-x-2">
+                  <p className="text-sm font-medium">Rows per page</p>
+                  <Select
+                    value={`${inTransitPortPageSize}`}
+                    onValueChange={(value) => {
+                      setInTransitPortPageSize(Number(value));
+                      setInTransitPortPage(1);
+                    }}
+                  >
+                    <SelectTrigger className="h-8 w-[70px]">
+                      <SelectValue placeholder={inTransitPortPageSize} />
+                    </SelectTrigger>
+                    <SelectContent side="top">
+                      {[10, 20, 50, 100].map((size) => (
+                        <SelectItem key={size} value={`${size}`}>
+                          {size}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setInTransitPortPage(inTransitPortPage - 1)}
+                    disabled={inTransitPortPage <= 1}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                    Previous
+                  </Button>
+                  <div className="text-sm font-medium">
+                    Page {inTransitPortPage} of {inTransitPortTotalPages}
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setInTransitPortPage(inTransitPortPage + 1)}
+                    disabled={inTransitPortPage >= inTransitPortTotalPages}
+                  >
+                    Next
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -275,9 +427,9 @@ export function ShipmentOverviewTable({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredCustomerSummary.length > 0 ? (
+              {paginatedCustomerSummary.length > 0 ? (
                 <>
-                  {filteredCustomerSummary.map((customer) => (
+                  {paginatedCustomerSummary.map((customer) => (
                     <TableRow key={customer.id}>
                       <TableCell className="font-medium">{customer.customer}</TableCell>
                       <TableCell className="text-right">{customer.loads}</TableCell>
@@ -292,7 +444,7 @@ export function ShipmentOverviewTable({
                       </TableCell>
                     </TableRow>
                   ))}
-                  {/* Totals Row */}
+                  {/* Totals Row - always show with full dataset totals */}
                   <TableRow className="bg-muted/50 font-semibold">
                     <TableCell>Total</TableCell>
                     <TableCell className="text-right">
@@ -320,6 +472,62 @@ export function ShipmentOverviewTable({
               )}
             </TableBody>
           </Table>
+          {/* Pagination Controls */}
+          {customerSummaryTotal > 0 && (
+            <div className="flex items-center justify-between px-4 py-3 border-t">
+              <div className="flex-1 text-sm text-muted-foreground">
+                Showing {customerSummaryStartIndex + 1} to{' '}
+                {Math.min(customerSummaryEndIndex, customerSummaryTotal)} of{' '}
+                {customerSummaryTotal} results
+              </div>
+              <div className="flex items-center space-x-6">
+                <div className="flex items-center space-x-2">
+                  <p className="text-sm font-medium">Rows per page</p>
+                  <Select
+                    value={`${customerSummaryPageSize}`}
+                    onValueChange={(value) => {
+                      setCustomerSummaryPageSize(Number(value));
+                      setCustomerSummaryPage(1);
+                    }}
+                  >
+                    <SelectTrigger className="h-8 w-[70px]">
+                      <SelectValue placeholder={customerSummaryPageSize} />
+                    </SelectTrigger>
+                    <SelectContent side="top">
+                      {[10, 20, 50, 100].map((size) => (
+                        <SelectItem key={size} value={`${size}`}>
+                          {size}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCustomerSummaryPage(customerSummaryPage - 1)}
+                    disabled={customerSummaryPage <= 1}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                    Previous
+                  </Button>
+                  <div className="text-sm font-medium">
+                    Page {customerSummaryPage} of {customerSummaryTotalPages}
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCustomerSummaryPage(customerSummaryPage + 1)}
+                    disabled={customerSummaryPage >= customerSummaryTotalPages}
+                  >
+                    Next
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

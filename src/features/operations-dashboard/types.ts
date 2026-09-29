@@ -267,6 +267,15 @@ export interface OperationsData {
 // GDC INVENTORY BY ORDER SERIES (from Purchase Orders)
 // ============================================
 
+// Fulfillment Allocation Detail (for multi-fulfillment orders)
+export interface FulfillmentAllocationDetail {
+  source: FulfillmentSource;
+  quantity: number;
+  status: AllocationStatus;
+  locationOrDealer: string | null;  // Dealer name or warehouse location
+  supplierName: string | null;       // Supplier name for direct fulfillment
+}
+
 export interface GDCInventoryItem {
   id: string;
   no: number;
@@ -295,6 +304,8 @@ export interface GDCInventoryItem {
   allocatedToDealerName: string | null;              // Dealer name if allocated
   allocatedToDealerLocation: string | null;          // Dealer location if allocated
   allocationStatus: AllocationStatus | null;         // Allocation status
+  // 🆕 Multiple fulfillment allocations (optional - for SO with multiple sources)
+  allocations?: FulfillmentAllocationDetail[];       // All fulfillment allocations
 }
 
 export interface GDCInventoryData {
