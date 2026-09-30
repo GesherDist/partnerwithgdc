@@ -773,21 +773,24 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
   // STATIC COGS value to subtract from Revenue (YTD) - $337,680
   const STATIC_COGS = 33768000; // $337,680 in cents
 
-  // Calculate Net Revenue (Revenue - Static COGS)
+  // Calculate Net Revenue (Revenue - Static COGS) for Revenue (YTD) card
   const ytdNetRevenue = ytdRevenue - STATIC_COGS;
   const lastYearYtdNetRevenue = lastYearYtdRevenue - STATIC_COGS;
 
   const ytdNetRevenueChange = lastYearYtdNetRevenue > 0 ? ((ytdNetRevenue - lastYearYtdNetRevenue) / lastYearYtdNetRevenue) * 100 : 0;
   const ytdUnitsChange = lastYearYtdUnits > 0 ? ((ytdUnits - lastYearYtdUnits) / lastYearYtdUnits) * 100 : 0;
 
-  // Calculate YTD Blended Margin (using ORIGINAL revenue $2.1M, NOT modified)
-  // Static COGS is NOT applied here - only to Revenue (YTD) card
-  // Uses ytdTotalRevenue (original) and ytdTotalCost (database COGS)
-  const ytdBlendedMargin = ytdTotalRevenue > 0
-    ? ((ytdTotalRevenue - ytdTotalCost) / ytdTotalRevenue) * 100
+  // Calculate Net Total Revenue (from line items) for Blended Margin calculation
+  const ytdNetTotalRevenue = ytdTotalRevenue - STATIC_COGS;
+  const lastYearYtdNetTotalRevenue = lastYearYtdTotalRevenue - STATIC_COGS;
+
+  // Calculate YTD Blended Margin (using MODIFIED revenue - static COGS subtracted)
+  // Uses ytdNetTotalRevenue (modified) and ytdTotalCost (database COGS)
+  const ytdBlendedMargin = ytdNetTotalRevenue > 0
+    ? ((ytdNetTotalRevenue - ytdTotalCost) / ytdNetTotalRevenue) * 100
     : 0;
-  const lastYearYtdBlendedMargin = lastYearYtdTotalRevenue > 0
-    ? ((lastYearYtdTotalRevenue - lastYearYtdTotalCost) / lastYearYtdTotalRevenue) * 100
+  const lastYearYtdBlendedMargin = lastYearYtdNetTotalRevenue > 0
+    ? ((lastYearYtdNetTotalRevenue - lastYearYtdTotalCost) / lastYearYtdNetTotalRevenue) * 100
     : 0;
   const marginChange = ytdBlendedMargin - lastYearYtdBlendedMargin; // Absolute difference in margin %
 
@@ -850,7 +853,7 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
     {
       id: 'blended-margin',
       title: 'Blended Margin (YTD)',
-      value: `${ytdBlendedMargin.toFixed(1)}%`,
+      value: '16.7%', // Static value
       change: `${marginChange >= 0 ? '+' : ''}${marginChange.toFixed(1)}%`,
       trend: marginChange >= 0 ? 'up' : 'down',
       icon: 'percent',
