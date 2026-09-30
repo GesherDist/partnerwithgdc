@@ -128,6 +128,12 @@ class PurchaseOrderRepositoryImpl {
         ),
         locations:warehouse_id (
           name
+        ),
+        shipments!purchase_order_id (
+          id,
+          shipment_number,
+          status,
+          created_at
         )
       `,
         { count: 'exact' }
@@ -695,12 +701,22 @@ class PurchaseOrderRepositoryImpl {
       sales_orders: any; // Joined data from sales_orders table
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       locations: any; // Joined data from locations table
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      shipments: any; // Joined data from shipments table
     },
     itemCounts: Record<string, number>,
     itemSuppliers: Record<string, string[]>
   ): POListItem {
     // Get orderSeries: prefer PO's own order_series, fallback to linked Sales Order
     const orderSeries = data.order_series || data.sales_orders?.order_series || null;
+
+    // Extract latest shipment info (most recent by created_at)
+    const shipments = data.shipments || [];
+    const latestShipment = shipments.length > 0
+      ? shipments.sort((a: any, b: any) =>
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        )[0]
+      : null;
 
     return {
       id: data.id,
@@ -717,6 +733,10 @@ class PurchaseOrderRepositoryImpl {
       salesOrderNumber: data.sales_orders?.order_number || null,
       customerName: data.sales_orders?.customers?.name || null,
       warehouseLocationName: data.locations?.name || null,
+      // Shipment info
+      latestShipmentStatus: latestShipment?.status || null,
+      latestShipmentNumber: latestShipment?.shipment_number || null,
+      totalShipments: shipments.length,
     };
   }
 

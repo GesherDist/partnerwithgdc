@@ -12,7 +12,6 @@ import {
 import { MoreHorizontal, Eye, Pencil, Trash2 } from 'lucide-react';
 import { cn } from '@/shared/lib/utils';
 import type { POListItem } from '../types';
-import { PO_STATUS_COLORS, PO_STATUS_LABELS } from '../types';
 
 interface ColumnsOptions {
   onView?: (po: POListItem) => void;
@@ -27,22 +26,11 @@ export function PurchaseOrdersTableColumns(options: ColumnsOptions = {}): Column
     {
       accessorKey: 'poNumber',
       header: 'PO Number',
-      cell: ({ row }) => {
-        const status = row.original.status;
-        return (
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-sm font-medium">
-              {row.original.poNumber}
-            </span>
-            <Badge
-              variant="outline"
-              className={cn('text-xs font-medium', PO_STATUS_COLORS[status])}
-            >
-              {PO_STATUS_LABELS[status]}
-            </Badge>
-          </div>
-        );
-      },
+      cell: ({ row }) => (
+        <span className="font-mono text-sm font-medium">
+          {row.original.poNumber}
+        </span>
+      ),
     },
     {
       accessorKey: 'salesOrderNumber',
@@ -80,6 +68,50 @@ export function PurchaseOrdersTableColumns(options: ColumnsOptions = {}): Column
               <p className="text-xs text-muted-foreground">
                 +{suppliers.length - 1} more
               </p>
+            )}
+          </div>
+        );
+      },
+    },
+    {
+      accessorKey: 'latestShipmentStatus',
+      header: 'Shipment Status',
+      cell: ({ row }) => {
+        const shipmentStatus = row.original.latestShipmentStatus;
+        const shipmentNumber = row.original.latestShipmentNumber;
+        const totalShipments = row.original.totalShipments || 0;
+
+        if (!shipmentStatus || totalShipments === 0) {
+          return <span className="text-xs text-muted-foreground">No shipment</span>;
+        }
+
+        const SHIPMENT_STATUS_COLORS = {
+          pending: 'bg-gray-100 text-gray-700 border-gray-200',
+          in_transit: 'bg-blue-100 text-blue-800 border-blue-200',
+          delivered: 'bg-green-100 text-green-800 border-green-200',
+          failed: 'bg-red-100 text-red-800 border-red-200',
+        };
+
+        const SHIPMENT_STATUS_LABELS = {
+          pending: 'Pending',
+          in_transit: 'In Transit',
+          delivered: 'Delivered',
+          failed: 'Failed',
+        };
+
+        return (
+          <div className="flex flex-col gap-1">
+            <Badge
+              variant="outline"
+              className={cn('text-xs w-fit', SHIPMENT_STATUS_COLORS[shipmentStatus])}
+            >
+              {SHIPMENT_STATUS_LABELS[shipmentStatus]}
+            </Badge>
+            {shipmentNumber && (
+              <span className="text-xs text-muted-foreground font-mono">
+                {shipmentNumber}
+                {totalShipments > 1 && ` (+${totalShipments - 1} more)`}
+              </span>
             )}
           </div>
         );

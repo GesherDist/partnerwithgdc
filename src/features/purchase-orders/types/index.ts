@@ -308,6 +308,10 @@ export interface POListItem {
   customerName: string | null;
   // Warehouse location (for unallocated inventory POs)
   warehouseLocationName: string | null;
+  // Shipment info (from linked shipments)
+  latestShipmentStatus?: 'pending' | 'in_transit' | 'delivered' | 'failed' | null;
+  latestShipmentNumber?: string | null;
+  totalShipments?: number;
 }
 
 export interface PaginatedResult<T> {

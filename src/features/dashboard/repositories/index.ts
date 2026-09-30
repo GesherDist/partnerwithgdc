@@ -75,8 +75,8 @@ export async function getUnitsBySKU(dateRange?: DateRange): Promise<UnitsBySKUCh
         item_type
       )
     `)
-    .gte('sales_orders.order_date', startDate)
-    .lte('sales_orders.order_date', endDate)
+    .gte('sales_orders.requested_delivery_date', startDate)
+    .lte('sales_orders.requested_delivery_date', endDate)
     .is('sales_orders.deleted_at', null)
     .in('sales_orders.status', ['confirmed', 'processing', 'shipped', 'delivered'])
     .eq('products.item_type', 'inventory');
@@ -195,8 +195,8 @@ export async function getChannelPerformance(dateRange?: DateRange): Promise<Chan
         channel
       )
     `)
-    .gte('order_date', startDate)
-    .lte('order_date', endDate)
+    .gte('requested_delivery_date', startDate)
+    .lte('requested_delivery_date', endDate)
     .is('deleted_at', null)
     .in('status', ['confirmed', 'processing', 'shipped', 'delivered']);
 
@@ -364,12 +364,13 @@ export async function getInventoryByLocation(): Promise<InventoryByLocation[]> {
       warehouse_id,
       sales_orders!inner (
         order_date,
+        requested_delivery_date,
         status,
         deleted_at,
         warehouse_id
       )
     `)
-    .gte('sales_orders.order_date', thirtyDaysAgo)
+    .gte('sales_orders.requested_delivery_date', thirtyDaysAgo)
     .is('sales_orders.deleted_at', null)
     .in('sales_orders.status', ['confirmed', 'processing', 'shipped', 'delivered']);
 
@@ -455,38 +456,69 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
     primaryEndDate = formatDateString(now);
   }
 
-  // Fetch orders for the selected period
-  const { data: currentMonthOrders } = await supabase
+  // DEBUG: Log the date range being used
+  console.log('📅 Dashboard Stats Date Range:', {
+    primaryStartDate,
+    primaryEndDate,
+    periodLabel,
+    currentMonthStart: currentMonthStart.toISOString(),
+    now: now.toISOString(),
+  });
+
+  // Fetch orders for the selected period (using requested_delivery_date = Customer Expected Delivery)
+  const { data: currentMonthOrders, error: currentMonthError } = await supabase
     .from('sales_orders')
-    .select('id, grand_total, subtotal')
-    .gte('order_date', primaryStartDate)
-    .lte('order_date', primaryEndDate)
+    .select('id, grand_total, subtotal, order_date, order_number, status, requested_delivery_date')
+    .gte('requested_delivery_date', primaryStartDate)
+    .lte('requested_delivery_date', primaryEndDate)
     .is('deleted_at', null)
     .in('status', ['confirmed', 'processing', 'shipped', 'delivered']);
 
-  // Fetch last month orders for comparison
+  // DEBUG: Log query results (now using requested_delivery_date = Customer Expected Delivery)
+  console.log('📊 Current Month Orders Query:', {
+    count: currentMonthOrders?.length || 0,
+    totalRevenue: (currentMonthOrders?.reduce((sum, o) => sum + (o.grand_total || 0), 0) || 0) / 100,
+    error: currentMonthError,
+    sampleOrders: currentMonthOrders?.slice(0, 3).map(o => ({
+      number: o.order_number,
+      orderDate: o.order_date,
+      requestedDeliveryDate: (o as any).requested_delivery_date,
+      status: o.status,
+      total: (o.grand_total || 0) / 100,
+    })),
+  });
+
+  // Fetch last month orders for comparison (using requested_delivery_date)
   const { data: lastMonthOrders } = await supabase
     .from('sales_orders')
     .select('id, grand_total, subtotal')
-    .gte('order_date', formatDateString(lastMonthStart))
-    .lte('order_date', formatDateString(lastMonthEnd))
+    .gte('requested_delivery_date', formatDateString(lastMonthStart))
+    .lte('requested_delivery_date', formatDateString(lastMonthEnd))
     .is('deleted_at', null)
     .in('status', ['confirmed', 'processing', 'shipped', 'delivered']);
 
-  // Fetch YTD orders (Jan 1 to today)
-  const { data: ytdOrders } = await supabase
+  // Fetch YTD orders (Jan 1 to today, using requested_delivery_date)
+  const { data: ytdOrders, error: ytdError } = await supabase
     .from('sales_orders')
-    .select('id, grand_total, subtotal')
-    .gte('order_date', formatDateString(currentYearStart))
+    .select('id, grand_total, subtotal, order_date, requested_delivery_date')
+    .gte('requested_delivery_date', formatDateString(currentYearStart))
     .is('deleted_at', null)
     .in('status', ['confirmed', 'processing', 'shipped', 'delivered']);
 
-  // Fetch last year same period orders for YTD comparison
+  // DEBUG: Log YTD query results
+  console.log('📊 YTD Orders Query:', {
+    yearStart: formatDateString(currentYearStart),
+    count: ytdOrders?.length || 0,
+    totalRevenue: (ytdOrders?.reduce((sum, o) => sum + (o.grand_total || 0), 0) || 0) / 100,
+    error: ytdError,
+  });
+
+  // Fetch last year same period orders for YTD comparison (using requested_delivery_date)
   const { data: lastYearYtdOrders } = await supabase
     .from('sales_orders')
     .select('id, grand_total, subtotal')
-    .gte('order_date', formatDateString(lastYearStart))
-    .lte('order_date', formatDateString(lastYearSameDay))
+    .gte('requested_delivery_date', formatDateString(lastYearStart))
+    .lte('requested_delivery_date', formatDateString(lastYearSameDay))
     .is('deleted_at', null)
     .in('status', ['confirmed', 'processing', 'shipped', 'delivered']);
 
@@ -875,8 +907,8 @@ export async function getMarginAnalysis(dateRange?: DateRange): Promise<MarginDa
         name
       )
     `)
-    .gte('sales_orders.order_date', startDate)
-    .lte('sales_orders.order_date', endDate)
+    .gte('sales_orders.requested_delivery_date', startDate)
+    .lte('sales_orders.requested_delivery_date', endDate)
     .is('sales_orders.deleted_at', null)
     .in('sales_orders.status', ['confirmed', 'processing', 'shipped', 'delivered']);
 
@@ -1028,12 +1060,12 @@ export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDat
     queryEndDate = formatDateString(now);
   }
 
-  // Query current year orders
+  // Query current year orders (using requested_delivery_date)
   const { data: currentYearData, error: currentError } = await supabase
     .from('sales_orders')
-    .select('order_date, grand_total')
-    .gte('order_date', queryStartDate)
-    .lte('order_date', queryEndDate)
+    .select('order_date, grand_total, requested_delivery_date')
+    .gte('requested_delivery_date', queryStartDate)
+    .lte('requested_delivery_date', queryEndDate)
     .is('deleted_at', null)
     .in('status', ['confirmed', 'processing', 'shipped', 'delivered']);
 
@@ -1047,12 +1079,12 @@ export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDat
   const lastYearStartDate = new Date(startDateObj.getFullYear() - 1, startDateObj.getMonth(), startDateObj.getDate());
   const lastYearEndDate = new Date(endDateObj.getFullYear() - 1, endDateObj.getMonth(), endDateObj.getDate());
 
-  // Query last year orders (same date range, one year ago)
+  // Query last year orders (same date range, one year ago, using requested_delivery_date)
   const { data: lastYearData, error: lastError } = await supabase
     .from('sales_orders')
-    .select('order_date, grand_total')
-    .gte('order_date', formatDateString(lastYearStartDate))
-    .lte('order_date', formatDateString(lastYearEndDate))
+    .select('order_date, grand_total, requested_delivery_date')
+    .gte('requested_delivery_date', formatDateString(lastYearStartDate))
+    .lte('requested_delivery_date', formatDateString(lastYearEndDate))
     .is('deleted_at', null)
     .in('status', ['confirmed', 'processing', 'shipped', 'delivered']);
 
@@ -1147,7 +1179,7 @@ export async function getCommissionRevenue(): Promise<CommissionRevenueStats> {
   const lastYearSameDay = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate()); // Same day last year
 
   // Query YTD commission items (all statuses for "expected")
-  const { data: ytdCommissionItems } = await supabase
+  const { data: ytdCommissionItems, error: commError } = await supabase
     .from('sales_order_items')
     .select(`
       quantity,
@@ -1160,12 +1192,20 @@ export async function getCommissionRevenue(): Promise<CommissionRevenueStats> {
       sales_orders!inner (
         status,
         deleted_at,
-        order_date
+        order_date,
+        requested_delivery_date
       )
     `)
-    .gte('sales_orders.order_date', formatDateString(currentYearStart))
+    .gte('sales_orders.requested_delivery_date', formatDateString(currentYearStart))
     .is('sales_orders.deleted_at', null)
     .in('sales_orders.status', ['confirmed', 'processing', 'shipped', 'delivered']);
+
+  // DEBUG: Log commission query
+  console.log('💼 Commission Items Query (YTD):', {
+    yearStart: formatDateString(currentYearStart),
+    totalItems: ytdCommissionItems?.length || 0,
+    error: commError,
+  });
 
   // Query YTD delivered commission items (for "actual")
   const { data: ytdDeliveredCommissionItems } = await supabase
@@ -1181,10 +1221,11 @@ export async function getCommissionRevenue(): Promise<CommissionRevenueStats> {
       sales_orders!inner (
         status,
         deleted_at,
-        order_date
+        order_date,
+        requested_delivery_date
       )
     `)
-    .gte('sales_orders.order_date', formatDateString(currentYearStart))
+    .gte('sales_orders.requested_delivery_date', formatDateString(currentYearStart))
     .is('sales_orders.deleted_at', null)
     .eq('sales_orders.status', 'delivered');
 
@@ -1202,11 +1243,12 @@ export async function getCommissionRevenue(): Promise<CommissionRevenueStats> {
       sales_orders!inner (
         status,
         deleted_at,
-        order_date
+        order_date,
+        requested_delivery_date
       )
     `)
-    .gte('sales_orders.order_date', formatDateString(lastYearStart))
-    .lte('sales_orders.order_date', formatDateString(lastYearSameDay))
+    .gte('sales_orders.requested_delivery_date', formatDateString(lastYearStart))
+    .lte('sales_orders.requested_delivery_date', formatDateString(lastYearSameDay))
     .is('sales_orders.deleted_at', null)
     .eq('sales_orders.status', 'delivered');
 
@@ -1232,9 +1274,11 @@ export async function getCommissionRevenue(): Promise<CommissionRevenueStats> {
 
   // Calculate expected YTD (all open + delivered orders)
   let expectedYTD = 0;
+  let expectedCommissionCount = 0;
   if (ytdCommissionItems) {
     for (const item of ytdCommissionItems) {
       if (isCommissionItem(item)) {
+        expectedCommissionCount++;
         const quantity = item.quantity || 0;
         const unitPrice = item.unit_price || 0; // in cents
         expectedYTD += (unitPrice * quantity) / 100; // convert to dollars
@@ -1244,15 +1288,30 @@ export async function getCommissionRevenue(): Promise<CommissionRevenueStats> {
 
   // Calculate actual YTD (delivered orders only)
   let actualYTD = 0;
+  let actualCommissionCount = 0;
   if (ytdDeliveredCommissionItems) {
     for (const item of ytdDeliveredCommissionItems) {
       if (isCommissionItem(item)) {
+        actualCommissionCount++;
         const quantity = item.quantity || 0;
         const unitPrice = item.unit_price || 0; // in cents
         actualYTD += (unitPrice * quantity) / 100; // convert to dollars
       }
     }
   }
+
+  // DEBUG: Log commission calculation results
+  console.log('💼 Commission Calculation Results:', {
+    expectedCommissionItemsFound: expectedCommissionCount,
+    expectedYTD: `$${expectedYTD.toFixed(2)}`,
+    actualCommissionItemsFound: actualCommissionCount,
+    actualYTD: `$${actualYTD.toFixed(2)}`,
+    sampleCommissionItems: ytdCommissionItems?.filter(isCommissionItem).slice(0, 3).map(i => ({
+      sku: i.sku,
+      description: i.description,
+      itemType: (i.products as any)?.item_type,
+    })),
+  });
 
   // Calculate last year actual YTD (for comparison)
   let lastYearActualYTD = 0;

@@ -34,6 +34,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/shared/components/ui/select';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/shared/components/ui/tooltip';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/shared/components/ui/popover';
 import type { GDCInventoryItem, SKUColumnInfo } from '../types';
 
 interface GDCInventoryTableProps {
@@ -58,7 +69,6 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
   // State for expanded addresses and notes
   const [expandedAddressId, setExpandedAddressId] = useState<string | null>(null);
   const [expandedNotesId, setExpandedNotesId] = useState<string | null>(null);
-  const [expandedAllocationsId, setExpandedAllocationsId] = useState<string | null>(null);
 
   // Pagination state
   const [page, setPage] = useState(1);
@@ -75,10 +85,6 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
 
   const toggleNotesExpand = (id: string) => {
     setExpandedNotesId(expandedNotesId === id ? null : id);
-  };
-
-  const toggleAllocationsExpand = (id: string) => {
-    setExpandedAllocationsId(expandedAllocationsId === id ? null : id);
   };
 
   // Handle column sort
@@ -332,8 +338,8 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
                       )}
                     </button>
                   </TableHead>
-                  <TableHead className="whitespace-nowrap min-w-[130px]">Fulfillment Source</TableHead> {/* 🆕 NEW */}
-                  <TableHead className="whitespace-nowrap min-w-[130px]">Allocated To</TableHead> {/* 🆕 NEW */}
+                  <TableHead className="whitespace-nowrap min-w-[130px]">Fulfillment Source</TableHead>
+                  <TableHead className="whitespace-nowrap min-w-[130px]">Allocated To</TableHead>
                   <TableHead className="min-w-[150px]">Notes</TableHead>
                   <TableHead className="relative sticky right-0 z-20 w-[100px] bg-white dark:bg-gray-950 border-l shadow-[-2px_0_5px_-2px_rgba(0,0,0,0.1)] after:absolute after:inset-0 after:w-[100px] after:bg-white after:dark:bg-gray-950 after:-z-10">Actions</TableHead>
                 </TableRow>
@@ -367,108 +373,118 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
                     <TableCell className="text-right font-semibold">{item.totalQty}</TableCell>
                     <TableCell>{item.customer || '-'}</TableCell>
                     <TableCell className="min-w-[180px]">
-                      {item.allocations && item.allocations.length > 0 ? (
-                        expandedAllocationsId === item.id ? (
-                          // Expanded view - show all allocations
-                          <div className="space-y-2">
-                            {item.allocations.map((allocation, idx) => (
-                              <div key={idx} className="flex flex-col gap-1">
-                                <div className="flex items-center gap-2 text-xs">
+                      <TooltipProvider>
+                        {item.allocations && item.allocations.length > 0 ? (
+                          <div className="space-y-1">
+                            {/* Show first allocation supplier name */}
+                            {item.allocations[0]?.supplierName && (
+                              <div className="text-sm font-medium">
+                                {item.allocations[0]?.supplierName}
+                              </div>
+                            )}
+
+                            {/* Show "Show All Fulfillment" button with popover for multiple allocations */}
+                            {item.allocations.length > 1 ? (
+                              <Popover>
+                                <PopoverTrigger asChild>
+                                  <button className="flex items-center gap-1 text-primary hover:underline text-xs font-medium">
+                                    <Eye className="h-3 w-3" />
+                                    Show All Fulfillment
+                                  </button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-auto min-w-[400px]" align="start">
+                                  <div className="space-y-2">
+                                    <div className="font-semibold text-sm border-b pb-2">
+                                      Fulfillment Details
+                                    </div>
+                                    <table className="w-full text-sm">
+                                      <thead>
+                                        <tr className="border-b">
+                                          <th className="text-left py-1 px-2 font-medium text-muted-foreground">Source</th>
+                                          <th className="text-left py-1 px-2 font-medium text-muted-foreground">Location</th>
+                                          <th className="text-right py-1 px-2 font-medium text-muted-foreground">Qty</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {item.allocations.map((allocation, idx) => (
+                                          <tr key={idx} className="border-b last:border-0">
+                                            <td className="py-2 px-2">
+                                              <Badge
+                                                variant="outline"
+                                                className={
+                                                  allocation.source === 'gdc_inventory'
+                                                    ? 'bg-blue-50 text-blue-700 border-blue-200 text-xs'
+                                                    : allocation.source === 'platinum_dealer_inventory'
+                                                    ? 'bg-purple-50 text-purple-700 border-purple-200 text-xs'
+                                                    : allocation.source === 'platinum_dealer_fulfillment'
+                                                    ? 'bg-indigo-50 text-indigo-700 border-indigo-200 text-xs'
+                                                    : 'bg-gray-50 text-gray-700 border-gray-200 text-xs'
+                                                }
+                                              >
+                                                {allocation.source === 'gdc_inventory'
+                                                  ? 'GDC Inv.'
+                                                  : allocation.source === 'platinum_dealer_inventory'
+                                                  ? 'Dealer Inv.'
+                                                  : allocation.source === 'platinum_dealer_fulfillment'
+                                                  ? 'Dealer Fulfill.'
+                                                  : 'Direct'}
+                                              </Badge>
+                                            </td>
+                                            <td className="py-2 px-2">
+                                              {allocation.locationOrDealer ? (
+                                                <span className="text-sm">{allocation.locationOrDealer}</span>
+                                              ) : allocation.supplierName ? (
+                                                <span className="text-sm">{allocation.supplierName}</span>
+                                              ) : (
+                                                <span className="text-sm text-muted-foreground">-</span>
+                                              )}
+                                            </td>
+                                            <td className="py-2 px-2 text-right font-medium">{allocation.quantity}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </PopoverContent>
+                              </Popover>
+                            ) : item.allocations[0]?.source !== 'direct' ? (
+                              /* Single non-direct allocation - show badge with tooltip */
+                              <Tooltip>
+                                <TooltipTrigger asChild>
                                   <Badge
                                     variant="outline"
                                     className={
-                                      allocation.source === 'gdc_inventory'
-                                        ? 'bg-blue-50 text-blue-700 border-blue-200'
-                                        : allocation.source === 'platinum_dealer_inventory'
-                                        ? 'bg-purple-50 text-purple-700 border-purple-200'
-                                        : allocation.source === 'platinum_dealer_fulfillment'
-                                        ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                                        : 'bg-green-50 text-green-700 border-green-200'
+                                      item.allocations[0]?.source === 'gdc_inventory'
+                                        ? 'bg-blue-50 text-blue-700 border-blue-200 cursor-help'
+                                        : item.allocations[0]?.source === 'platinum_dealer_inventory'
+                                        ? 'bg-purple-50 text-purple-700 border-purple-200 cursor-help'
+                                        : 'bg-indigo-50 text-indigo-700 border-indigo-200 cursor-help'
                                     }
                                   >
-                                    {allocation.source === 'gdc_inventory'
+                                    {item.allocations[0]?.source === 'gdc_inventory'
                                       ? 'GDC Inventory'
-                                      : allocation.source === 'platinum_dealer_inventory'
+                                      : item.allocations[0]?.source === 'platinum_dealer_inventory'
                                       ? 'Dealer Inventory'
-                                      : allocation.source === 'platinum_dealer_fulfillment'
-                                      ? 'Dealer Fulfillment'
-                                      : 'Manufacturer'}
+                                      : 'Dealer Fulfillment'} | {item.allocations[0]?.quantity} units
                                   </Badge>
-                                  <span className="text-muted-foreground">
-                                    {allocation.quantity} units
-                                  </span>
-                                </div>
-                                {allocation.supplierName && (
-                                  <div className="text-sm font-medium">
-                                    {allocation.supplierName}
-                                  </div>
-                                )}
-                                {allocation.locationOrDealer && (
-                                  <div className="text-xs text-muted-foreground">
-                                    {allocation.locationOrDealer}
-                                  </div>
-                                )}
-                              </div>
-                            ))}
-                            <button
-                              className="text-primary hover:underline text-xs mt-1"
-                              onClick={() => toggleAllocationsExpand(item.id)}
-                            >
-                              Show less
-                            </button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="text-xs">
+                                    {item.allocations[0]?.source === 'gdc_inventory'
+                                      ? 'Fulfilled from GDC warehouse inventory'
+                                      : item.allocations[0]?.source === 'platinum_dealer_inventory'
+                                      ? 'Fulfilled from Platinum Dealer existing inventory'
+                                      : 'Dealer arranges fulfillment (no stock transfer)'}
+                                  </p>
+                                </TooltipContent>
+                              </Tooltip>
+                            ) : null}
                           </div>
-                        ) : item.allocations[0] ? (
-                          // Collapsed view - show first allocation + count
-                          <div className="space-y-1">
-                            <div className="flex items-center gap-2">
-                              <Badge
-                                variant="outline"
-                                className={
-                                  item.allocations[0].source === 'gdc_inventory'
-                                    ? 'bg-blue-50 text-blue-700 border-blue-200'
-                                    : item.allocations[0].source === 'platinum_dealer_inventory'
-                                    ? 'bg-purple-50 text-purple-700 border-purple-200'
-                                    : item.allocations[0].source === 'platinum_dealer_fulfillment'
-                                    ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                                    : 'bg-green-50 text-green-700 border-green-200'
-                                }
-                              >
-                                {item.allocations[0].source === 'gdc_inventory'
-                                  ? 'GDC Inventory'
-                                  : item.allocations[0].source === 'platinum_dealer_inventory'
-                                  ? 'Dealer Inventory'
-                                  : item.allocations[0].source === 'platinum_dealer_fulfillment'
-                                  ? 'Dealer Fulfillment'
-                                  : 'Manufacturer'}
-                              </Badge>
-                              <span className="text-xs text-muted-foreground">
-                                {item.allocations[0].quantity} units
-                              </span>
-                            </div>
-                            {item.allocations[0].supplierName && (
-                              <div className="text-sm font-medium">
-                                {item.allocations[0].supplierName}
-                              </div>
-                            )}
-                            {item.allocations[0].locationOrDealer && (
-                              <div className="text-xs text-muted-foreground">
-                                {item.allocations[0].locationOrDealer}
-                              </div>
-                            )}
-                            {item.allocations.length > 1 && (
-                              <button
-                                className="text-primary hover:underline text-xs"
-                                onClick={() => toggleAllocationsExpand(item.id)}
-                              >
-                                + {item.allocations.length - 1} more
-                              </button>
-                            )}
-                          </div>
-                        ) : null
-                      ) : (
-                        // No allocations array - fallback to old supplierName field
-                        <span className="text-sm">{item.supplierName || '-'}</span>
-                      )}
+                        ) : (
+                          // No allocations array - fallback to old supplierName field
+                          <span className="text-sm">{item.supplierName || '-'}</span>
+                        )}
+                      </TooltipProvider>
                     </TableCell>
                     <TableCell>{formatDate(item.etaToUsPort)}</TableCell>
                     <TableCell>{formatDate(item.confirmedEta)}</TableCell>
@@ -518,7 +534,6 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
                         {item.status}
                       </Badge>
                     </TableCell>
-                    {/* 🆕 NEW: Fulfillment Source */}
                     <TableCell>
                       <Badge
                         variant="outline"
@@ -534,7 +549,6 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
                         {item.fulfillmentSource === 'direct' && 'Direct'}
                       </Badge>
                     </TableCell>
-                    {/* 🆕 NEW: Allocated To */}
                     <TableCell>
                       {item.allocatedToDealerName ? (
                         <div>

@@ -6,6 +6,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   Select,
   SelectContent,
@@ -19,7 +20,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Loader2, Download, ChevronLeft, ChevronRight, Eye } from 'lucide-react';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
+import { Calendar } from '@/components/ui/calendar';
+import { Loader2, Download, ChevronLeft, ChevronRight, Eye, Calendar as CalendarIcon, X, Filter } from 'lucide-react';
 import { useAuditLogs } from '@/features/audit-logs/hooks';
 import {
   AUDIT_ACTION_OPTIONS,
@@ -29,6 +36,7 @@ import {
   type AuditLogListParams,
 } from '@/features/audit-logs/types';
 import { format } from 'date-fns';
+import { cn } from '@/shared/lib/utils';
 
 // ============================================
 // ACTION COLORS
@@ -53,6 +61,12 @@ const actionColors: Record<string, string> = {
 };
 
 // ============================================
+// ROWS PER PAGE OPTIONS
+// ============================================
+
+const ROWS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
+
+// ============================================
 // COMPONENT
 // ============================================
 
@@ -61,7 +75,11 @@ export function AuditLogsContent() {
   const [search, setSearch] = useState('');
   const [selectedAction, setSelectedAction] = useState<string>('all');
   const [selectedModule, setSelectedModule] = useState<string>('all');
+  const [dateFrom, setDateFrom] = useState<Date | undefined>(undefined);
+  const [dateTo, setDateTo] = useState<Date | undefined>(undefined);
   const [page, setPage] = useState(1);
+  const [rowsPerPage, setRowsPerPage] = useState(25);
+  const [showFilters, setShowFilters] = useState(false);
 
   // Detail dialog state
   const [selectedLog, setSelectedLog] = useState<AuditLog | null>(null);
@@ -70,11 +88,13 @@ export function AuditLogsContent() {
   // Build params
   const params = useMemo<AuditLogListParams>(() => ({
     page,
-    limit: 25,
+    limit: rowsPerPage,
     search: search || undefined,
     action: selectedAction !== 'all' ? (selectedAction as AuditAction) : undefined,
     module: selectedModule !== 'all' ? selectedModule : undefined,
-  }), [page, search, selectedAction, selectedModule]);
+    dateFrom: dateFrom ? format(dateFrom, 'yyyy-MM-dd') : undefined,
+    dateTo: dateTo ? format(dateTo, 'yyyy-MM-dd') : undefined,
+  }), [page, rowsPerPage, search, selectedAction, selectedModule, dateFrom, dateTo]);
 
   // Fetch data
   const { data: auditLogs, meta, isLoading, error } = useAuditLogs(params);
@@ -95,6 +115,21 @@ export function AuditLogsContent() {
     setPage(1);
   }, []);
 
+  const handleDateFromChange = useCallback((date: Date | undefined) => {
+    setDateFrom(date);
+    setPage(1);
+  }, []);
+
+  const handleDateToChange = useCallback((date: Date | undefined) => {
+    setDateTo(date);
+    setPage(1);
+  }, []);
+
+  const handleRowsPerPageChange = useCallback((value: string) => {
+    setRowsPerPage(parseInt(value, 10));
+    setPage(1);
+  }, []);
+
   const handlePreviousPage = useCallback(() => {
     setPage((p) => Math.max(1, p - 1));
   }, []);
@@ -103,10 +138,23 @@ export function AuditLogsContent() {
     setPage((p) => p + 1);
   }, []);
 
+
   const handleViewDetail = useCallback((log: AuditLog) => {
     setSelectedLog(log);
     setIsDetailOpen(true);
   }, []);
+
+  const handleClearFilters = useCallback(() => {
+    setSearch('');
+    setSelectedAction('all');
+    setSelectedModule('all');
+    setDateFrom(undefined);
+    setDateTo(undefined);
+    setPage(1);
+  }, []);
+
+  // Check if any filters are active
+  const hasActiveFilters = search || selectedAction !== 'all' || selectedModule !== 'all' || dateFrom || dateTo;
 
   // Format date for display
   const formatDate = (date: Date) => {
@@ -142,41 +190,122 @@ export function AuditLogsContent() {
       {/* Filters */}
       <Card>
         <CardContent className="pt-6">
-          <div className="flex flex-col gap-4 sm:flex-row">
-            <div className="flex-1">
-              <Input
-                placeholder="Search logs..."
-                className="w-full"
-                value={search}
-                onChange={(e) => handleSearchChange(e.target.value)}
-              />
+          <div className="space-y-4">
+            {/* Primary Filters Row */}
+            <div className="flex flex-col gap-4 sm:flex-row">
+              <div className="flex-1">
+                <Input
+                  placeholder="Search logs..."
+                  className="w-full"
+                  value={search}
+                  onChange={(e) => handleSearchChange(e.target.value)}
+                />
+              </div>
+              <Select value={selectedAction} onValueChange={handleActionChange}>
+                <SelectTrigger className="w-full sm:w-[180px]">
+                  <SelectValue placeholder="Action type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Actions</SelectItem>
+                  {AUDIT_ACTION_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={selectedModule} onValueChange={handleModuleChange}>
+                <SelectTrigger className="w-full sm:w-[180px]">
+                  <SelectValue placeholder="Module" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Modules</SelectItem>
+                  {AUDIT_MODULE_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                variant="outline"
+                onClick={() => setShowFilters(!showFilters)}
+                className={cn(hasActiveFilters && 'border-primary')}
+              >
+                <Filter className="mr-2 h-4 w-4" />
+                {showFilters ? 'Hide Filters' : 'More Filters'}
+              </Button>
             </div>
-            <Select value={selectedAction} onValueChange={handleActionChange}>
-              <SelectTrigger className="w-full sm:w-[180px]">
-                <SelectValue placeholder="Action type" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Actions</SelectItem>
-                {AUDIT_ACTION_OPTIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={selectedModule} onValueChange={handleModuleChange}>
-              <SelectTrigger className="w-full sm:w-[180px]">
-                <SelectValue placeholder="Module" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Modules</SelectItem>
-                {AUDIT_MODULE_OPTIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+
+            {/* Advanced Filters (Collapsible) */}
+            {showFilters && (
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 pt-4 border-t">
+                {/* Date From */}
+                <div className="space-y-2">
+                  <Label>Date From</Label>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className={cn(
+                          'w-full justify-start text-left font-normal',
+                          !dateFrom && 'text-muted-foreground'
+                        )}
+                      >
+                        <CalendarIcon className="mr-2 h-4 w-4" />
+                        {dateFrom ? format(dateFrom, 'PPP') : 'Pick a date'}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <Calendar
+                        mode="single"
+                        selected={dateFrom}
+                        onSelect={handleDateFromChange}
+                      />
+                    </PopoverContent>
+                  </Popover>
+                </div>
+
+                {/* Date To */}
+                <div className="space-y-2">
+                  <Label>Date To</Label>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className={cn(
+                          'w-full justify-start text-left font-normal',
+                          !dateTo && 'text-muted-foreground'
+                        )}
+                      >
+                        <CalendarIcon className="mr-2 h-4 w-4" />
+                        {dateTo ? format(dateTo, 'PPP') : 'Pick a date'}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <Calendar
+                        mode="single"
+                        selected={dateTo}
+                        onSelect={handleDateToChange}
+                      />
+                    </PopoverContent>
+                  </Popover>
+                </div>
+
+                {/* Clear Filters Button */}
+                <div className="flex items-end">
+                  <Button
+                    variant="ghost"
+                    onClick={handleClearFilters}
+                    disabled={!hasActiveFilters}
+                    className="w-full"
+                  >
+                    <X className="mr-2 h-4 w-4" />
+                    Clear All Filters
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -301,15 +430,10 @@ export function AuditLogsContent() {
           {!isLoading && !error && auditLogs.length === 0 && (
             <div className="flex flex-col items-center justify-center py-12">
               <p className="text-muted-foreground">No audit logs found</p>
-              {(search || selectedAction !== 'all' || selectedModule !== 'all') && (
+              {hasActiveFilters && (
                 <Button
                   variant="link"
-                  onClick={() => {
-                    setSearch('');
-                    setSelectedAction('all');
-                    setSelectedModule('all');
-                    setPage(1);
-                  }}
+                  onClick={handleClearFilters}
                 >
                   Clear filters
                 </Button>
@@ -384,33 +508,60 @@ export function AuditLogsContent() {
               </div>
 
               {/* Pagination */}
-              <div className="flex items-center justify-between border-t px-4 py-3">
-                <p className="text-sm text-muted-foreground">
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-4 border-t px-4 py-4">
+                {/* Left: Row info */}
+                <div className="text-sm text-muted-foreground">
                   Showing {((meta.page - 1) * meta.limit) + 1} to{' '}
-                  {Math.min(meta.page * meta.limit, meta.total)} of {meta.total} entries
-                </p>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handlePreviousPage}
-                    disabled={!meta.hasPreviousPage}
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                    Previous
-                  </Button>
-                  <span className="text-sm text-muted-foreground">
-                    Page {meta.page} of {meta.totalPages}
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleNextPage}
-                    disabled={!meta.hasNextPage}
-                  >
-                    Next
-                    <ChevronRight className="h-4 w-4" />
-                  </Button>
+                  {Math.min(meta.page * meta.limit, meta.total)} of {meta.total} results
+                </div>
+
+                {/* Right: Controls */}
+                <div className="flex items-center gap-6">
+                  {/* Rows per page */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-muted-foreground">Rows per page</span>
+                    <Select value={rowsPerPage.toString()} onValueChange={handleRowsPerPageChange}>
+                      <SelectTrigger className="h-8 w-[70px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent side="top">
+                        {ROWS_PER_PAGE_OPTIONS.map((option) => (
+                          <SelectItem key={option} value={option.toString()}>
+                            {option}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Navigation */}
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-1"
+                      onClick={handlePreviousPage}
+                      disabled={!meta.hasPreviousPage}
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                      <span>Previous</span>
+                    </Button>
+
+                    <div className="text-sm font-medium">
+                      Page {meta.page} of {meta.totalPages}
+                    </div>
+
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-1"
+                      onClick={handleNextPage}
+                      disabled={!meta.hasNextPage}
+                    >
+                      <span>Next</span>
+                      <ChevronRight className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </div>
               </div>
             </>

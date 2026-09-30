@@ -76,7 +76,7 @@ export function OperationsFilters({
   const hasActiveFilters = Object.values(filters).some((v) => v !== undefined && v !== '');
 
   return (
-    <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-card p-3">
+    <div className="flex flex-wrap items-end gap-3 rounded-lg border bg-card p-4">
       {/* Customer Filter */}
       <div className="flex flex-col gap-1">
         <label className="text-xs font-medium text-muted-foreground">Customer</label>
@@ -88,7 +88,7 @@ export function OperationsFilters({
           <SelectTrigger className="w-[180px]">
             <SelectValue placeholder="All Customers" />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent className="max-h-[300px]">
             <SelectItem value="">All Customers</SelectItem>
             {filterOptions.customers.map((option) => (
               <SelectItem key={option.value} value={option.value}>
@@ -110,7 +110,7 @@ export function OperationsFilters({
           <SelectTrigger className="w-[180px]">
             <SelectValue placeholder="All Products" />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent className="max-h-[300px]">
             <SelectItem value="">All Products</SelectItem>
             {filterOptions.products.map((option) => (
               <SelectItem key={option.value} value={option.value}>
@@ -132,7 +132,7 @@ export function OperationsFilters({
           <SelectTrigger className="w-[150px]">
             <SelectValue placeholder="All Statuses" />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent className="max-h-[300px]">
             <SelectItem value="">All Statuses</SelectItem>
             {STATUS_OPTIONS.map((option) => (
               <SelectItem key={option.value} value={option.value}>
@@ -154,7 +154,7 @@ export function OperationsFilters({
           <SelectTrigger className="w-[150px]">
             <SelectValue placeholder="All Orders" />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent className="max-h-[300px]">
             <SelectItem value="">All Orders</SelectItem>
             {filterOptions.salesOrders.map((option) => (
               <SelectItem key={option.value} value={option.value}>
@@ -176,53 +176,9 @@ export function OperationsFilters({
           <SelectTrigger className="w-[150px]">
             <SelectValue placeholder="All POs" />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent className="max-h-[300px]">
             <SelectItem value="">All POs</SelectItem>
             {filterOptions.customerPoNumbers.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      {/* 🆕 NEW: Fulfillment Source Filter */}
-      <div className="flex flex-col gap-1">
-        <label className="text-xs font-medium text-muted-foreground">Fulfillment Source</label>
-        <Select
-          value={filters.fulfillmentSource || ''}
-          onValueChange={(value) => handleFilterChange('fulfillmentSource', value || undefined)}
-          disabled={isLoading}
-        >
-          <SelectTrigger className="w-[180px]">
-            <SelectValue placeholder="All Sources" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="">All Sources</SelectItem>
-            {filterOptions.fulfillmentSources?.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      {/* 🆕 NEW: Platinum Dealer Filter */}
-      <div className="flex flex-col gap-1">
-        <label className="text-xs font-medium text-muted-foreground">Platinum Dealer</label>
-        <Select
-          value={filters.platinumDealerId || ''}
-          onValueChange={(value) => handleFilterChange('platinumDealerId', value || undefined)}
-          disabled={isLoading}
-        >
-          <SelectTrigger className="w-[180px]">
-            <SelectValue placeholder="All Dealers" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="">All Dealers</SelectItem>
-            {filterOptions.dealers?.map((option) => (
               <SelectItem key={option.value} value={option.value}>
                 {option.label}
               </SelectItem>
@@ -234,15 +190,15 @@ export function OperationsFilters({
       {/* Clear Filters Button */}
       {hasActiveFilters && (
         <div className="flex flex-col gap-1">
-          <label className="text-xs font-medium text-transparent">Clear</label>
+          <label className="text-xs font-medium text-transparent select-none">Clear</label>
           <Button
-            variant="ghost"
+            variant="outline"
             size="sm"
             onClick={handleClearFilters}
-            className="h-9 px-3"
+            className="h-9 px-3 hover:bg-destructive/10 hover:text-destructive hover:border-destructive"
           >
             <X className="h-4 w-4 mr-1" />
-            Clear
+            Clear Filters
           </Button>
         </div>
       )}

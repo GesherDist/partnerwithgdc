@@ -954,12 +954,15 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
       eta_to_port,
       eta_port_tracking,
       customer_expected_delivery,
+      status,
       load_status,
       action_required,
       is_delayed,
       estimated_arrival,
       sales_order_id,
+      purchase_order_id,
       lfd_date,
+      ship_to_name,
       ship_to_address_street,
       ship_to_address_city,
       ship_to_address_state,
@@ -979,6 +982,19 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
             platinum_dealer:platinum_dealers(dealer_name),
             dealer_location:platinum_dealer_locations(location_name)
           )
+        )
+      ),
+      purchase_orders(
+        id,
+        po_number,
+        sales_order_id,
+        sales_orders(
+          id,
+          order_number,
+          customer_po_number,
+          requested_delivery_date,
+          customer_id,
+          customers(id, name)
         )
       )
     `)
@@ -1018,27 +1034,39 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
 
   shipments?.forEach((s) => {
     const salesOrderData = toOne(s.sales_orders);
+    const purchaseOrderData = toOne(s.purchase_orders);
+
+    // For shipments linked to PO (but not direct SO), try to get SO from PO
+    const poLinkedSO = purchaseOrderData?.sales_orders ? toOne(purchaseOrderData.sales_orders) : null;
+
+    // Customer resolution order: Direct SO > PO → SO > ship_to_name (warehouse location) > Unknown
+    const finalSO = salesOrderData || poLinkedSO;
+    const customerName = toOne(finalSO?.customers)?.name || s.ship_to_name || 'Unknown';
+
+    // PO Number resolution: SO customer PO > PO number (for unallocated) > N/A
+    const customerPoNumber = finalSO?.customer_po_number || purchaseOrderData?.po_number || 'N/A';
 
     // Note: product_source column removed in migration 123
     // All shipments are included now (no warehouse/dropship distinction)
 
     // Apply filters on related sales order data
-    if (filters?.customerId && salesOrderData?.customer_id !== filters.customerId) {
+    if (filters?.customerId && finalSO?.customer_id !== filters.customerId) {
       return;
     }
-    if (filters?.customerPoNumber && salesOrderData?.customer_po_number !== filters.customerPoNumber) {
+    if (filters?.customerPoNumber && customerPoNumber !== filters.customerPoNumber) {
       return;
     }
 
     // Priority: eta_port_tracking (from shipping email) > eta_to_port (manual) > estimated_arrival
     const etaDate = s.eta_port_tracking || s.eta_to_port || s.estimated_arrival;
     const etaPort = etaDate ? new Date(etaDate) : null;
-    const customerDueDate = s.customer_expected_delivery || salesOrderData?.requested_delivery_date;
+    const customerDueDate = s.customer_expected_delivery || finalSO?.requested_delivery_date;
     const customerDue = customerDueDate ? new Date(customerDueDate) : null;
 
     const isThisWeek = etaPort ? (etaPort >= now && etaPort <= next7Days) : false;
     const isOverdue = s.is_delayed || (customerDue ? customerDue < now : false);
     const status = s.load_status as string;
+    const shipmentStatus = s.status as string;
     const isActive = status === 'open' || status === 'in_transit' || !status;
 
     // LFD (Last Free Day) Alert calculations
@@ -1052,11 +1080,16 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
     // LFD Approaching: LFD is within 3 days (but not critical)
     const isLFDApproaching = lfdDate ? (lfdDate > tomorrow && lfdDate <= in3Days) : false;
 
+    // Check if shipment is delivered (either status column)
+    // status = shipment_status enum (pending, in_transit, delivered, failed)
+    // load_status = load_status enum (available, sold, open, hold, in_transit, invoiced)
+    const isDelivered = shipmentStatus === 'delivered' || status === 'invoiced';
+
     // Delay Detection:
     // 1. Manual flag: is_delayed = true (set by AI from Seaair emails or manually)
-    // 2. Auto-detect: ETA passed but status is not 'delivered'
+    // 2. Auto-detect: ETA passed but shipment is not delivered
     const isManuallyDelayed = s.is_delayed === true;
-    const isAutoDelayed = etaPort && etaPort < now && status !== 'delivered';
+    const isAutoDelayed = etaPort && etaPort < now && !isDelivered;
     const isDelayed = isManuallyDelayed || isAutoDelayed;
 
     // If status filter is applied, include all matching items
@@ -1069,8 +1102,14 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
     const hasLFDAlert = isLFDCritical || isLFDApproaching;
     const shouldIncludeFinal = shouldInclude || hasLFDAlert || isDelayed;
 
-    if (shouldIncludeFinal) {
+    // Exclude delivered shipments from "Immediate Attention" section
+    // EXCEPT if user specifically selects "DELIVERED" status filter
+    const shouldShowDelivered = filters?.status === 'DELIVERED';
+    const shouldExcludeDelivered = isDelivered && !shouldShowDelivered;
+
+    if (shouldIncludeFinal && !shouldExcludeDelivered) {
       // 🆕 Extract fulfillment allocation data
+      // Only available from direct sales_orders, not from PO → SO (since PO query doesn't include items)
       const soItems = salesOrderData?.sales_order_items as Array<{
         fulfillment_allocations?: Array<{
           fulfillment_source: string;
@@ -1084,9 +1123,9 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
 
       result.push({
         id: s.id,
-        loadNumber: salesOrderData?.order_number || s.shipment_number || 'N/A',
-        customer: toOne(salesOrderData?.customers)?.name || 'Unknown',
-        po: salesOrderData?.customer_po_number || 'N/A',
+        loadNumber: finalSO?.order_number || s.shipment_number || 'N/A',
+        customer: customerName,
+        po: customerPoNumber,
         qty: s.total_qty || 0,
         etaPort: etaDate,
         customerEtaDue: customerDueDate,
@@ -1863,6 +1902,7 @@ export async function getGDCInventoryByOrderSeries(
       sales_orders (
         id,
         order_number,
+        status,
         customer_id,
         customer_po_number,
         eta_to_us_port,
@@ -1932,6 +1972,7 @@ export async function getGDCInventoryByOrderSeries(
     `)
     .eq('order_series', orderSeries)
     .neq('status', 'cancelled')
+    .neq('status', 'delivered')
     .is('deleted_at', null)
     .order('created_at', { ascending: false });
 
@@ -1987,6 +2028,7 @@ export async function getGDCInventoryByOrderSeries(
           fulfillment_source,
           quantity,
           status,
+          location:locations(name),
           platinum_dealer:platinum_dealers(dealer_name, code),
           dealer_location:platinum_dealer_locations(location_name)
         )
@@ -2025,6 +2067,7 @@ export async function getGDCInventoryByOrderSeries(
           fulfillment_source,
           quantity,
           status,
+          location:locations(name),
           platinum_dealer:platinum_dealers(dealer_name, code),
           dealer_location:platinum_dealer_locations(location_name)
         )
@@ -2042,13 +2085,19 @@ export async function getGDCInventoryByOrderSeries(
   }
 
   // ============================================
-  // QUERY 3: Get Shipments for these POs (for ETA dates)
+  // QUERY 3: Get Shipments for these POs and SOs (for ETA dates and status)
   // ============================================
-  const { data: shipments } = await supabase
+  const soIdsForShipments = salesOrdersWithoutPOs?.map(so => so.id) || [];
+
+  // Fetch shipments for both POs and SOs
+  const shipmentsForPOs = poIds.length > 0 ? await supabase
     .from('shipments')
     .select(`
       id,
       purchase_order_id,
+      sales_order_id,
+      status,
+      load_status,
       eta_to_port,
       confirmed_eta,
       customer_expected_delivery,
@@ -2056,15 +2105,39 @@ export async function getGDCInventoryByOrderSeries(
       qty_delivered,
       outstanding_qty
     `)
-    .in('purchase_order_id', poIds);
+    .in('purchase_order_id', poIds) : { data: [] };
 
-  console.log(`[GDC] Found ${shipments?.length || 0} Shipments for POs`);
+  const shipmentsForSOs = soIdsForShipments.length > 0 ? await supabase
+    .from('shipments')
+    .select(`
+      id,
+      purchase_order_id,
+      sales_order_id,
+      status,
+      load_status,
+      eta_to_port,
+      confirmed_eta,
+      customer_expected_delivery,
+      actual_arrival,
+      qty_delivered,
+      outstanding_qty
+    `)
+    .in('sales_order_id', soIdsForShipments) : { data: [] };
 
-  // Map shipments by purchase_order_id
+  const shipments = [...(shipmentsForPOs.data || []), ...(shipmentsForSOs.data || [])];
+
+  console.log(`[GDC] Found ${shipments.length} Shipments (${shipmentsForPOs.data?.length || 0} for POs, ${shipmentsForSOs.data?.length || 0} for SOs)`);
+
+  // Map shipments by purchase_order_id and sales_order_id
   const shipmentByPO = new Map<string, any>();
-  shipments?.forEach((shipment) => {
+  const shipmentBySO = new Map<string, any>();
+
+  shipments.forEach((shipment) => {
     if (shipment.purchase_order_id && !shipmentByPO.has(shipment.purchase_order_id)) {
       shipmentByPO.set(shipment.purchase_order_id, shipment);
+    }
+    if (shipment.sales_order_id && !shipmentBySO.has(shipment.sales_order_id)) {
+      shipmentBySO.set(shipment.sales_order_id, shipment);
     }
   });
 
@@ -2108,12 +2181,38 @@ export async function getGDCInventoryByOrderSeries(
 
   purchaseOrders.forEach((po, index) => {
     const linkedSO = po.sales_orders ? toOne(po.sales_orders) : null;
+
+    // Get shipment data for this PO (early fetch for filtering)
+    const shipment = shipmentByPO.get(po.id);
+
+    // Skip delivered shipments based on filter:
+    // - If status filter = "DELIVERED" → show only delivered
+    // - If status filter = undefined ("All Statuses") → show all (including delivered)
+    // - If status filter = other status → hide delivered
+    const isDelivered = linkedSO?.status === 'delivered' || shipment?.status === 'delivered';
+
+    if (filters?.status) {
+      // Status filter is active
+      if (filters.status === 'DELIVERED' && !isDelivered) {
+        return; // Skip non-delivered when filter is DELIVERED
+      } else if (filters.status !== 'DELIVERED' && isDelivered) {
+        return; // Skip delivered when filter is other status
+      }
+    }
+    // If no status filter → show all (including delivered)
+
     const customerData = linkedSO?.customers ? toOne(linkedSO.customers) : null;
     const warehouseData = (po as any).locations ? toOne((po as any).locations) : null;
     const isAllocated = !!linkedSO;
 
     const poItemsList = itemsByPO.get(po.id) || [];
     const totalQty = poItemsList.reduce((sum, item) => sum + item.qty, 0);
+
+    // Skip POs with no items when product filter is active
+    // (means this PO doesn't have the filtered product)
+    if (filters?.productId && poItemsList.length === 0) {
+      return;
+    }
 
     // Build address from SO if allocated
     const addressParts = linkedSO ? [
@@ -2153,6 +2252,7 @@ export async function getGDCInventoryByOrderSeries(
       fulfillment_source: string;
       quantity: number;
       status: string;
+      location?: { name: string } | { name: string }[];
       platinum_dealer?: { dealer_name: string; code: string } | { dealer_name: string; code: string }[];
       dealer_location?: { location_name: string } | { location_name: string }[];
     }> | undefined;
@@ -2161,18 +2261,51 @@ export async function getGDCInventoryByOrderSeries(
     // Get supplier name for this PO
     const poSupplierName = supplierNameByPO.get(po.id) || null;
 
-    // Map allocations to FulfillmentAllocationDetail array
-    const allocationDetails: import('../types').FulfillmentAllocationDetail[] | undefined = allocationsRaw?.map(alloc => ({
-      source: alloc.fulfillment_source as import('../types').FulfillmentSource,
-      quantity: alloc.quantity,
-      status: alloc.status as import('../types').AllocationStatus,
-      locationOrDealer: toOne(alloc.platinum_dealer)?.dealer_name || toOne(alloc.dealer_location)?.location_name || null,
-      // For 'direct' source, use PO supplier name; for others, use dealer/location name
-      supplierName: alloc.fulfillment_source === 'direct' ? poSupplierName : (toOne(alloc.platinum_dealer)?.dealer_name || null),
-    }));
+    // DEBUG: Log allocations raw data for SO2600023
+    if (linkedSO?.order_number === 'SO2600023') {
+      console.log('[DEBUG] SO2600023 Allocations Raw:', JSON.stringify(allocationsRaw, null, 2));
+    }
 
-    // Get shipment data for this PO (for ETA dates)
-    const shipment = shipmentByPO.get(po.id);
+    // Map allocations to FulfillmentAllocationDetail array
+    const allocationDetails: import('../types').FulfillmentAllocationDetail[] | undefined = allocationsRaw?.map(alloc => {
+      const locationName = toOne(alloc.location)?.name;
+      const dealerName = toOne(alloc.platinum_dealer)?.dealer_name;
+      const dealerLocationName = toOne(alloc.dealer_location)?.location_name;
+      const finalLocation = locationName || dealerName || dealerLocationName || null;
+
+      // DEBUG: Log mapping for SO2600023
+      if (linkedSO?.order_number === 'SO2600023') {
+        console.log('[DEBUG] Allocation mapping:', {
+          source: alloc.fulfillment_source,
+          locationName,
+          dealerName,
+          dealerLocationName,
+          finalLocation,
+        });
+      }
+
+      return {
+        source: alloc.fulfillment_source as import('../types').FulfillmentSource,
+        quantity: alloc.quantity,
+        status: alloc.status as import('../types').AllocationStatus,
+        locationOrDealer: finalLocation,
+        // For 'direct' source, use PO supplier name; for others, use dealer/location name
+        supplierName: alloc.fulfillment_source === 'direct' ? poSupplierName : (dealerName || null),
+      };
+    });
+
+    // Determine which status to show:
+    // 1. If shipment exists and is delivered → show "delivered"
+    // 2. If shipment exists and is in_transit → show "in_transit"
+    // 3. Otherwise → show PO status (received, confirmed, etc.)
+    let displayStatus = po.status;
+    if (shipment?.status === 'delivered') {
+      displayStatus = 'delivered';
+    } else if (shipment?.status === 'in_transit') {
+      displayStatus = 'in_transit';
+    } else if (shipment?.status === 'pending') {
+      displayStatus = 'pending';
+    }
 
     result.push({
       id: po.id, // Always use PO ID (not SO ID)
@@ -2198,7 +2331,7 @@ export async function getGDCInventoryByOrderSeries(
       invoiceAmount: linkedSO?.grand_total ? linkedSO.grand_total / 100 : 0,
       deliveryAddress: addressParts.join(', '),
       expectedDelivery: shipment?.customer_expected_delivery || po.expected_delivery_date || linkedSO?.requested_delivery_date || null,
-      status: po.status, // Always use PO status (draft, sent, confirmed, partial, received, cancelled)
+      status: displayStatus, // Shipment status (if exists) or PO status
       actionRequired: po.internal_notes || '',
       notes: '',
       isUnallocated: !isAllocated,
@@ -2242,8 +2375,31 @@ export async function getGDCInventoryByOrderSeries(
 
   salesOrdersWithoutPOs?.forEach((so, index) => {
     const customerData = so.customers ? toOne(so.customers) : null;
+
+    // Get shipment data for this SO (for filtering and status)
+    const shipment = shipmentBySO.get(so.id);
+
+    // Skip delivered shipments based on filter (same logic as POs):
+    const isDelivered = so.status === 'delivered' || shipment?.status === 'delivered';
+
+    if (filters?.status) {
+      // Status filter is active
+      if (filters.status === 'DELIVERED' && !isDelivered) {
+        return; // Skip non-delivered when filter is DELIVERED
+      } else if (filters.status !== 'DELIVERED' && isDelivered) {
+        return; // Skip delivered when filter is other status
+      }
+    }
+    // If no status filter → show all (including delivered)
+
     const soItemsList = itemsBySO.get(so.id) || [];
     const totalQty = soItemsList.reduce((sum, item) => sum + item.qty, 0);
+
+    // Skip SOs with no items when product filter is active
+    // (means this SO doesn't have the filtered product)
+    if (filters?.productId && soItemsList.length === 0) {
+      return;
+    }
 
     // Build address
     const addressParts = [
@@ -2269,6 +2425,7 @@ export async function getGDCInventoryByOrderSeries(
       fulfillment_source: string;
       quantity: number;
       status: string;
+      location?: { name: string } | { name: string }[];
       platinum_dealer?: { dealer_name: string; code: string } | { dealer_name: string; code: string }[];
       dealer_location?: { location_name: string } | { location_name: string }[];
     }> | undefined;
@@ -2280,11 +2437,24 @@ export async function getGDCInventoryByOrderSeries(
       source: alloc.fulfillment_source as import('../types').FulfillmentSource,
       quantity: alloc.quantity,
       status: alloc.status as import('../types').AllocationStatus,
-      locationOrDealer: toOne(alloc.platinum_dealer)?.dealer_name || toOne(alloc.dealer_location)?.location_name || null,
+      locationOrDealer: toOne(alloc.location)?.name || toOne(alloc.platinum_dealer)?.dealer_name || toOne(alloc.dealer_location)?.location_name || null,
       // For 'direct' source without PO, we don't have supplier name yet
       // For dealer sources, use dealer name
       supplierName: toOne(alloc.platinum_dealer)?.dealer_name || null,
     }));
+
+    // Determine which status to show (same logic as POs):
+    // 1. If shipment exists and is delivered → show "delivered"
+    // 2. If shipment exists and is in_transit → show "in_transit"
+    // 3. Otherwise → show SO status
+    let displayStatus = so.status;
+    if (shipment?.status === 'delivered') {
+      displayStatus = 'delivered';
+    } else if (shipment?.status === 'in_transit') {
+      displayStatus = 'in_transit';
+    } else if (shipment?.status === 'pending') {
+      displayStatus = 'pending';
+    }
 
     result.push({
       id: so.id,
@@ -2302,15 +2472,15 @@ export async function getGDCInventoryByOrderSeries(
       totalQty,
       customer: customerName,
       supplierName: null, // No supplier since no PO
-      etaToUsPort: so.eta_to_us_port || null,
-      confirmedEta: so.confirmed_eta || null,
-      actualDeliveryDate: so.actual_delivery_date || null,
-      qtyDelivered: so.qty_delivered || 0,
-      outstandingQty: so.outstanding_qty || totalQty,
+      etaToUsPort: shipment?.eta_to_port || so.eta_to_us_port || null,
+      confirmedEta: shipment?.confirmed_eta || so.confirmed_eta || null,
+      actualDeliveryDate: shipment?.actual_arrival || so.actual_delivery_date || null,
+      qtyDelivered: shipment?.qty_delivered || so.qty_delivered || 0,
+      outstandingQty: shipment?.outstanding_qty || so.outstanding_qty || totalQty,
       invoiceAmount: so.grand_total ? so.grand_total / 100 : 0,
       deliveryAddress: addressParts.join(', '),
-      expectedDelivery: so.requested_delivery_date || null,
-      status: so.status, // Use SO status
+      expectedDelivery: shipment?.customer_expected_delivery || so.requested_delivery_date || null,
+      status: displayStatus, // Shipment status (if exists) or SO status
       actionRequired: so.internal_notes || '',
       notes: '',
       isUnallocated: false, // Always allocated (has customer)

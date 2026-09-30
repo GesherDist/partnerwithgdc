@@ -321,8 +321,8 @@ export function ImmediateAttentionTable({
                     )}
                   </button>
                 </TableHead>
-                <TableHead className="relative z-10">Fulfillment Source</TableHead> {/* 🆕 NEW */}
-                <TableHead className="relative z-10">Allocated To</TableHead> {/* 🆕 NEW */}
+                <TableHead className="relative z-10">Fulfillment Source</TableHead>
+                <TableHead className="relative z-10">Allocated To</TableHead>
                 <TableHead className="relative z-10">Action Required / Notes</TableHead>
                 <TableHead className="relative z-10 text-right">Actions</TableHead>
               </TableRow>
@@ -409,7 +409,6 @@ export function ImmediateAttentionTable({
                         )}
                       </TableCell>
                       <TableCell><StatusBadge status={item.status} isOverdue={item.isOverdue} isDelayed={item.isDelayed} /></TableCell>
-                      {/* 🆕 NEW: Fulfillment Source */}
                       <TableCell>
                         {item.fulfillmentSource ? (
                           <Badge variant="outline" className="text-xs">
@@ -422,7 +421,6 @@ export function ImmediateAttentionTable({
                           <span className="text-muted-foreground">-</span>
                         )}
                       </TableCell>
-                      {/* 🆕 NEW: Allocated To */}
                       <TableCell>
                         {item.allocatedToDealerName ? (
                           <div>

@@ -16,6 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 // ============================================
 // TYPES
@@ -36,7 +37,7 @@ interface DataTablePaginationProps<TData> {
 
 export function DataTablePagination<TData>({
   table,
-  pageSizeOptions = [10, 20, 50, 100],
+  pageSizeOptions = [10, 25, 50, 100],
   showSelectedCount = false,
 }: DataTablePaginationProps<TData>) {
   const pageCount = table.getPageCount();
@@ -55,24 +56,24 @@ export function DataTablePagination<TData>({
   const hasDataOnCurrentPage = totalRows > 0 && startRow <= totalRows;
 
   return (
-    <div className="flex flex-col gap-4 px-2 sm:flex-row sm:items-center sm:justify-between">
-      {/* Row Info */}
-      <div className="flex items-center gap-4 text-sm text-muted-foreground">
+    <div className="flex flex-col gap-4 px-2 py-4 sm:flex-row sm:items-center sm:justify-between">
+      {/* Left: Row Info */}
+      <div className="text-sm text-muted-foreground">
         {showSelectedCount && selectedCount > 0 ? (
           <span>
             {selectedCount} of {totalRows} row(s) selected
           </span>
-        ) : (
+        ) : hasDataOnCurrentPage ? (
           <span>
-            {hasDataOnCurrentPage
-              ? `Showing ${startRow} to ${endRow} of ${totalRows} results`
-              : 'No results'}
+            Showing {startRow} to {endRow} of {totalRows} results
           </span>
+        ) : (
+          <span>No results</span>
         )}
       </div>
 
-      {/* Controls */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+      {/* Right: Controls */}
+      <div className="flex items-center gap-6">
         {/* Rows per page */}
         <div className="flex items-center gap-2">
           <span className="text-sm text-muted-foreground">Rows per page</span>
@@ -95,7 +96,7 @@ export function DataTablePagination<TData>({
 
         {/* Navigation Buttons */}
         <div className="flex items-center gap-2">
-          {/* Previous Page with Text */}
+          {/* Previous Button */}
           <Button
             variant="outline"
             size="sm"
@@ -103,28 +104,16 @@ export function DataTablePagination<TData>({
             onClick={() => table.previousPage()}
             disabled={!table.getCanPreviousPage()}
           >
-            <svg
-              className="h-4 w-4"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={2}
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M15.75 19.5L8.25 12l7.5-7.5"
-              />
-            </svg>
-            <span className="hidden sm:inline">Previous</span>
+            <ChevronLeft className="h-4 w-4" />
+            <span>Previous</span>
           </Button>
 
           {/* Page Info */}
-          <div className="flex items-center justify-center text-sm font-medium">
+          <div className="text-sm font-medium">
             Page {currentPage + 1} of {pageCount || 1}
           </div>
 
-          {/* Next Page with Text */}
+          {/* Next Button */}
           <Button
             variant="outline"
             size="sm"
@@ -132,20 +121,8 @@ export function DataTablePagination<TData>({
             onClick={() => table.nextPage()}
             disabled={!table.getCanNextPage()}
           >
-            <span className="hidden sm:inline">Next</span>
-            <svg
-              className="h-4 w-4"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={2}
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M8.25 4.5l7.5 7.5-7.5 7.5"
-              />
-            </svg>
+            <span>Next</span>
+            <ChevronRight className="h-4 w-4" />
           </Button>
         </div>
       </div>
