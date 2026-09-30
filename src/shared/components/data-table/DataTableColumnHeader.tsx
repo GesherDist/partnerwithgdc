@@ -9,14 +9,14 @@
 
 import { type Column } from '@tanstack/react-table';
 import { cn } from '@/shared/lib/utils';
-import { Button } from '@/components/ui/button';
+import { Button } from '@/shared/components/ui/button';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+} from '@/shared/components/ui/dropdown-menu';
 
 // ============================================
 // TYPES

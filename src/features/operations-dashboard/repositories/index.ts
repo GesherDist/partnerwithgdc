@@ -1898,6 +1898,7 @@ export async function getGDCInventoryByOrderSeries(
       order_series,
       sales_order_id,
       warehouse_id,
+      grand_total,
       created_at,
       sales_orders (
         id,
@@ -2328,7 +2329,9 @@ export async function getGDCInventoryByOrderSeries(
       actualDeliveryDate: shipment?.actual_arrival || linkedSO?.actual_delivery_date || null,
       qtyDelivered: shipment?.qty_delivered || linkedSO?.qty_delivered || 0,
       outstandingQty: shipment?.outstanding_qty || linkedSO?.outstanding_qty || totalQty,
-      invoiceAmount: linkedSO?.grand_total ? linkedSO.grand_total / 100 : 0,
+      invoiceAmount: linkedSO?.grand_total
+        ? linkedSO.grand_total / 100  // Customer invoice (for allocated POs)
+        : po.grand_total / 100 || 0,  // PO amount (for warehouse/unallocated POs)
       deliveryAddress: addressParts.join(', '),
       expectedDelivery: shipment?.customer_expected_delivery || po.expected_delivery_date || linkedSO?.requested_delivery_date || null,
       status: displayStatus, // Shipment status (if exists) or PO status

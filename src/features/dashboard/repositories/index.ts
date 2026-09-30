@@ -769,10 +769,20 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
   // Calculate YTD metrics
   const ytdRevenue = ytdOrders?.reduce((sum, o) => sum + (o.grand_total || 0), 0) || 0;
   const lastYearYtdRevenue = lastYearYtdOrders?.reduce((sum, o) => sum + (o.grand_total || 0), 0) || 0;
-  const ytdRevenueChange = lastYearYtdRevenue > 0 ? ((ytdRevenue - lastYearYtdRevenue) / lastYearYtdRevenue) * 100 : 0;
+
+  // STATIC COGS value to subtract from Revenue (YTD) - $337,680
+  const STATIC_COGS = 33768000; // $337,680 in cents
+
+  // Calculate Net Revenue (Revenue - Static COGS)
+  const ytdNetRevenue = ytdRevenue - STATIC_COGS;
+  const lastYearYtdNetRevenue = lastYearYtdRevenue - STATIC_COGS;
+
+  const ytdNetRevenueChange = lastYearYtdNetRevenue > 0 ? ((ytdNetRevenue - lastYearYtdNetRevenue) / lastYearYtdNetRevenue) * 100 : 0;
   const ytdUnitsChange = lastYearYtdUnits > 0 ? ((ytdUnits - lastYearYtdUnits) / lastYearYtdUnits) * 100 : 0;
 
-  // Calculate YTD Blended Margin (real data from products.base_cost)
+  // Calculate YTD Blended Margin (using ORIGINAL revenue $2.1M, NOT modified)
+  // Static COGS is NOT applied here - only to Revenue (YTD) card
+  // Uses ytdTotalRevenue (original) and ytdTotalCost (database COGS)
   const ytdBlendedMargin = ytdTotalRevenue > 0
     ? ((ytdTotalRevenue - ytdTotalCost) / ytdTotalRevenue) * 100
     : 0;
@@ -810,9 +820,9 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
     {
       id: 'revenue-ytd',
       title: 'Revenue (YTD)',
-      value: formatCurrency(ytdRevenue),
-      change: `${ytdRevenueChange >= 0 ? '+' : ''}${ytdRevenueChange.toFixed(1)}%`,
-      trend: ytdRevenueChange >= 0 ? 'up' : 'down',
+      value: formatCurrency(ytdNetRevenue),
+      change: `${ytdNetRevenueChange >= 0 ? '+' : ''}${ytdNetRevenueChange.toFixed(1)}%`,
+      trend: ytdNetRevenueChange >= 0 ? 'up' : 'down',
       icon: 'trending-up',
       color: 'bg-teal-500',
       subtitle: 'vs same period last year',
