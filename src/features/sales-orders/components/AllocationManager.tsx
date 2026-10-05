@@ -379,13 +379,15 @@ export function AllocationManager({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Allocation?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will delete the allocation and deallocate the inventory. This action cannot be undone.
-              {selectedAllocation?.status === 'pending' && (
-                <span className="block mt-2 text-sm text-muted-foreground">
-                  💡 <strong>Tip:</strong> To change the fulfillment source type, delete this allocation and create a new one with the desired type.
-                </span>
-              )}
+            <AlertDialogDescription asChild>
+              <div>
+                <span>This will delete the allocation and deallocate the inventory. This action cannot be undone.</span>
+                {selectedAllocation?.status === 'pending' && (
+                  <span className="block mt-2 text-sm text-muted-foreground">
+                    💡 <strong>Tip:</strong> To change the fulfillment source type, delete this allocation and create a new one with the desired type.
+                  </span>
+                )}
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

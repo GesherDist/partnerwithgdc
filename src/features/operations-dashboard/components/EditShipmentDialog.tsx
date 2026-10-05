@@ -67,25 +67,28 @@ interface EditShipmentDialogProps {
 
 // GDC 0 / Galileo/Supplier Orders statuses (from Jenny's Excel)
 const SUPPLIER_STATUS_OPTIONS: { value: ShipmentStatus; label: string; color: string }[] = [
-  { value: 'INVOICED', label: 'Invoiced', color: 'bg-emerald-100 text-emerald-800' },
   { value: 'OPEN', label: 'Open', color: 'bg-blue-100 text-blue-800' },
   { value: 'CLOSED', label: 'Closed', color: 'bg-gray-100 text-gray-800' },
   { value: 'HOLD', label: 'Hold', color: 'bg-orange-100 text-orange-800' },
   { value: 'IN_TRANSIT', label: 'In Transit', color: 'bg-yellow-100 text-yellow-800' },
   { value: 'NOT_INVOICED', label: 'Not Invoiced', color: 'bg-amber-100 text-amber-800' },
   { value: 'AVAILABLE', label: 'Available', color: 'bg-green-100 text-green-800' },
+  { value: 'INVOICED', label: 'Invoiced', color: 'bg-emerald-100 text-emerald-800' },
+  { value: 'SOLD', label: 'Sold', color: 'bg-purple-100 text-purple-800' },
+  { value: 'PO_NEEDED', label: 'PO Needed', color: 'bg-pink-100 text-pink-800' },
 ];
 
-// GDC 1 Inventory statuses (from Jenny's Excel - order matters)
+// GDC 1,2,3 Inventory statuses (from Jenny's Excel - order matters)
 const GDC1_STATUS_OPTIONS: { value: ShipmentStatus; label: string; color: string }[] = [
-  { value: 'AVAILABLE', label: 'Available', color: 'bg-green-100 text-green-800' },
   { value: 'NOT_INVOICED', label: 'Not Invoiced', color: 'bg-amber-100 text-amber-800' },
+  { value: 'INVOICED', label: 'Invoiced', color: 'bg-emerald-100 text-emerald-800' },
   { value: 'OPEN', label: 'Open', color: 'bg-blue-100 text-blue-800' },
   { value: 'PARTIALLY_PAID', label: 'Partially Paid', color: 'bg-cyan-100 text-cyan-800' },
   { value: 'PAID', label: 'Paid', color: 'bg-teal-100 text-teal-800' },
   { value: 'DISPUTED', label: 'Disputed', color: 'bg-red-100 text-red-800' },
   { value: 'IN_TRANSIT', label: 'In Transit', color: 'bg-yellow-100 text-yellow-800' },
   { value: 'PO_NEEDED', label: 'PO Needed', color: 'bg-pink-100 text-pink-800' },
+  { value: 'AVAILABLE', label: 'Available', color: 'bg-green-100 text-green-800' },
   { value: 'SOLD', label: 'Sold', color: 'bg-purple-100 text-purple-800' },
   { value: 'HOLD', label: 'Hold', color: 'bg-orange-100 text-orange-800' },
   { value: 'CLOSED', label: 'Closed', color: 'bg-gray-100 text-gray-800' },

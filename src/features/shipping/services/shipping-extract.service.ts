@@ -52,7 +52,9 @@ IMPORTANT CONTEXT:
 - These are emails between SEAIR Global (freight forwarder), Galileo (supplier in India), and Gesher Distribution (importer in USA)
 - Container numbers format: 4 letters + 7 digits (e.g., TCLU8042633, SEGU4010515, CMAU9623325)
 - MBL format: SEAOTB##### or similar shipping line formats
-- SO numbers format: Either SO-YYYY-NNNNN (e.g., SO-2026-00003) OR SO####### (e.g., SO2600012) - Gesher's Sales Order reference. Preserve the original format from email!
+- SO numbers format: C-SO-YYNNNNN (e.g., C-SO-2600064) for customer sales orders
+- Shipment/Load numbers: SOYYNNNNN (e.g., SO2600012) - Galileo container/load tracking numbers
+- Preserve the original format from email!
 
 CRITICAL - TRANSLOAD HANDLING:
 - Look for "NEW CONT#", "NEW CONTAINER", "new container" in subject or body
@@ -104,7 +106,7 @@ Return ONLY valid JSON in this exact format:
 {
   "containerNumber": "TCLU8042633",
   "mblNumber": "SEAOTB17624",
-  "soNumber": "SO-2026-00003",
+  "soNumber": "C-SO-2600064",
   "vesselName": "MSC VESSEL NAME",
   "voyageNumber": "ABC123",
   "etaPort": "2025-08-25",
@@ -266,9 +268,12 @@ function fallbackExtraction(
   // MBL number: Various formats
   const mblMatch = fullText.match(/\b(SEAOTB\d+|[A-Z]{6,}\d{5,})\b/i);
 
-  // SO number: SO-YYYY-NNNNN or SO####### format
-  // Examples: SO-2026-00003, SO2600028
-  const soMatch = fullText.match(/\b(SO-\d{4}-\d{5}|SO\d{7})\b/i);
+  // SO/Shipment number: Multiple formats
+  // - SO2600028 (Shipment/Load number from Galileo - SOYYNNNNN)
+  // - C-SO-2600064 (Customer Sales Order - C-SO-YYNNNNN)
+  // - C-SO-2026-00003 (Old expanded format for backward compatibility)
+  // - SO-2026-00003 (Very old format for backward compatibility)
+  const soMatch = fullText.match(/\b(C-SO-\d{2}\d{5}|C-SO-\d{4}-\d{5}|SO-\d{4}-\d{5}|SO\d{7})\b/i);
 
   // Dates: Various formats
   const datePattern = /\b(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4}|\w+ \d{1,2},? \d{4})\b/g;

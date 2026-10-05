@@ -383,13 +383,29 @@ export async function updateShipmentFromCmaCgm(
       }
     }
 
-    // Update last sync timestamp
+    // Calculate is_delayed field
+    // Get current shipment data to check ETA
     const supabase = createAdminClient();
+    const { data: shipmentData } = await supabase
+      .from('shipments')
+      .select('eta_port_tracking, eta_to_port, estimated_arrival')
+      .eq('id', shipmentId)
+      .single();
+
+    // Auto-detect delay: ETA passed but shipment not delivered
+    const now = new Date();
+    const etaDate = shipmentData?.eta_port_tracking || shipmentData?.eta_to_port || shipmentData?.estimated_arrival;
+    const eta = etaDate ? new Date(etaDate) : null;
+    const isDelivered = mappedStatus.trackingStatus === 'delivered';
+    const isDelayed = eta && eta < now && !isDelivered;
+
+    // Update last sync timestamp and is_delayed field
     await supabase
       .from('shipments')
       .update({
         cma_cgm_last_sync: new Date().toISOString(),
         cma_cgm_last_event_code: mappedStatus.eventCode,
+        is_delayed: isDelayed || false, // Auto-update delayed status
         updated_at: new Date().toISOString(),
       })
       .eq('id', shipmentId);

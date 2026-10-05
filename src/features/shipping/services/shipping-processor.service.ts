@@ -169,7 +169,22 @@ export async function processShippingEmail(
       // Step 5b: Update shipment load_status for Operations Dashboard (with regression protection)
       await updateShipmentLoadStatus(shipment.id, extraction.detectedStatus);
 
-      // Step 5c: Send notification for shipment update (non-blocking)
+      // Step 5c: Auto-update is_delayed field based on ETA and delivery status
+      const now = new Date();
+      const eta = extraction.etaPort ? new Date(extraction.etaPort) : null;
+      const isDelivered = extraction.detectedStatus === 'delivered';
+      const isDelayed = eta && eta < now && !isDelivered;
+
+      if (isDelayed !== undefined) {
+        const { createAdminClient } = await import('@/shared/lib/supabase/admin');
+        const supabase = createAdminClient();
+        await supabase
+          .from('shipments')
+          .update({ is_delayed: isDelayed || false })
+          .eq('id', shipment.id);
+      }
+
+      // Step 5d: Send notification for shipment update (non-blocking)
       try {
         const { notificationService } = await import('@/features/notifications/services/notification.service');
         notificationService.notifyShipmentUpdate({
@@ -370,6 +385,21 @@ export async function reprocessShippingEmail(
       has_issue: extraction.hasIssue,
       issue_type: extraction.issueType || undefined,
     });
+
+    // Auto-update is_delayed field based on ETA and delivery status
+    const now = new Date();
+    const eta = extraction.etaPort ? new Date(extraction.etaPort) : null;
+    const isDelivered = extraction.detectedStatus === 'delivered';
+    const isDelayed = eta && eta < now && !isDelivered;
+
+    if (isDelayed !== undefined) {
+      const { createAdminClient } = await import('@/shared/lib/supabase/admin');
+      const supabase = createAdminClient();
+      await supabase
+        .from('shipments')
+        .update({ is_delayed: isDelayed || false })
+        .eq('id', shipment.id);
+    }
 
     // Link email to shipment
     await shippingRepo.linkShippingEmailToShipment(shippingEmailId, shipment.id);

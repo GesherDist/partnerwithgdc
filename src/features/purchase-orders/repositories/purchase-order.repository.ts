@@ -338,6 +338,20 @@ class PurchaseOrderRepositoryImpl {
     const poNumber = data.poNumber?.trim() || await this.getNextPONumber();
     const totals = calculatePOTotals(data.items, 0);
 
+    // If linked to Sales Order, fetch order_series from SO
+    let orderSeries = data.orderSeries || null;
+    if (data.salesOrderId && !orderSeries) {
+      const { data: soData } = await db
+        .from('sales_orders')
+        .select('order_series')
+        .eq('id', data.salesOrderId)
+        .single();
+
+      if (soData?.order_series) {
+        orderSeries = soData.order_series;
+      }
+    }
+
     const { data: po, error: poError } = await db
       .from('purchase_orders')
       .insert({
@@ -348,7 +362,7 @@ class PurchaseOrderRepositoryImpl {
         warehouse_id: data.warehouseId || null,
         currency_code: data.currencyCode || 'USD',
         status: data.status || 'draft',
-        order_series: data.orderSeries || null,  // For unallocated POs
+        order_series: orderSeries,  // Copy from SO if linked, else use provided value
         vendor_address_street: data.vendorAddress.street,
         vendor_address_city: data.vendorAddress.city,
         vendor_address_state: data.vendorAddress.state,

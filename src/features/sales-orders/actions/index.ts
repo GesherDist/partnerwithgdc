@@ -561,7 +561,7 @@ export async function confirmSalesOrder(id: string): Promise<ActionResult<SalesO
     .select(`
       id,
       customer_qty,
-      allocations:fulfillment_allocations(id, status, quantity)
+      allocations:fulfillment_allocations(id, status, quantity, fulfillment_source, purchase_order_id)
     `)
     .eq('sales_order_id', id);
 
@@ -577,8 +577,28 @@ export async function confirmSalesOrder(id: string): Promise<ActionResult<SalesO
         };
       }
 
-      // Check all allocations are 'allocated' status
-      const nonAllocated = allocations.filter((a: any) => a.status !== 'allocated');
+      // Check all allocations are 'allocated' status OR have PO already linked (for manufacturer direct)
+      const nonAllocated = allocations.filter((a: any) => {
+        // Allocation is valid if:
+        // 1. Status is 'allocated', OR
+        // 2. It's manufacturer direct AND has purchase_order_id (PO already linked)
+        const isAllocated = a.status === 'allocated';
+        const hasPOLinked = a.fulfillment_source === 'direct' && a.purchase_order_id;
+
+        // Debug logging
+        if (!isAllocated && !hasPOLinked) {
+          console.log('❌ [confirmSalesOrder] Allocation NOT ready:', {
+            id: a.id,
+            status: a.status,
+            fulfillment_source: a.fulfillment_source,
+            purchase_order_id: a.purchase_order_id,
+            isAllocated,
+            hasPOLinked,
+          });
+        }
+
+        return !isAllocated && !hasPOLinked;
+      });
       if (nonAllocated.length > 0) {
         return {
           success: false,
@@ -637,16 +657,57 @@ export async function confirmSalesOrder(id: string): Promise<ActionResult<SalesO
       const hasDirectAllocations = directAllocations && directAllocations.length > 0;
 
       if (hasDirectAllocations) {
-        console.log('✅ [confirmSalesOrder] Direct allocations found! Creating PO...');
-        try {
-          await createPurchaseOrderFromSalesOrder(id, auth.user.id);
-          console.log('✅ [confirmSalesOrder] Purchase Order created successfully for Sales Order:', id);
-        } catch (error) {
-          console.error('❌ [confirmSalesOrder] Failed to auto-create PO for Sales Order:', id, error);
-          console.error('❌ [confirmSalesOrder] Error details:', error instanceof Error ? error.message : error);
-          console.error('❌ [confirmSalesOrder] Error stack:', error instanceof Error ? error.stack : 'no stack');
-          // Don't fail the confirmation if PO creation fails
-          // The PO can be created manually later if needed
+        console.log('✅ [confirmSalesOrder] Direct allocations found! Checking for linked POs...');
+
+        // FIX: Check if allocations already have POs linked (Jenny's workflow)
+        // If PO already exists, update it with sales_order_id instead of creating duplicate
+        const { data: allocsWithDetails } = await db
+          .from('fulfillment_allocations')
+          .select('id, purchase_order_id')
+          .in('id', directAllocations.map((a: any) => a.id));
+
+        const linkedPOIds = allocsWithDetails
+          ?.filter((a: any) => a.purchase_order_id !== null)
+          .map((a: any) => a.purchase_order_id) || [];
+
+        const hasLinkedPO = linkedPOIds.length > 0;
+
+        if (hasLinkedPO) {
+          // FIX: PO already linked - update existing PO(s) with sales_order_id
+          console.log(`ℹ️ [confirmSalesOrder] Found ${linkedPOIds.length} existing PO(s) linked to allocations. Updating instead of creating new...`);
+
+          try {
+            // Update all linked POs with this sales_order_id
+            const { error: updateError } = await db
+              .from('purchase_orders')
+              .update({
+                sales_order_id: id,
+                updated_at: new Date().toISOString()
+              })
+              .in('id', linkedPOIds);
+
+            if (updateError) {
+              console.error('❌ [confirmSalesOrder] Failed to update linked POs:', updateError);
+              // Don't fail the confirmation, just log the error
+            } else {
+              console.log(`✅ [confirmSalesOrder] Successfully linked ${linkedPOIds.length} existing PO(s) to Sales Order:`, id);
+            }
+          } catch (error) {
+            console.error('❌ [confirmSalesOrder] Error updating linked POs:', error);
+          }
+        } else {
+          // No existing PO linked - create new PO (existing behavior)
+          console.log('ℹ️ [confirmSalesOrder] No existing PO linked. Creating new PO...');
+          try {
+            await createPurchaseOrderFromSalesOrder(id, auth.user.id);
+            console.log('✅ [confirmSalesOrder] Purchase Order created successfully for Sales Order:', id);
+          } catch (error) {
+            console.error('❌ [confirmSalesOrder] Failed to auto-create PO for Sales Order:', id, error);
+            console.error('❌ [confirmSalesOrder] Error details:', error instanceof Error ? error.message : error);
+            console.error('❌ [confirmSalesOrder] Error stack:', error instanceof Error ? error.stack : 'no stack');
+            // Don't fail the confirmation if PO creation fails
+            // The PO can be created manually later if needed
+          }
         }
       } else {
         console.log('ℹ️ [confirmSalesOrder] No direct allocations found - skipping PO creation');
@@ -1171,7 +1232,7 @@ export async function createPurchaseOrderFromMultipleAllocations(
     // Get all allocations with details
     const { data: allocations, error: allocError } = await db
       .from('fulfillment_allocations')
-      .select('id, sales_order_item_id, quantity, container_qty, notes')
+      .select('id, sales_order_item_id, quantity, container_qty, notes, purchase_order_id')
       .in('id', allocationIds)
       .eq('fulfillment_source', 'direct');
 
@@ -1179,8 +1240,27 @@ export async function createPurchaseOrderFromMultipleAllocations(
       return { success: false, error: 'Allocations not found or not direct allocations' };
     }
 
+    // Filter out allocations that already have a PO linked
+    const allocationsWithoutPO = allocations.filter(a => !a.purchase_order_id);
+    const allocationsWithPO = allocations.filter(a => a.purchase_order_id);
+
+    if (allocationsWithPO.length > 0) {
+      console.log(`⚠️ [createPurchaseOrderFromMultipleAllocations] ${allocationsWithPO.length} allocation(s) already have PO linked, skipping them`);
+    }
+
+    // If all allocations already have POs, return error
+    if (allocationsWithoutPO.length === 0) {
+      return {
+        success: false,
+        error: 'All selected allocations already have Purchase Orders linked. No new PO needed.',
+      };
+    }
+
+    // Use only allocations without existing POs
+    const allocationsToProcess = allocationsWithoutPO;
+
     // Get sales order items for all allocations
-    const soItemIds = allocations.map(a => a.sales_order_item_id);
+    const soItemIds = allocationsToProcess.map(a => a.sales_order_item_id);
     const { data: soItems, error: soItemsError } = await db
       .from('sales_order_items')
       .select('id, product_id, sku, description, unit_price, sales_order_id')
@@ -1222,7 +1302,7 @@ export async function createPurchaseOrderFromMultipleAllocations(
     let combinedSubtotal = 0;
     const poItemsData: any[] = [];
 
-    allocations.forEach((allocation, index) => {
+    allocationsToProcess.forEach((allocation, index) => {
       const soItem = soItems.find(si => si.id === allocation.sales_order_item_id);
       if (!soItem) return;
 
@@ -1251,7 +1331,7 @@ export async function createPurchaseOrderFromMultipleAllocations(
     });
 
     // Combine notes from all allocations
-    const allNotes = allocations
+    const allNotes = allocationsToProcess
       .map(a => a.notes)
       .filter(Boolean)
       .join('\n');
@@ -1283,7 +1363,7 @@ export async function createPurchaseOrderFromMultipleAllocations(
         ship_to_address_state: salesOrder.shipping_address_state || '',
         ship_to_address_postal_code: salesOrder.shipping_address_postal_code || '',
         ship_to_address_country: salesOrder.shipping_address_country || 'USA',
-        internal_notes: `Auto-created from SO: ${salesOrder.order_number} (${allocations.length} items)${allNotes ? '\n\nNotes: ' + allNotes : ''}`,
+        internal_notes: `Auto-created from SO: ${salesOrder.order_number} (${allocationsToProcess.length} items)${allNotes ? '\n\nNotes: ' + allNotes : ''}`,
         created_by: auth.user.id,
         updated_by: auth.user.id,
       })
@@ -1314,8 +1394,27 @@ export async function createPurchaseOrderFromMultipleAllocations(
 
     console.log(`✅ [createPurchaseOrderFromMultipleAllocations] ${poItemsData.length} PO items created`);
 
+    // Update allocations to link them to the new PO and set status to 'allocated'
+    const allocationIdsToUpdate = allocationsToProcess.map(a => a.id);
+    const { error: updateAllocError } = await db
+      .from('fulfillment_allocations')
+      .update({
+        purchase_order_id: newPO.id,
+        status: 'allocated',
+        updated_at: new Date().toISOString(),
+      })
+      .in('id', allocationIdsToUpdate);
+
+    if (updateAllocError) {
+      console.error('❌ Failed to update allocations with PO link:', updateAllocError);
+      // Don't fail the whole operation, PO is already created
+    } else {
+      console.log(`✅ [createPurchaseOrderFromMultipleAllocations] ${allocationIdsToUpdate.length} allocations linked to PO`);
+    }
+
     revalidatePath('/purchase-orders');
     revalidatePath(`/purchase-orders/${newPO.id}`);
+    revalidatePath('/sales-orders');
 
     return {
       success: true,

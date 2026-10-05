@@ -133,6 +133,21 @@ const NAV_SECTIONS = [
     ],
   },
   // ============================================
+  // PURCHASING - Procurement from Suppliers
+  // ============================================
+  {
+    title: 'Purchasing',
+    items: [
+      {
+        id: 'purchase-orders',
+        label: 'Purchase Orders',
+        href: '/purchase-orders',
+        icon: ClipboardList,
+        permission: 'purchase_orders.view_module',
+      },
+    ],
+  },
+  // ============================================
   // SALES - Quote to Order Process
   // ============================================
   {
@@ -158,21 +173,6 @@ const NAV_SECTIONS = [
         href: '/invoices',
         icon: Receipt,
         permission: 'orders.view_module', // Using orders permission since invoices are created from SO
-      },
-    ],
-  },
-  // ============================================
-  // PURCHASING - Procurement from Suppliers
-  // ============================================
-  {
-    title: 'Purchasing',
-    items: [
-      {
-        id: 'purchase-orders',
-        label: 'Purchase Orders',
-        href: '/purchase-orders',
-        icon: ClipboardList,
-        permission: 'purchase_orders.view_module',
       },
     ],
   },

@@ -371,3 +371,95 @@ export async function getSuppliersForDropdown(): Promise<SupplierSummary[]> {
     return [];
   }
 }
+
+// ============================================
+// GET UNALLOCATED PURCHASE ORDERS
+// ============================================
+
+/**
+ * Get purchase orders that are not yet linked to any sales order.
+ * Used for allocation dialog to link existing POs to customer SOs.
+ *
+ * Filters:
+ * - sales_order_id IS NULL (not linked to any SO)
+ * - deleted_at IS NULL (not deleted)
+ * - Any status (draft, sent, confirmed, etc.) - user can link to any unallocated PO
+ *
+ * @returns Array of unallocated POs with basic info
+ */
+export async function getUnallocatedPurchaseOrders(): Promise<ActionResult<any[]>> {
+  const auth = await authorize('purchase_orders.view_module');
+  if (!auth.ok) {
+    return auth.result;
+  }
+
+  try {
+    const supabase = await createClient();
+
+    // Debug logging (wrapped in try-catch to prevent breaking)
+    try {
+      const { data: allPOs, error: allError } = await supabase
+        .from('purchase_orders')
+        .select('id, po_number, sales_order_id, status, deleted_at')
+        .is('deleted_at', null)
+        .order('po_date', { ascending: false })
+        .limit(20);
+
+      if (!allError && allPOs && allPOs.length > 0) {
+        console.log('📊 [getUnallocatedPurchaseOrders] Database Analysis:');
+        console.log(`  Total recent POs: ${allPOs.length}`);
+        console.log(`  ✅ Unallocated (sales_order_id IS NULL): ${allPOs.filter(po => po.sales_order_id === null).length}`);
+        console.log(`  ❌ Already linked to SO: ${allPOs.filter(po => po.sales_order_id !== null).length}`);
+
+        const statusBreakdown: Record<string, number> = {};
+        allPOs.forEach(po => {
+          if (po.status) {
+            statusBreakdown[po.status] = (statusBreakdown[po.status] || 0) + 1;
+          }
+        });
+        console.log('  Status breakdown:', statusBreakdown);
+
+        const unallocated = allPOs.filter(po => po.sales_order_id === null);
+        if (unallocated.length > 0) {
+          console.log('  Unallocated POs:', unallocated.map(po => `${po.po_number} (${po.status})`).join(', '));
+        }
+      }
+    } catch (debugError) {
+      console.warn('[getUnallocatedPurchaseOrders] Debug logging failed:', debugError);
+      // Continue execution - logging should not break the function
+    }
+
+    const { data, error } = await supabase
+      .from('purchase_orders')
+      .select('id, po_number, po_date, expected_delivery_date, status, grand_total, order_series')
+      .is('sales_order_id', null)  // KEY FILTER: Only unallocated POs
+      .is('deleted_at', null)       // Not deleted
+      // Note: No status filter - any status is allowed (draft, sent, confirmed, etc.)
+      .order('created_at', { ascending: false })  // Use created_at instead of po_date
+      .limit(100);  // Reasonable limit
+
+    if (error) {
+      console.error('[getUnallocatedPurchaseOrders] Database Error:', error);
+      return {
+        success: false,
+        error: `Failed to fetch unallocated POs: ${error.message || 'Unknown error'}`,
+      };
+    }
+
+    console.log(`✅ [getUnallocatedPurchaseOrders] Found ${data?.length || 0} unallocated POs (any status)`);
+    if (data && data.length > 0) {
+      console.log('  POs:', data.map(po => `${po.po_number} (${po.status})`).join(', '));
+    }
+
+    return {
+      success: true,
+      data: data || [],
+    };
+  } catch (err) {
+    console.error('[getUnallocatedPurchaseOrders] Error:', err);
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'An unexpected error occurred',
+    };
+  }
+}

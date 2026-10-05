@@ -232,6 +232,7 @@ export interface UpdateQuoteDTO {
   customerNotes?: string | null;
   internalNotes?: string | null;
   termsAndConditions?: string | null;
+  customerPoNumber?: string | null;
 }
 
 // ============================================

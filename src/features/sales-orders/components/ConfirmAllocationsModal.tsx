@@ -115,8 +115,16 @@ export function ConfirmAllocationsModal({
         allAllocations.forEach((allocation) => {
           // Map database allocation status to modal action status
           // Database: 'allocated' → Modal: 'completed'
+          // Database: 'pending' but has purchaseOrderId → Modal: 'completed' (PO already linked)
           // Database: 'pending' → Modal: 'pending'
-          const actionStatus = allocation.status === 'allocated' ? 'completed' : 'pending';
+          let actionStatus: 'pending' | 'completed' = 'pending';
+
+          if (allocation.status === 'allocated') {
+            actionStatus = 'completed';
+          } else if (allocation.fulfillmentSource === 'direct' && allocation.purchaseOrderId) {
+            // If manufacturer allocation already has PO linked, mark as completed
+            actionStatus = 'completed';
+          }
 
           actionsMap.set(allocation.id, {
             id: allocation.id,
@@ -976,36 +984,46 @@ export function ConfirmAllocationsModal({
                               </TableCell>
                               <TableCell className="text-right">
                                 {index === 0 && (
-                                  <Button
-                                    size="sm"
-                                    variant={action.status === 'completed' ? 'outline' : 'default'}
-                                    onClick={() => {
-                                      // For warehouse allocations: Pass ONLY this allocation ID
-                                      // Server will automatically fetch all pending allocations for same warehouse
-                                      if (isWarehouseAllocation) {
-                                        handleAction(allocation.id, [allocation.id]); // Single ID only
-                                      }
-                                      // For dealer/manufacturer: Pass all group IDs (grouped behavior)
-                                      else {
-                                        const pendingGroupAllocations = groupAllocations.filter(a => {
-                                          const groupAction = actions.get(a.id);
-                                          return groupAction?.status === 'pending';
-                                        });
-                                        handleAction(allocation.id, pendingGroupAllocations.map(a => a.id));
-                                      }
-                                    }}
-                                    disabled={
-                                      action.status === 'processing' || action.status === 'completed'
-                                    }
-                                  >
-                                    {action.status === 'processing' ? (
-                                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                  <>
+                                    {/* Hide "Create PO" button if PO already linked (purchaseOrderId exists) */}
+                                    {isManufacturerAllocation && allocation.purchaseOrderId ? (
+                                      <Badge variant="default" className="bg-green-500">
+                                        <CheckCircle className="mr-1 h-3 w-3" />
+                                        PO Already Linked
+                                      </Badge>
                                     ) : (
-                                      <Icon className="mr-2 h-4 w-4" />
+                                      <Button
+                                        size="sm"
+                                        variant={action.status === 'completed' ? 'outline' : 'default'}
+                                        onClick={() => {
+                                          // For warehouse allocations: Pass ONLY this allocation ID
+                                          // Server will automatically fetch all pending allocations for same warehouse
+                                          if (isWarehouseAllocation) {
+                                            handleAction(allocation.id, [allocation.id]); // Single ID only
+                                          }
+                                          // For dealer/manufacturer: Pass all group IDs (grouped behavior)
+                                          else {
+                                            const pendingGroupAllocations = groupAllocations.filter(a => {
+                                              const groupAction = actions.get(a.id);
+                                              return groupAction?.status === 'pending';
+                                            });
+                                            handleAction(allocation.id, pendingGroupAllocations.map(a => a.id));
+                                          }
+                                        }}
+                                        disabled={
+                                          action.status === 'processing' || action.status === 'completed'
+                                        }
+                                      >
+                                        {action.status === 'processing' ? (
+                                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                        ) : (
+                                          <Icon className="mr-2 h-4 w-4" />
+                                        )}
+                                        {action.label}
+                                        {pendingItemCount > 1 && ` (${pendingItemCount} items)`}
+                                      </Button>
                                     )}
-                                    {action.label}
-                                    {pendingItemCount > 1 && ` (${pendingItemCount} items)`}
-                                  </Button>
+                                  </>
                                 )}
                               </TableCell>
                             </TableRow>
@@ -1065,31 +1083,39 @@ export function ConfirmAllocationsModal({
                           )}
                         </TableCell>
                         <TableCell className="text-right">
-                          <Button
-                            size="sm"
-                            variant={action.status === 'completed' ? 'outline' : 'default'}
-                            onClick={() => {
-                              // For ALL grouped allocations (warehouse, dealer, manufacturer):
-                              // Pass ALL pending allocation IDs from the same group
-                              // This ensures the action includes exactly what user sees in the UI
-                              const pendingGroupAllocations = groupAllocations.filter(a => {
-                                const groupAction = actions.get(a.id);
-                                return groupAction?.status === 'pending';
-                              });
-                              handleAction(allocation.id, pendingGroupAllocations.map(a => a.id));
-                            }}
-                            disabled={
-                              action.status === 'processing' || action.status === 'completed'
-                            }
-                          >
-                            {action.status === 'processing' ? (
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            ) : (
-                              <Icon className="mr-2 h-4 w-4" />
-                            )}
-                            {action.label}
-                            {(isWarehouseAllocation || isDealerAllocation || isManufacturerAllocation) && pendingItemCount > 1 && ` (${pendingItemCount} items)`}
-                          </Button>
+                          {/* Hide "Create PO" button if PO already linked (purchaseOrderId exists) */}
+                          {isManufacturerAllocation && allocation.purchaseOrderId ? (
+                            <Badge variant="default" className="bg-green-500">
+                              <CheckCircle className="mr-1 h-3 w-3" />
+                              PO Already Linked
+                            </Badge>
+                          ) : (
+                            <Button
+                              size="sm"
+                              variant={action.status === 'completed' ? 'outline' : 'default'}
+                              onClick={() => {
+                                // For ALL grouped allocations (warehouse, dealer, manufacturer):
+                                // Pass ALL pending allocation IDs from the same group
+                                // This ensures the action includes exactly what user sees in the UI
+                                const pendingGroupAllocations = groupAllocations.filter(a => {
+                                  const groupAction = actions.get(a.id);
+                                  return groupAction?.status === 'pending';
+                                });
+                                handleAction(allocation.id, pendingGroupAllocations.map(a => a.id));
+                              }}
+                              disabled={
+                                action.status === 'processing' || action.status === 'completed'
+                              }
+                            >
+                              {action.status === 'processing' ? (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              ) : (
+                                <Icon className="mr-2 h-4 w-4" />
+                              )}
+                              {action.label}
+                              {(isWarehouseAllocation || isDealerAllocation || isManufacturerAllocation) && pendingItemCount > 1 && ` (${pendingItemCount} items)`}
+                            </Button>
+                          )}
                         </TableCell>
                       </TableRow>
                     );

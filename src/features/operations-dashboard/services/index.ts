@@ -44,6 +44,7 @@ export async function getOperationsData(filters?: OperationsFilters): Promise<Op
     // 🆕 NEW: Dealer KPIs
     dealerAllocationsCount: 0,
     dealerPendingQty: 0,
+    delayedShipmentsCount: 0, // 🆕 NEW (Oct 1, 2026)
   };
 
   // Fetch all data in parallel - use allSettled so one failure doesn't break everything

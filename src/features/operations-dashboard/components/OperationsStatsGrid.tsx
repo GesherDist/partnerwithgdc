@@ -17,6 +17,7 @@ import {
   DollarSign,
   Users,
   Clock,
+  AlertTriangle,
 } from 'lucide-react';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/shared/components/ui/card';
@@ -88,7 +89,7 @@ function StatCard({ title, value, subtitle, icon, iconBgColor, highlight }: Stat
 
 export function OperationsStatsGrid({ stats }: OperationsStatsGridProps) {
   return (
-    <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-7">
+    <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
       <StatCard
         title="Available Inventory"
         value={formatNumber(stats.availableInventoryQty)}
@@ -139,6 +140,15 @@ export function OperationsStatsGrid({ stats }: OperationsStatsGridProps) {
         subtitle="units awaiting fulfillment"
         icon={<Clock className="h-4 w-4 text-white" />}
         iconBgColor="bg-indigo-600"
+      />
+      {/* 🆕 Card 8: Delayed Shipments (Oct 1, 2026) */}
+      <StatCard
+        title="Delayed Shipments"
+        value={formatNumber(stats.delayedShipmentsCount)}
+        subtitle={stats.delayedShipmentsCount > 0 ? "shipments behind schedule" : "all on track"}
+        icon={<AlertTriangle className="h-4 w-4 text-white" />}
+        iconBgColor={stats.delayedShipmentsCount > 0 ? "bg-red-600" : "bg-gray-400"}
+        highlight={stats.delayedShipmentsCount > 0}
       />
     </div>
   );

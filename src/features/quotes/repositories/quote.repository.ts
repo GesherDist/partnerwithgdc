@@ -548,6 +548,7 @@ class QuoteRepositoryImpl {
     if (data.customerNotes !== undefined) {updateData.customer_notes = data.customerNotes;}
     if (data.internalNotes !== undefined) {updateData.internal_notes = data.internalNotes;}
     if (data.termsAndConditions !== undefined) {updateData.terms_and_conditions = data.termsAndConditions;}
+    if (data.customerPoNumber !== undefined) {updateData.customer_po_number = data.customerPoNumber;}
 
     const { data: result, error } = await db
       .from('quotes')

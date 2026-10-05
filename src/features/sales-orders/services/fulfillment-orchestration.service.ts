@@ -118,10 +118,17 @@ export async function createSingleAllocation(
     }
 
     // Step 2: Create allocation in database
+    // Auto-set status to 'allocated' if PO is already linked (manufacturer direct)
+    const autoAllocatedStatus =
+      params.fulfillmentSource === 'direct' && params.purchaseOrderId
+        ? 'allocated'
+        : 'pending';
+
     const { data: allocation, error: createError } = await createAllocation({
       salesOrderItemId: params.salesOrderItemId,
       fulfillmentSource: params.fulfillmentSource,
       quantity: params.quantity,
+      status: autoAllocatedStatus, // Auto-allocated if PO already linked
       locationId: params.locationId || null,
       assignedContactId: params.assignedContactId || null,
       assignedUserId: null, // Not needed - we use assignedContactId for warehouse contacts
@@ -142,6 +149,31 @@ export async function createSingleAllocation(
         success: false,
         error: createError?.message || 'Failed to create allocation',
       };
+    }
+
+    // Step 2.5: If PO is linked, update PO's sales_order_id to link it to this SO
+    if (params.purchaseOrderId && params.fulfillmentSource === 'direct') {
+      try {
+        // Get sales_order_id from sales_order_item_id
+        const { data: soItem } = await db
+          .from('sales_order_items')
+          .select('sales_order_id')
+          .eq('id', params.salesOrderItemId)
+          .single();
+
+        if (soItem?.sales_order_id) {
+          // Update PO to link it to this SO
+          await db
+            .from('purchase_orders')
+            .update({ sales_order_id: soItem.sales_order_id })
+            .eq('id', params.purchaseOrderId);
+
+          console.log(`✅ Linked PO ${params.purchaseOrderId} to SO ${soItem.sales_order_id}`);
+        }
+      } catch (error) {
+        console.error('Failed to link PO to SO:', error);
+        // Don't fail the whole operation, just log the error
+      }
     }
 
     // Step 3: Update inventory (allocate)

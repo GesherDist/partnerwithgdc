@@ -62,6 +62,21 @@ function formatDate(dateString: string | null): string {
   });
 }
 
+function formatDateTime(dateString: string | null): string {
+  if (!dateString) {
+    return '-';
+  }
+  const date = new Date(dateString);
+  return date.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+}
+
 // ============================================
 // MAIN COMPONENT
 // ============================================
@@ -321,6 +336,7 @@ export function ImmediateAttentionTable({
                     )}
                   </button>
                 </TableHead>
+                <TableHead className="relative z-10 w-[140px]">Last Updated</TableHead>
                 <TableHead className="relative z-10">Fulfillment Source</TableHead>
                 <TableHead className="relative z-10">Allocated To</TableHead>
                 <TableHead className="relative z-10">Action Required / Notes</TableHead>
@@ -409,6 +425,20 @@ export function ImmediateAttentionTable({
                         )}
                       </TableCell>
                       <TableCell><StatusBadge status={item.status} isOverdue={item.isOverdue} isDelayed={item.isDelayed} /></TableCell>
+                      <TableCell className="w-[140px]">
+                        {item.lastUpdated ? (
+                          <div className="text-sm">
+                            <div className="font-medium">{formatDateTime(item.lastUpdated)}</div>
+                            {item.lastUpdatedSource && (
+                              <div className="text-xs text-muted-foreground mt-0.5">
+                                {item.lastUpdatedSource === 'CMA CGM API' ? 'API' : 'Email'}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground">-</span>
+                        )}
+                      </TableCell>
                       <TableCell>
                         {item.fulfillmentSource ? (
                           <Badge variant="outline" className="text-xs">
@@ -483,7 +513,7 @@ export function ImmediateAttentionTable({
                 })
               ) : (
                 <TableRow>
-                  <TableCell colSpan={11} className="text-center py-8 text-muted-foreground">
+                  <TableCell colSpan={13} className="text-center py-8 text-muted-foreground">
                     No shipments require immediate attention
                   </TableCell>
                 </TableRow>

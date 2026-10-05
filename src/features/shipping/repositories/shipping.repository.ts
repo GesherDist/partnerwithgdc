@@ -223,31 +223,59 @@ export async function getShippingEmailById(
 
 /**
  * Normalize SO number to all possible formats for matching
- * Handles both formats:
- * - SO2600012 (compact: SO + 7 digits)
- * - SO-2026-00012 (expanded: SO-YYYY-NNNNN)
+ * Handles multiple formats:
+ * - SO2600012 (compact: Galileo shipment/load numbers - SOYYNNNNN)
+ * - C-SO-2600064 (current: Customer sales orders - C-SO-YYNNNNN)
+ * - C-SO-2026-00012 (old expanded format - backward compatibility)
+ * - SO-2026-00012 (very old format - backward compatibility)
  *
  * Returns array of possible formats to try
  */
 function normalizeSoNumber(soNumber: string): string[] {
   const formats: string[] = [soNumber.toUpperCase()]; // Always include original
 
-  // Pattern 1: SO2600012 (compact) -> SO-2026-00012 (expanded)
-  const compactMatch = soNumber.match(/^SO(\d{2})(\d{5})$/i);
-  if (compactMatch && compactMatch[1] && compactMatch[2]) {
-    const yearShort = compactMatch[1]; // "26"
-    const seqNum = compactMatch[2]; // "00012"
+  // Pattern 1: SO2600012 (compact Galileo shipment format SOYYNNNNN) -> Multiple formats
+  const compactShipmentMatch = soNumber.match(/^SO(\d{2})(\d{5})$/i);
+  if (compactShipmentMatch && compactShipmentMatch[1] && compactShipmentMatch[2]) {
+    const yearShort = compactShipmentMatch[1]; // "26"
+    const seqNum = compactShipmentMatch[2]; // "00012"
     const yearFull = `20${yearShort}`; // "2026"
-    formats.push(`SO-${yearFull}-${seqNum}`);
+    formats.push(`SO-${yearFull}-${seqNum}`); // Very old expanded format
+    formats.push(`C-SO-${yearFull}-${seqNum}`); // Old customer expanded format
+    formats.push(`C-SO-${yearShort}${seqNum}`); // Current customer format
   }
 
-  // Pattern 2: SO-2026-00012 (expanded) -> SO2600012 (compact)
+  // Pattern 2: C-SO-2600064 (current customer format C-SO-YYNNNNN) -> Multiple formats
+  const currentCustomerMatch = soNumber.match(/^C-SO-(\d{2})(\d{5})$/i);
+  if (currentCustomerMatch && currentCustomerMatch[1] && currentCustomerMatch[2]) {
+    const yearShort = currentCustomerMatch[1]; // "26"
+    const seqNum = currentCustomerMatch[2]; // "00064"
+    const yearFull = `20${yearShort}`; // "2026"
+    formats.push(`C-SO-${yearFull}-${seqNum}`); // Old expanded customer format
+    formats.push(`SO-${yearFull}-${seqNum}`); // Very old expanded format
+    formats.push(`SO${yearShort}${seqNum}`); // Compact shipment format
+  }
+
+  // Pattern 3: C-SO-2026-00012 (old expanded customer format) -> Multiple formats
+  const expandedCustomerMatch = soNumber.match(/^C-SO-(\d{4})-(\d{5})$/i);
+  if (expandedCustomerMatch && expandedCustomerMatch[1] && expandedCustomerMatch[2]) {
+    const yearFull = expandedCustomerMatch[1]; // "2026"
+    const seqNum = expandedCustomerMatch[2]; // "00012"
+    const yearShort = yearFull.slice(2); // "26"
+    formats.push(`C-SO-${yearShort}${seqNum}`); // Current customer format
+    formats.push(`SO-${yearFull}-${seqNum}`); // Very old expanded format
+    formats.push(`SO${yearShort}${seqNum}`); // Compact shipment format
+  }
+
+  // Pattern 4: SO-2026-00012 (very old expanded format) -> Multiple formats
   const expandedMatch = soNumber.match(/^SO-(\d{4})-(\d{5})$/i);
   if (expandedMatch && expandedMatch[1] && expandedMatch[2]) {
     const yearFull = expandedMatch[1]; // "2026"
     const seqNum = expandedMatch[2]; // "00012"
     const yearShort = yearFull.slice(2); // "26"
-    formats.push(`SO${yearShort}${seqNum}`);
+    formats.push(`C-SO-${yearFull}-${seqNum}`); // Old expanded customer format
+    formats.push(`C-SO-${yearShort}${seqNum}`); // Current customer format
+    formats.push(`SO${yearShort}${seqNum}`); // Compact shipment format
   }
 
   return [...new Set(formats)]; // Remove duplicates
@@ -261,9 +289,11 @@ function normalizeSoNumber(soNumber: string): string[] {
  * Find shipment by SO number or container number
  * Priority: SO number FIRST (business identifier), then container number (can be shared)
  *
- * NOTE: SO number matching handles both formats:
- * - SO2600012 (compact)
- * - SO-2026-00012 (expanded)
+ * NOTE: SO/Shipment number matching handles multiple formats:
+ * - SO2600012 (compact - Galileo shipment/load numbers - SOYYNNNNN)
+ * - C-SO-2600064 (current - Customer sales orders - C-SO-YYNNNNN)
+ * - C-SO-2026-00012 (old expanded customer format - backward compatibility)
+ * - SO-2026-00012 (very old expanded format - backward compatibility)
  */
 export async function findShipmentByReference(
   containerNumber?: string | null,

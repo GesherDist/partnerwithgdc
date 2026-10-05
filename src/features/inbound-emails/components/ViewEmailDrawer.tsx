@@ -38,6 +38,9 @@ import type {
   InboundEmailAttachment,
 } from '@/features/inbound-emails/types';
 import { ExtractPOFromEmailDialog } from './ExtractPOFromEmailDialog';
+import { AutoExtractedDataSection } from './AutoExtractedDataSection';
+import { SupplierPOExtractedDataSection } from './SupplierPOExtractedDataSection';
+import { FreightUpdateExtractedDataSection } from './FreightUpdateExtractedDataSection';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 
@@ -100,20 +103,20 @@ function AttachmentItem({
   };
 
   return (
-    <div className={`flex items-center justify-between p-3 border rounded-lg ${hasFile ? 'bg-muted/30' : 'bg-amber-50 border-amber-200 dark:bg-amber-950/20 dark:border-amber-800'}`}>
-      <div className="flex items-center gap-3">
-        <div className={`p-2 rounded ${hasFile ? 'bg-primary/10' : 'bg-amber-100 dark:bg-amber-900/30'}`}>
+    <div className={`flex items-center justify-between p-3 border rounded-lg max-w-full overflow-hidden ${hasFile ? 'bg-muted/30' : 'bg-amber-50 border-amber-200 dark:bg-amber-950/20 dark:border-amber-800'}`}>
+      <div className="flex items-center gap-3 min-w-0 flex-1 overflow-hidden">
+        <div className={`p-2 rounded flex-shrink-0 ${hasFile ? 'bg-primary/10' : 'bg-amber-100 dark:bg-amber-900/30'}`}>
           <FileText className={`h-5 w-5 ${hasFile ? 'text-primary' : 'text-amber-600 dark:text-amber-400'}`} />
         </div>
-        <div>
-          <p className="font-medium text-sm">{attachment.filename}</p>
-          <p className="text-xs text-muted-foreground">
+        <div className="min-w-0 flex-1 overflow-hidden">
+          <p className="font-medium text-sm break-all">{attachment.filename}</p>
+          <p className="text-xs text-muted-foreground break-words">
             {attachment.mime_type} • {formatFileSize(attachment.size)}
             {!hasFile && <span className="text-amber-600 dark:text-amber-400 ml-2">(File not stored)</span>}
           </p>
         </div>
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-shrink-0 ml-2">
         <Button
           variant="outline"
           size="sm"
@@ -226,8 +229,8 @@ export function ViewEmailDrawer({
 
   return (
     <Sheet open={open} onOpenChange={onClose}>
-      <SheetContent className="w-full sm:max-w-2xl overflow-hidden flex flex-col">
-        <SheetHeader>
+      <SheetContent className="w-full sm:max-w-2xl overflow-hidden flex flex-col p-0">
+        <SheetHeader className="px-6 pt-6 pb-4">
           <SheetTitle className="flex items-center gap-2">
             <Mail className="h-5 w-5" />
             Email Details
@@ -235,30 +238,30 @@ export function ViewEmailDrawer({
         </SheetHeader>
 
         {loading ? (
-          <div className="flex-1 flex items-center justify-center">
+          <div className="flex-1 flex items-center justify-center px-6">
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           </div>
         ) : emailDetails ? (
-          <ScrollArea className="flex-1 -mx-6 px-6">
-            <div className="space-y-6 pb-6">
+          <ScrollArea className="flex-1 max-w-full overflow-hidden">
+            <div className="space-y-6 px-6 pb-6 max-w-full overflow-hidden">
               {/* Email Header */}
-              <div className="space-y-4">
+              <div className="space-y-4 max-w-full overflow-hidden">
                 {/* Subject */}
-                <div>
-                  <h2 className="text-xl font-semibold">{emailDetails.subject}</h2>
+                <div className="max-w-full overflow-hidden">
+                  <h2 className="text-xl font-semibold break-words">{emailDetails.subject}</h2>
                 </div>
 
                 {/* From */}
-                <div className="flex items-start gap-3">
-                  <div className="p-2 bg-muted rounded-full">
+                <div className="flex items-start gap-3 max-w-full overflow-hidden">
+                  <div className="p-2 bg-muted rounded-full flex-shrink-0">
                     <User className="h-4 w-4" />
                   </div>
-                  <div className="flex-1">
-                    <p className="font-medium">
+                  <div className="flex-1 min-w-0 overflow-hidden">
+                    <p className="font-medium break-words">
                       {emailDetails.from_name || emailDetails.from_email}
                     </p>
                     {emailDetails.from_name && (
-                      <p className="text-sm text-muted-foreground">
+                      <p className="text-sm text-muted-foreground break-all">
                         {emailDetails.from_email}
                       </p>
                     )}
@@ -266,9 +269,9 @@ export function ViewEmailDrawer({
                 </div>
 
                 {/* To */}
-                <div className="flex items-center gap-3 text-sm">
-                  <span className="text-muted-foreground">To:</span>
-                  <span>{emailDetails.to_email}</span>
+                <div className="flex items-center gap-3 text-sm max-w-full overflow-hidden">
+                  <span className="text-muted-foreground flex-shrink-0">To:</span>
+                  <span className="break-all">{emailDetails.to_email}</span>
                 </div>
 
                 {/* Date */}
@@ -282,12 +285,12 @@ export function ViewEmailDrawer({
 
               {/* Attachments */}
               {emailDetails.attachments && emailDetails.attachments.length > 0 && (
-                <div className="space-y-3">
+                <div className="space-y-3 max-w-full overflow-hidden">
                   <h3 className="font-medium flex items-center gap-2">
                     <Paperclip className="h-4 w-4" />
                     Attachments ({emailDetails.attachments.length})
                   </h3>
-                  <div className="space-y-2">
+                  <div className="space-y-2 max-w-full overflow-hidden">
                     {emailDetails.attachments.map((attachment) => (
                       <AttachmentItem
                         key={attachment.id}
@@ -304,15 +307,15 @@ export function ViewEmailDrawer({
               )}
 
               {/* Email Body */}
-              <div className="space-y-3">
+              <div className="space-y-3 max-w-full overflow-hidden">
                 <h3 className="font-medium">Message</h3>
                 {emailDetails.html_body ? (
                   <div
-                    className="prose prose-sm max-w-none bg-muted/30 p-4 rounded-lg overflow-auto"
+                    className="prose prose-sm max-w-none w-full bg-muted/30 p-4 rounded-lg overflow-hidden break-words [&_*]:break-words [&_*]:overflow-wrap-anywhere [&_*]:max-w-full [&_*]:word-break-break-all [&_img]:max-w-full [&_img]:h-auto [&_table]:max-w-full [&_table]:table-fixed [&_table]:w-full [&_td]:break-words [&_td]:overflow-wrap-anywhere [&_div]:max-w-full [&_div]:break-words [&_p]:break-words [&_span]:break-words [&_a]:break-all"
                     dangerouslySetInnerHTML={{ __html: emailDetails.html_body }}
                   />
                 ) : emailDetails.text_body ? (
-                  <pre className="whitespace-pre-wrap text-sm bg-muted/30 p-4 rounded-lg overflow-auto font-sans">
+                  <pre className="whitespace-pre-wrap text-sm bg-muted/30 p-4 rounded-lg overflow-hidden font-sans break-words max-w-full" style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                     {emailDetails.text_body}
                   </pre>
                 ) : (
@@ -320,10 +323,60 @@ export function ViewEmailDrawer({
                 )}
               </div>
 
+              {/* Auto-Extracted Data Section */}
+              {emailDetails.extracted_data && emailDetails.extraction_confidence && (() => {
+                // Determine email type based on which fields are present in extracted_data
+                const data = emailDetails.extracted_data;
+
+                // Customer PO: has customerName or customer field
+                if (data.parsed?.customerName || data.matching?.customer) {
+                  return (
+                    <AutoExtractedDataSection
+                      emailId={emailDetails.id}
+                      extractedData={data}
+                      confidence={emailDetails.extraction_confidence}
+                      onQuoteCreated={onQuoteCreated}
+                    />
+                  );
+                }
+
+                // Supplier PO: has supplierName or supplier field
+                if (data.parsed?.supplierName || data.matching?.supplier) {
+                  return (
+                    <SupplierPOExtractedDataSection
+                      emailId={emailDetails.id}
+                      extractedData={data}
+                      confidence={emailDetails.extraction_confidence}
+                    />
+                  );
+                }
+
+                // Freight Update: has forwarderName or shipment field
+                if (data.parsed?.forwarderName || data.matching?.shipment) {
+                  return (
+                    <FreightUpdateExtractedDataSection
+                      emailId={emailDetails.id}
+                      extractedData={data}
+                      confidence={emailDetails.extraction_confidence}
+                    />
+                  );
+                }
+
+                // Fallback: show customer PO section
+                return (
+                  <AutoExtractedDataSection
+                    emailId={emailDetails.id}
+                    extractedData={data}
+                    confidence={emailDetails.extraction_confidence}
+                    onQuoteCreated={onQuoteCreated}
+                  />
+                );
+              })()}
+
             </div>
           </ScrollArea>
         ) : (
-          <div className="flex-1 flex items-center justify-center text-muted-foreground">
+          <div className="flex-1 flex items-center justify-center text-muted-foreground px-6">
             No email selected
           </div>
         )}

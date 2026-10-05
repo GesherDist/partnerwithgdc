@@ -47,6 +47,7 @@ const emptyData: OperationsData = {
     invoiceAmount: 0,
     dealerAllocationsCount: 0,   // 🆕 NEW
     dealerPendingQty: 0,          // 🆕 NEW
+    delayedShipmentsCount: 0,     // 🆕 NEW (Oct 1, 2026)
   },
   skuBreakdown: [],
   customerCommitments: [],

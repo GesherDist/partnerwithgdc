@@ -38,6 +38,9 @@ import {
 import { Input } from '@/shared/components/ui/input';
 import { Textarea } from '@/shared/components/ui/textarea';
 import { Alert, AlertDescription } from '@/shared/components/ui/alert';
+import { RadioGroup, RadioGroupItem } from '@/shared/components/ui/radio-group';
+import { Label } from '@/shared/components/ui/label';
+import { ScrollArea } from '@/shared/components/ui/scroll-area';
 import { Loader2, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -82,6 +85,18 @@ interface LocationContact {
   name: string;
   email: string;
   phone: string | null;
+}
+
+interface UnallocatedPurchaseOrder {
+  id: string;
+  po_number: string;
+  po_date: string;
+  expected_delivery_date: string | null;
+  status: string;
+  grand_total: number;
+  order_series: string | null;
+  location_name: string | null;
+  eta_to_us_port: string | null;
 }
 
 // ============================================
@@ -132,6 +147,10 @@ export function CreateAllocationDialog({
     exists: boolean;
   }>>({});
 
+  // Purchase Orders state (for manufacturer direct)
+  const [unallocatedPOs, setUnallocatedPOs] = useState<UnallocatedPurchaseOrder[]>([]);
+  const [loadingPOs, setLoadingPOs] = useState(false);
+
   // Form
   const form = useForm<CreateFulfillmentAllocationInput>({
     resolver: zodResolver(createFulfillmentAllocationSchema),
@@ -143,6 +162,7 @@ export function CreateAllocationDialog({
       // Add default values for conditional fields to prevent controlled/uncontrolled warning
       containerQty: remainingToAllocate,
       containerId: '',
+      purchaseOrderId: undefined as any, // Required for manufacturer direct - must select existing PO
       locationId: '',
       platinumDealerId: '',
       dealerLocationId: '',
@@ -239,6 +259,47 @@ export function CreateAllocationDialog({
       console.error('Error loading dealers:', error);
     } finally {
       setLoadingDealers(false);
+    }
+  }
+
+  async function loadUnallocatedPurchaseOrders() {
+    try {
+      setLoadingPOs(true);
+      console.log('🔍 [CreateAllocationDialog] Loading unallocated POs...');
+
+      // Import and call the action to get unallocated POs
+      const { getUnallocatedPurchaseOrders } = await import(
+        '@/features/purchase-orders/actions'
+      );
+
+      const result = await getUnallocatedPurchaseOrders();
+
+      console.log('📦 [CreateAllocationDialog] PO API Response:', {
+        success: result.success,
+        dataLength: result.data?.length || 0,
+        error: result.error || null,
+        rawResult: result,
+      });
+
+      if (result.success && result.data) {
+        console.log('✅ [CreateAllocationDialog] Found POs:', result.data);
+        setUnallocatedPOs(result.data as UnallocatedPurchaseOrder[]);
+      } else {
+        console.warn('⚠️ [CreateAllocationDialog] No POs found or API failed:', result.error);
+        setUnallocatedPOs([]);
+
+        // Show toast notification
+        if (result.error) {
+          toast.error(`Failed to load POs: ${result.error}`);
+        }
+      }
+    } catch (error) {
+      console.error('❌ [CreateAllocationDialog] Exception loading unallocated POs:', error);
+      setUnallocatedPOs([]);
+      toast.error('Failed to load purchase orders. Please try again.');
+    } finally {
+      setLoadingPOs(false);
+      console.log('🏁 [CreateAllocationDialog] PO loading complete. Count:', unallocatedPOs.length);
     }
   }
 
@@ -422,6 +483,13 @@ export function CreateAllocationDialog({
     }
   }, [watchedSource, remainingContainerQty]);
 
+  // Load unallocated POs when manufacturer (direct) selected
+  useEffect(() => {
+    if (watchedSource === 'direct' && unallocatedPOs.length === 0) {
+      loadUnallocatedPurchaseOrders();
+    }
+  }, [watchedSource]);
+
   // Load dealers when dealer source selected
   useEffect(() => {
     if (
@@ -524,13 +592,15 @@ export function CreateAllocationDialog({
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Create Allocation</DialogTitle>
-          <DialogDescription>
-            {productName && (
-              <div className="mb-2">
-                <span className="font-semibold">Product:</span> {productName}
-              </div>
-            )}
-            Allocate fulfillment for this sales order item from a specific source.
+          <DialogDescription asChild>
+            <div>
+              {productName && (
+                <div className="mb-2">
+                  <span className="font-semibold">Product:</span> {productName}
+                </div>
+              )}
+              <span>Allocate fulfillment for this sales order item from a specific source.</span>
+            </div>
           </DialogDescription>
         </DialogHeader>
 
@@ -775,6 +845,154 @@ export function CreateAllocationDialog({
             {/* Direct - Container Qty First, then Customer Allocated Qty */}
             {selectedSource === 'direct' && (
               <>
+                {/* Required: Link to existing Purchase Order - Table Format */}
+                <FormField
+                  control={form.control}
+                  name={'purchaseOrderId' as any}
+                  render={({ field }) => (
+                    <FormItem className="space-y-3">
+                      <FormLabel className="text-base font-semibold">
+                        Purchase Order *
+                        {loadingPOs && (
+                          <span className="ml-2 text-sm font-normal text-muted-foreground">
+                            <Loader2 className="h-3 w-3 inline animate-spin mr-1" />
+                            Loading...
+                          </span>
+                        )}
+                      </FormLabel>
+
+                      {unallocatedPOs.length === 0 && !loadingPOs ? (
+                        <Alert className="bg-red-50 border-red-200">
+                          <AlertCircle className="h-4 w-4 text-red-600" />
+                          <AlertDescription className="text-red-800">
+                            <strong>No unallocated POs available.</strong> You must create a Purchase Order first before creating this allocation. Please go to Purchase Orders and create a PO.
+                          </AlertDescription>
+                        </Alert>
+                      ) : (
+                        <FormControl>
+                          <RadioGroup
+                            value={field.value || ''}
+                            onValueChange={field.onChange}
+                            className="border rounded-lg overflow-hidden"
+                          >
+                            {/* Table Header */}
+                            <div className="bg-slate-100 border-b">
+                              <div className="grid grid-cols-[40px_100px_80px_75px_85px_65px_90px] gap-1.5 px-2 py-2 text-[11px] font-semibold text-slate-700">
+                                <div>Select</div>
+                                <div>PO Number</div>
+                                <div>Location</div>
+                                <div>Status</div>
+                                <div>ETA Port</div>
+                                <div>Series</div>
+                                <div>Exp. Del.</div>
+                              </div>
+                            </div>
+
+                            {/* Table Rows */}
+                            <ScrollArea
+                              className="max-h-[280px]"
+                              style={{
+                                height: unallocatedPOs.length > 0
+                                  ? `${Math.min(unallocatedPOs.length * 45 + 10, 280)}px`
+                                  : '100px'
+                              }}
+                            >
+                              <div className="divide-y">
+                                {unallocatedPOs.map((po) => (
+                                  <div
+                                    key={po.id}
+                                    className={`grid grid-cols-[40px_100px_80px_75px_85px_65px_90px] gap-1.5 px-2 py-2 cursor-pointer hover:bg-slate-50 transition-colors ${
+                                      field.value === po.id
+                                        ? 'bg-blue-50 border-l-4 border-l-blue-500'
+                                        : ''
+                                    }`}
+                                    onClick={() => field.onChange(po.id)}
+                                  >
+                                    {/* Select Radio */}
+                                    <div className="flex items-center justify-center">
+                                      <RadioGroupItem value={po.id} id={`po-${po.id}`} className="h-4 w-4" />
+                                    </div>
+
+                                    {/* PO Number */}
+                                    <div className="flex items-center">
+                                      <Label
+                                        htmlFor={`po-${po.id}`}
+                                        className="font-semibold text-[11px] cursor-pointer text-blue-600 truncate"
+                                      >
+                                        {po.po_number}
+                                      </Label>
+                                    </div>
+
+                                    {/* Location Name */}
+                                    <div className="flex items-center text-[11px] text-slate-700 truncate">
+                                      {po.location_name || (
+                                        <span className="text-muted-foreground text-xs">-</span>
+                                      )}
+                                    </div>
+
+                                    {/* Status */}
+                                    <div className="flex items-center">
+                                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-medium bg-green-100 text-green-800 capitalize">
+                                        {po.status}
+                                      </span>
+                                    </div>
+
+                                    {/* ETA to US Port */}
+                                    <div className="flex items-center text-[11px] text-slate-600">
+                                      {po.eta_to_us_port ? (
+                                        <span className="truncate">
+                                          {new Date(po.eta_to_us_port).toLocaleDateString('en-US', {
+                                            month: '2-digit',
+                                            day: '2-digit',
+                                            year: 'numeric',
+                                          })}
+                                        </span>
+                                      ) : (
+                                        <span className="text-muted-foreground text-xs">-</span>
+                                      )}
+                                    </div>
+
+                                    {/* Order Series */}
+                                    <div className="flex items-center text-[11px] truncate">
+                                      {po.order_series || (
+                                        <span className="text-muted-foreground text-xs">-</span>
+                                      )}
+                                    </div>
+
+                                    {/* Expected Delivery */}
+                                    <div className="flex items-center text-[11px] text-slate-600">
+                                      {po.expected_delivery_date ? (
+                                        <span className="truncate">
+                                          {new Date(po.expected_delivery_date).toLocaleDateString('en-US', {
+                                            month: '2-digit',
+                                            day: '2-digit',
+                                            year: 'numeric',
+                                          })}
+                                        </span>
+                                      ) : (
+                                        <span className="text-muted-foreground text-xs">-</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </ScrollArea>
+                          </RadioGroup>
+                        </FormControl>
+                      )}
+
+                      <FormDescription className="text-xs text-slate-600">
+                        {unallocatedPOs.length > 0
+                          ? `Found ${unallocatedPOs.length} unallocated PO${
+                              unallocatedPOs.length > 1 ? 's' : ''
+                            }. You must select a PO to continue.`
+                          : ''}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
                 {/* Step 1: Container Quantity */}
                 <FormField
                   control={form.control}

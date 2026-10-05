@@ -249,7 +249,7 @@ export const MOCK_MASTER_DATA: SalesOrderMasterData = {
 export const MOCK_SALES_ORDERS_LIST: SalesOrderListItem[] = [
   {
     id: 'so-001',
-    orderNumber: 'SO-2024-00145',
+    orderNumber: 'C-SO-2400145',
     customerId: 'cust-001',
     customerName: 'Acme Farm Supply Co.',
     orderDate: '2024-01-15',
@@ -264,7 +264,7 @@ export const MOCK_SALES_ORDERS_LIST: SalesOrderListItem[] = [
   },
   {
     id: 'so-002',
-    orderNumber: 'SO-2024-00146',
+    orderNumber: 'C-SO-2400146',
     customerId: 'cust-002',
     customerName: 'Green Fields Agriculture',
     orderDate: '2024-01-16',
@@ -279,7 +279,7 @@ export const MOCK_SALES_ORDERS_LIST: SalesOrderListItem[] = [
   },
   {
     id: 'so-003',
-    orderNumber: 'SO-2024-00147',
+    orderNumber: 'C-SO-2400147',
     customerId: 'cust-003',
     customerName: 'Harvest Equipment Inc.',
     orderDate: '2024-01-17',
@@ -294,7 +294,7 @@ export const MOCK_SALES_ORDERS_LIST: SalesOrderListItem[] = [
   },
   {
     id: 'so-004',
-    orderNumber: 'SO-2024-00148',
+    orderNumber: 'C-SO-2400148',
     customerId: 'cust-004',
     customerName: 'Prairie Land Distributors',
     orderDate: '2024-01-18',
@@ -309,7 +309,7 @@ export const MOCK_SALES_ORDERS_LIST: SalesOrderListItem[] = [
   },
   {
     id: 'so-005',
-    orderNumber: 'SO-2024-00149',
+    orderNumber: 'C-SO-2400149',
     customerId: 'cust-005',
     customerName: 'Midwest Tire & Supply',
     orderDate: '2024-01-19',
@@ -324,7 +324,7 @@ export const MOCK_SALES_ORDERS_LIST: SalesOrderListItem[] = [
   },
   {
     id: 'so-006',
-    orderNumber: 'SO-2024-00150',
+    orderNumber: 'C-SO-2400150',
     customerId: 'cust-001',
     customerName: 'Acme Farm Supply Co.',
     orderDate: '2024-01-20',
@@ -338,7 +338,7 @@ export const MOCK_SALES_ORDERS_LIST: SalesOrderListItem[] = [
   },
   {
     id: 'so-007',
-    orderNumber: 'SO-2024-00151',
+    orderNumber: 'C-SO-2400151',
     customerId: 'cust-002',
     customerName: 'Green Fields Agriculture',
     orderDate: '2024-01-21',
@@ -433,8 +433,9 @@ export function getMockMasterDataResponse(): MasterDataResponse {
 
 export function generateOrderNumber(): string {
   const year = new Date().getFullYear();
+  const yearShort = year.toString().slice(-2); // "2026" -> "26"
   const sequence = Math.floor(Math.random() * 90000) + 10000;
-  return `SO-${year}-${sequence}`;
+  return `C-SO-${yearShort}${sequence}`;
 }
 
 export function createEmptyOrderItem(): OrderItem {

@@ -751,12 +751,10 @@ export async function updateShipmentOrOrder(
             updated_at: new Date().toISOString(),
           };
 
-          // Only update status if it's a valid PO status (lowercase)
-          const validPOStatuses = ['draft', 'sent', 'confirmed', 'partial', 'received', 'cancelled'];
+          // Update status (convert from uppercase to lowercase for PO)
+          // Operations dashboard shows uppercase (OPEN, CLOSED), but PO stores lowercase
           const statusValue = input.status.toLowerCase();
-          if (validPOStatuses.includes(statusValue)) {
-            updateData.status = statusValue;
-          }
+          updateData.status = statusValue;
 
           // Note: purchase_orders table doesn't have eta_to_us_port column
           // Only has expected_delivery_date

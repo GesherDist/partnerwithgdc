@@ -21,6 +21,8 @@ export interface OperationsStats {
   // 🆕 NEW: Dealer allocation KPIs
   dealerAllocationsCount: number;    // Count of items allocated to dealers
   dealerPendingQty: number;          // Quantity pending from dealers
+  // 🆕 NEW: Delayed shipments KPI
+  delayedShipmentsCount: number;     // Count of delayed shipments
 }
 
 // ============================================
@@ -133,6 +135,9 @@ export interface ImmediateAttentionItem {
   // Delay Alert fields
   isDelayed?: boolean;            // Shipment is delayed (manual flag OR auto-detected from dates)
   delayReason?: string | null;    // Reason for delay (from Seaair email or manual entry)
+  // Last Updated fields (Client requirement: show when tracking was last updated)
+  lastUpdated?: string | null;    // Timestamp when tracking was last updated
+  lastUpdatedSource?: string | null; // Source of last update: 'CMA CGM API' or 'Email'
   // 🆕 NEW: Fulfillment allocation fields
   fulfillmentSource: FulfillmentSource | null;       // Fulfillment source for this item
   allocatedToDealerName: string | null;              // Dealer name if allocated
@@ -295,7 +300,7 @@ export interface GDCInventoryItem {
   invoiceAmount?: number;
   deliveryAddress: string;
   expectedDelivery: string | null;
-  status: string;             // PO status: draft, sent, confirmed, etc.
+  status: ShipmentStatus | string;  // Operations status (OPEN, CLOSED, HOLD, etc.) or PO status (draft, sent, confirmed, etc.)
   actionRequired: string;
   notes: string;
   isUnallocated?: boolean;    // True if PO has no linked Sales Order (speculative inventory)
@@ -328,6 +333,8 @@ export interface OperationsFilters {
   // 🆕 NEW: Fulfillment filters
   fulfillmentSource?: FulfillmentSource;  // Filter by fulfillment source
   platinumDealerId?: string;              // Filter by platinum dealer
+  // 🆕 NEW: Delayed shipments filter
+  isDelayed?: boolean;                    // Filter by delayed status
 }
 
 export interface FilterOption {

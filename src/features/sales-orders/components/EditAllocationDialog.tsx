@@ -390,14 +390,16 @@ export function EditAllocationDialog({
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Edit Allocation</DialogTitle>
-          <DialogDescription>
-            {allocation.salesOrderItem?.description && (
-              <div className="mb-2">
-                <span className="font-semibold">Product:</span> {allocation.salesOrderItem.description}
-                {allocation.salesOrderItem.sku && ` (${allocation.salesOrderItem.sku})`}
-              </div>
-            )}
-            Update the allocation quantity, status, or notes.
+          <DialogDescription asChild>
+            <div>
+              {allocation.salesOrderItem?.description && (
+                <div className="mb-2">
+                  <span className="font-semibold">Product:</span> {allocation.salesOrderItem.description}
+                  {allocation.salesOrderItem.sku && ` (${allocation.salesOrderItem.sku})`}
+                </div>
+              )}
+              <span>Update the allocation quantity, status, or notes.</span>
+            </div>
           </DialogDescription>
         </DialogHeader>
 
@@ -625,6 +627,25 @@ export function EditAllocationDialog({
                     </FormItem>
                   )}
                 />
+
+                {/* Display linked Purchase Order number (read-only) */}
+                {allocation.purchaseOrder?.poNumber && (
+                  <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-sm font-medium text-blue-900">
+                          Linked Purchase Order
+                        </div>
+                        <div className="text-xs text-blue-700 mt-0.5">
+                          This allocation is linked to an existing PO
+                        </div>
+                      </div>
+                      <div className="text-lg font-semibold text-blue-900">
+                        {allocation.purchaseOrder.poNumber}
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Show remaining calculation and location selector */}
                 {remainingContainerQty > 0 && (

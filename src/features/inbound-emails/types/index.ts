@@ -112,6 +112,10 @@ export interface InboundEmail {
   // Attachment counts (populated by query)
   total_pdf_attachments?: number;
   processed_pdf_attachments?: number;
+  // AI Extraction fields (for customer@ emails)
+  extracted_data?: any | null;
+  extraction_confidence?: number | null;
+  extraction_status?: string | null;
 }
 
 /**

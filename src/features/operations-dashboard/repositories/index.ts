@@ -114,17 +114,26 @@ export async function getOperationsStats(filters?: OperationsFilters): Promise<O
     throw soError;
   }
 
-  // Also get shipments for in-transit tracking
-  const { data: shipments, error: shipError } = await supabase
+  // Also get shipments for in-transit tracking and delayed count
+  let shipmentsQuery = supabase
     .from('shipments')
     .select(`
       id,
       load_status,
       eta_to_port,
       eta_port_tracking,
-      estimated_arrival
+      estimated_arrival,
+      is_delayed,
+      status
     `)
     .is('deleted_at', null);
+
+  // Apply delayed filter if specified
+  if (filters?.isDelayed !== undefined) {
+    shipmentsQuery = shipmentsQuery.eq('is_delayed', filters.isDelayed);
+  }
+
+  const { data: shipments, error: shipError } = await shipmentsQuery;
 
   if (shipError) {
     console.error('Error fetching shipments for stats:', shipError);
@@ -312,6 +321,24 @@ export async function getOperationsStats(filters?: OperationsFilters): Promise<O
     ?.filter(a => a.status === 'pending' || a.status === 'allocated')
     .reduce((sum, a) => sum + a.quantity, 0) || 0;
 
+  // ============================================
+  // DELAYED SHIPMENTS COUNT (NEW - Oct 1, 2026)
+  // Count shipments that are delayed (is_delayed=true OR auto-calculated)
+  // ============================================
+  const delayedShipmentsCount = shipments?.filter(s => {
+    // Check manual flag first
+    if (s.is_delayed === true) return true;
+
+    // Auto-detect: ETA passed but not delivered
+    const etaDate = s.eta_port_tracking || s.eta_to_port || s.estimated_arrival;
+    if (!etaDate) return false;
+
+    const eta = new Date(etaDate);
+    const isDelivered = s.status === 'delivered';
+
+    return eta < now && !isDelivered;
+  }).length || 0;
+
   return {
     availableInventoryQty,
     availableLoads,
@@ -323,6 +350,7 @@ export async function getOperationsStats(filters?: OperationsFilters): Promise<O
     invoiceAmount,
     dealerAllocationsCount: dealerCount || 0,  // 🆕 NEW
     dealerPendingQty: dealerPendingQty,         // 🆕 NEW
+    delayedShipmentsCount: delayedShipmentsCount, // 🆕 NEW (Oct 1, 2026)
   };
 }
 
@@ -962,6 +990,8 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
       sales_order_id,
       purchase_order_id,
       lfd_date,
+      cma_cgm_last_sync,
+      last_tracking_update,
       ship_to_name,
       ship_to_address_street,
       ship_to_address_city,
@@ -1024,6 +1054,9 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
   }
   if (filters?.salesOrderId) {
     shipQuery = shipQuery.eq('sales_order_id', filters.salesOrderId);
+  }
+  if (filters?.isDelayed !== undefined) {
+    shipQuery = shipQuery.eq('is_delayed', filters.isDelayed);
   }
 
   const { data: shipments, error: shipError } = await shipQuery;
@@ -1146,6 +1179,9 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
         ].filter(Boolean).join(', ') || undefined,
         // Delay Alert fields
         isDelayed: isDelayed || false,
+        // Last Updated fields (Client requirement)
+        lastUpdated: s.cma_cgm_last_sync || s.last_tracking_update || null,
+        lastUpdatedSource: s.cma_cgm_last_sync ? 'CMA CGM API' : (s.last_tracking_update ? 'Email' : null),
         // 🆕 NEW: Fulfillment allocation fields
         fulfillmentSource: primaryAllocation?.fulfillment_source as import('../types').FulfillmentSource || null,
         allocatedToDealerName: toOne(primaryAllocation?.platinum_dealer)?.dealer_name || null,
@@ -1310,6 +1346,9 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
         productSource: 'direct', // Default value (product_source column removed)
         // Delay Alert
         isDelayed: isDelayed || false,
+        // Last Updated fields (Client requirement) - null for SOs without shipments
+        lastUpdated: null,
+        lastUpdatedSource: null,
         // 🆕 NEW: Fulfillment allocation fields
         fulfillmentSource: primaryAllocation?.fulfillment_source as import('../types').FulfillmentSource || null,
         allocatedToDealerName: toOne(primaryAllocation?.platinum_dealer)?.dealer_name || null,
@@ -1894,8 +1933,8 @@ export async function getGDCInventoryByOrderSeries(
       po_date,
       expected_delivery_date,
       status,
-      internal_notes,
       order_series,
+      internal_notes,
       sales_order_id,
       warehouse_id,
       grand_total,
@@ -2244,7 +2283,7 @@ export async function getGDCInventoryByOrderSeries(
       return; // Skip this PO if it doesn't match customer filter
     }
 
-    console.log(`[GDC] Row ${index + 1} - PO: ${po.po_number} (${po.id}), SO: ${linkedSO?.order_number || 'None'}, Customer: ${customerName}, Status: ${po.status}`);
+    console.log(`[GDC] Row ${index + 1} - PO: ${po.po_number} (${po.id}), SO: ${linkedSO?.order_number || 'None'}, Customer: ${customerName}, Status: ${po.status}, OrderSeries: ${po.order_series}`);
 
     // 🆕 Extract fulfillment allocation data from first PO item
     const firstPoItem = poItems?.find(item => item.purchase_order_id === po.id);
@@ -2298,17 +2337,17 @@ export async function getGDCInventoryByOrderSeries(
     // Determine which status to show:
     // 1. If shipment exists and is delivered → show "delivered"
     // 2. If shipment exists and is in_transit → show "in_transit"
-    // 3. Otherwise → show PO status (received, confirmed, etc.)
-    let displayStatus = po.status;
+    // 3. Otherwise → show PO status (uppercase)
+    let displayStatus = po.status ? po.status.toUpperCase() : 'OPEN';
     if (shipment?.status === 'delivered') {
-      displayStatus = 'delivered';
+      displayStatus = 'DELIVERED';
     } else if (shipment?.status === 'in_transit') {
-      displayStatus = 'in_transit';
+      displayStatus = 'IN_TRANSIT';
     } else if (shipment?.status === 'pending') {
-      displayStatus = 'pending';
+      displayStatus = 'PENDING';
     }
 
-    result.push({
+    const itemData = {
       id: po.id, // Always use PO ID (not SO ID)
       no: index + 1,
       poNumber: po.po_number,
@@ -2345,7 +2384,10 @@ export async function getGDCInventoryByOrderSeries(
       allocationStatus: (primaryAllocation?.status as import('../types').AllocationStatus) || null,
       // 🆕 Multiple fulfillment allocations array
       allocations: allocationDetails && allocationDetails.length > 0 ? allocationDetails : undefined,
-    });
+    };
+
+    console.log(`[GDC] Item ${index + 1} orderSeries:`, itemData.orderSeries, 'Type:', typeof itemData.orderSeries);
+    result.push(itemData);
   });
 
   // ============================================

@@ -7,7 +7,10 @@
  * Emails sent to *@inbound.gesher.dev-build.in are caught here.
  *
  * Routing:
- * - shipping@inbound.gesher.dev-build.in -> Shipping tracking processor
+ * - customer@inbound.gesher.dev-build.in -> Customer PO processor (AI extraction + matching)
+ * - supplier@inbound.gesher.dev-build.in -> Supplier PO confirmation processor
+ * - freight@inbound.gesher.dev-build.in -> Freight tracking update processor (generic)
+ * - shipping@inbound.gesher.dev-build.in -> Shipping tracking processor (SEAIR specific)
  * - gesher_dev@inbound.gesher.dev-build.in -> PO email processor (existing)
  */
 
@@ -158,8 +161,96 @@ export async function POST(request: NextRequest) {
 
     const lowerLocalPart = (localPart || '').toLowerCase();
 
+    if (lowerLocalPart === 'customer') {
+      // Route to customer PO processor
+      console.log('[Postmark Webhook] Routing to customer PO processor');
+
+      const { processCustomerPO } = await import('@/features/email-parsing/services/customer-po.service');
+
+      const customerResult = await processCustomerPO(
+        inboundEmail.id,
+        payload.Subject || '',
+        payload.TextBody || payload.HtmlBody || ''
+      );
+
+      console.log('[Postmark Webhook] Customer PO processing result:', {
+        success: customerResult.success,
+        emailId: customerResult.emailId,
+        confidence: customerResult.matchingResults?.overallConfidence || 0,
+      });
+
+      return NextResponse.json({
+        success: true,
+        message: 'Customer PO email processed and extracted',
+        emailId: inboundEmail.id,
+        type: 'customer_po',
+        confidence: customerResult.matchingResults?.overallConfidence || 0,
+        extracted: customerResult.success,
+      });
+    }
+
+    if (lowerLocalPart === 'supplier') {
+      // Route to supplier PO confirmation processor
+      console.log('[Postmark Webhook] Routing to supplier PO processor');
+
+      const { processSupplierPO } = await import('@/features/email-parsing/services/supplier-po.service');
+
+      const supplierResult = await processSupplierPO(
+        inboundEmail.id,
+        payload.Subject || '',
+        payload.TextBody || payload.HtmlBody || ''
+      );
+
+      console.log('[Postmark Webhook] Supplier PO processing result:', {
+        success: supplierResult.success,
+        poId: supplierResult.purchaseOrderId,
+        updated: supplierResult.updated,
+        confidence: supplierResult.matchingResults?.overallConfidence || 0,
+      });
+
+      return NextResponse.json({
+        success: true,
+        message: 'Supplier PO email processed and extracted',
+        emailId: inboundEmail.id,
+        type: 'supplier_po',
+        poId: supplierResult.purchaseOrderId,
+        updated: supplierResult.updated,
+        confidence: supplierResult.matchingResults?.overallConfidence || 0,
+      });
+    }
+
+    if (lowerLocalPart === 'freight') {
+      // Route to freight update processor (generic tracking)
+      console.log('[Postmark Webhook] Routing to freight update processor');
+
+      const { processFreightUpdate } = await import('@/features/email-parsing/services/freight-update.service');
+
+      const freightResult = await processFreightUpdate(
+        inboundEmail.id,
+        payload.Subject || '',
+        payload.TextBody || payload.HtmlBody || ''
+      );
+
+      console.log('[Postmark Webhook] Freight update processing result:', {
+        success: freightResult.success,
+        shipmentId: freightResult.shipmentId,
+        updated: freightResult.updated,
+        confidence: freightResult.matchingResults?.overallConfidence || 0,
+      });
+
+      return NextResponse.json({
+        success: true,
+        message: 'Freight update email processed and extracted',
+        emailId: inboundEmail.id,
+        type: 'freight_update',
+        shipmentId: freightResult.shipmentId,
+        updated: freightResult.updated,
+        confidence: freightResult.matchingResults?.overallConfidence || 0,
+      });
+    }
+
     if (lowerLocalPart === 'shipping') {
-      // Route to shipping processor
+      // Route to shipping processor (SEAIR specific)
       console.log('[Postmark Webhook] Routing to shipping processor');
 
       // Pass the email received timestamp for ETA comparison

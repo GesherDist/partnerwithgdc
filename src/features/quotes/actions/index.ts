@@ -153,6 +153,7 @@ export async function createQuote(formData: FormData): Promise<ActionResult<Quot
 
   // Parse form data
   const rawData = {
+    quoteNumber: formData.get('quoteNumber') as string,
     quoteDate: formData.get('quoteDate') as string,
     validUntil: formData.get('validUntil') as string,
     customerId: formData.get('customerId') as string,
@@ -177,6 +178,7 @@ export async function createQuote(formData: FormData): Promise<ActionResult<Quot
     customerNotes: formData.get('customerNotes') as string,
     internalNotes: formData.get('internalNotes') as string,
     termsAndConditions: formData.get('termsAndConditions') as string,
+    customerPoNumber: formData.get('customerPoNumber') as string,
   };
 
   // Validate form data
@@ -263,7 +265,8 @@ export async function updateQuote(
 
   const fields = [
     'quoteDate', 'validUntil', 'customerId', 'salesRepId',
-    'currencyCode', 'customerNotes', 'internalNotes', 'termsAndConditions'
+    'currencyCode', 'customerNotes', 'internalNotes', 'termsAndConditions',
+    'customerPoNumber'
   ];
 
   for (const field of fields) {

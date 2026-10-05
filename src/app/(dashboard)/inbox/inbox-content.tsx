@@ -253,6 +253,7 @@ export function InboxContent() {
               <SelectContent>
                 <SelectItem value="all">All Status</SelectItem>
                 <SelectItem value="received">Pending</SelectItem>
+                <SelectItem value="extracted">AI Extracted</SelectItem>
                 <SelectItem value="processed">Processed</SelectItem>
                 <SelectItem value="failed">Failed</SelectItem>
                 <SelectItem value="ignored">Ignored</SelectItem>

@@ -85,6 +85,7 @@ const emptyData: OperationsData = {
     invoiceAmount: 0,
     dealerAllocationsCount: 0,   // 🆕 NEW
     dealerPendingQty: 0,          // 🆕 NEW
+    delayedShipmentsCount: 0,     // 🆕 NEW (Oct 1, 2026)
   },
   skuBreakdown: [],
   customerCommitments: [],
@@ -290,7 +291,14 @@ export default function OperationsPage() {
       qtyDelivered: item.qtyDelivered,
       totalQty: item.totalQty,
     });
-    setEditSource('gdc');
+
+    // Determine edit source based on order series
+    // GDC 0 = Supplier/Galileo orders → use 'supplier' status options
+    // GDC 1,2,3 = Warehouse inventory → use 'gdc1' status options
+    console.log('[Edit GDC Item] Order Series:', item.orderSeries, 'Type:', typeof item.orderSeries);
+    const source: EditSource = item.orderSeries === 'GDC 0' ? 'supplier' : 'gdc1';
+    console.log('[Edit GDC Item] Selected source:', source);
+    setEditSource(source);
     setEditDialogOpen(true);
   };
 

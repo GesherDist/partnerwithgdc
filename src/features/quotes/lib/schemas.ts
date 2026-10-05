@@ -128,6 +128,7 @@ export const updateQuoteSchema = z.object({
   customerNotes: z.string().nullable().optional(),
   internalNotes: z.string().nullable().optional(),
   termsAndConditions: z.string().nullable().optional(),
+  customerPoNumber: z.string().max(100).nullable().optional(),
 });
 
 // ============================================

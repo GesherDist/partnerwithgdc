@@ -67,7 +67,7 @@ export const createGdcInventoryAllocationSchema =
 
 /**
  * Schema for Manufacturer/Supplier (Direct) allocation
- * Requires: container_qty
+ * Requires: container_qty, purchase_order_id
  */
 export const createDirectAllocationSchema =
   createFulfillmentAllocationBaseSchema.extend({
@@ -77,7 +77,11 @@ export const createDirectAllocationSchema =
       .int('Container quantity must be an integer')
       .positive('Container quantity must be greater than 0')
       .describe('Required for manufacturer/supplier source'),
-    purchaseOrderId: z.string().uuid('Invalid purchase order ID').optional(),
+    purchaseOrderId: z
+      .string()
+      .min(1, 'Please select a Purchase Order')
+      .uuid('Invalid purchase order ID')
+      .describe('Required - must select an existing PO'),
     containerId: z.string().optional(),
   });
 

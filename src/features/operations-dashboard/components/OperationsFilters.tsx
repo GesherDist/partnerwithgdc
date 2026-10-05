@@ -62,7 +62,7 @@ export function OperationsFilters({
   filterOptions,
   isLoading = false,
 }: OperationsFiltersProps) {
-  const handleFilterChange = (key: keyof OperationsFilters, value: string | undefined) => {
+  const handleFilterChange = (key: keyof OperationsFilters, value: string | boolean | undefined) => {
     onFiltersChange({
       ...filters,
       [key]: value,
@@ -183,6 +183,25 @@ export function OperationsFilters({
                 {option.label}
               </SelectItem>
             ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* Delayed Shipments Filter */}
+      <div className="flex flex-col gap-1">
+        <label className="text-xs font-medium text-muted-foreground">Delayed</label>
+        <Select
+          value={filters.isDelayed === true ? 'true' : filters.isDelayed === false ? 'false' : ''}
+          onValueChange={(value) => handleFilterChange('isDelayed', value === '' ? undefined : value === 'true')}
+          disabled={isLoading}
+        >
+          <SelectTrigger className="w-[150px]">
+            <SelectValue placeholder="All Shipments" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">All Shipments</SelectItem>
+            <SelectItem value="true">Delayed Only</SelectItem>
+            <SelectItem value="false">Not Delayed</SelectItem>
           </SelectContent>
         </Select>
       </div>

@@ -33,6 +33,7 @@ export const operationsStats: OperationsStats = {
   invoiceAmount: 2661096, // $26,61,096
   dealerAllocationsCount: 0,   // 🆕 NEW
   dealerPendingQty: 0,          // 🆕 NEW
+  delayedShipmentsCount: 3,     // 🆕 NEW (Oct 1, 2026)
 };
 
 // ============================================
