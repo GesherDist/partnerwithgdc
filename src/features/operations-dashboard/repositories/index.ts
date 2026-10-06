@@ -1156,7 +1156,7 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
 
       result.push({
         id: s.id,
-        loadNumber: finalSO?.order_number || s.shipment_number || 'N/A',
+        loadNumber: s.shipment_number || finalSO?.order_number || 'N/A',
         customer: customerName,
         po: customerPoNumber,
         qty: s.total_qty || 0,
@@ -1460,6 +1460,7 @@ export async function getSupplierShipmentSchedule(filters?: OperationsFilters): 
       ),
       shipments(
         id,
+        shipment_number,
         load_status
       )
     `)
@@ -1596,8 +1597,9 @@ export async function getSupplierShipmentSchedule(filters?: OperationsFilters): 
       so.shipping_address_postal_code,
     ].filter(Boolean);
 
-    // For direct orders, use order_number as load number
-    const loadNumber = so.order_number || 'N/A';
+    // Get shipment number if shipment exists, otherwise use order number
+    const shipment = toOne(so.shipments) as { shipment_number?: string; load_status?: string } | null;
+    const loadNumber = shipment?.shipment_number || so.order_number || 'N/A';
 
     // PO # from customer_po_number
     const poNumber = so.customer_po_number || 'N/A';
@@ -1700,6 +1702,7 @@ export async function getGDC1Inventory(filters?: OperationsFilters): Promise<{ d
       ),
       shipments(
         id,
+        shipment_number,
         load_status
       )
     `)
@@ -1858,10 +1861,14 @@ export async function getGDC1Inventory(filters?: OperationsFilters): Promise<{ d
       so.shipping_address_postal_code,
     ].filter(Boolean);
 
+    // Get shipment number if shipment exists, otherwise use order number
+    const shipment = toOne(so.shipments) as { shipment_number?: string; load_status?: string } | null;
+    const loadNumber = shipment?.shipment_number || so.order_number;
+
     result.push({
       id: so.id,
       no: index + 1,
-      loadNumber: so.order_number,
+      loadNumber,
       sku290Qty,   // 290/85R38 CW Qty
       sku380Qty,   // 380/85R24 CW Qty
       items: soItems,

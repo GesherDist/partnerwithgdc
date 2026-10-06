@@ -716,7 +716,7 @@ export async function updateShipmentOrOrder(
         console.log('[updateShipmentOrOrder] Found related PO:', shipmentWithPO.purchase_order_id, '- updating it too');
 
         const poUpdateData: Record<string, unknown> = {
-          status: input.status.toLowerCase(), // Convert IN_TRANSIT → in_transit
+          load_status: mapped.loadStatus, // Update load_status for Operations Dashboard tracking
           updated_at: new Date().toISOString(),
         };
 
@@ -760,13 +760,9 @@ export async function updateShipmentOrOrder(
         console.log('[updateShipmentOrOrder] UPDATING PURCHASE ORDER');
         // Update purchase order
         const updateData: Record<string, unknown> = {
+          load_status: mapped.loadStatus, // Update load_status for Operations Dashboard tracking
           updated_at: new Date().toISOString(),
         };
-
-        // Update status (convert from uppercase to lowercase for PO)
-        // Operations dashboard shows uppercase (OPEN, CLOSED), but PO stores lowercase
-        const statusValue = input.status.toLowerCase();
-        updateData.status = statusValue;
 
         // Note: purchase_orders table doesn't have eta_to_us_port column
         // Only has expected_delivery_date

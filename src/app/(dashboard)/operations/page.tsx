@@ -282,7 +282,7 @@ export default function OperationsPage() {
     //       Dialog's actualDeliveryDate = Customer Expected Delivery (item.expectedDelivery)
     setEditingShipment({
       id: item.id,
-      loadNumber: item.soNumber || item.poNumber || 'N/A',
+      loadNumber: item.shipmentNumber || item.soNumber || item.poNumber || 'N/A', // Use shipment number from table
       customer: item.customer || 'Unknown',
       status: item.status as ShipmentStatus,
       actionRequired: item.actionRequired || '',
