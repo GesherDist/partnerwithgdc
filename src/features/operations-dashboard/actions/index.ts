@@ -663,14 +663,37 @@ export async function updateShipmentOrOrder(
 
     const mapped = statusMap[input.status as ShipmentStatus] || { loadStatus: 'open', soStatus: 'pending' };
 
-    // Try to update shipment first
-    const { data: shipment, error: shipmentError } = await supabase
+    // CRITICAL: input.id could be either Shipment ID or Purchase Order ID
+    // Try shipment by ID first, then by purchase_order_id
+    let shipment = null;
+    let shipmentError = null;
+
+    // Try 1: Check if input.id is a shipment ID
+    const { data: shipmentById, error: shipmentByIdError } = await supabase
       .from('shipments')
       .select('id')
       .eq('id', input.id)
-      .single();
+      .maybeSingle();
 
-    console.log('[updateShipmentOrOrder] Checked shipments table:', { found: !!shipment, error: shipmentError?.message });
+    // Try 2: Check if input.id is a purchase order ID
+    const { data: shipmentByPO, error: shipmentByPOError } = await supabase
+      .from('shipments')
+      .select('id')
+      .eq('purchase_order_id', input.id)
+      .maybeSingle();
+
+    if (shipmentById) {
+      shipment = shipmentById;
+      shipmentError = shipmentByIdError;
+      console.log('[updateShipmentOrOrder] Found shipment by ID:', shipment.id);
+    } else if (shipmentByPO) {
+      shipment = shipmentByPO;
+      shipmentError = shipmentByPOError;
+      console.log('[updateShipmentOrOrder] Found shipment by purchase_order_id:', shipment.id);
+    } else {
+      shipmentError = shipmentByIdError || shipmentByPOError;
+      console.log('[updateShipmentOrOrder] Checked shipments table:', { found: false, error: shipmentError?.message });
+    }
 
     if (shipment) {
       console.log('[updateShipmentOrOrder] UPDATING SHIPMENT');
@@ -694,7 +717,7 @@ export async function updateShipmentOrOrder(
       const { error } = await supabase
         .from('shipments')
         .update(updateData)
-        .eq('id', input.id);
+        .eq('id', shipment.id);
 
       if (error) {
         console.error('Error updating shipment:', error);
@@ -709,7 +732,7 @@ export async function updateShipmentOrOrder(
       const { data: shipmentWithPO } = await supabase
         .from('shipments')
         .select('purchase_order_id')
-        .eq('id', input.id)
+        .eq('id', shipment.id)
         .single();
 
       if (shipmentWithPO?.purchase_order_id) {

@@ -1100,7 +1100,6 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
     const isOverdue = s.is_delayed || (customerDue ? customerDue < now : false);
     const status = s.load_status as string;
     const shipmentStatus = s.status as string;
-    const isActive = status === 'open' || status === 'in_transit' || !status;
 
     // LFD (Last Free Day) Alert calculations
     const lfdDateStr = s.lfd_date as string | null;
@@ -1125,22 +1124,24 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
     const isAutoDelayed = etaPort && etaPort < now && !isDelivered;
     const isDelayed = isManuallyDelayed || isAutoDelayed;
 
-    // If status filter is applied, include all matching items
-    // Otherwise, only include active/urgent items
+    // CRITICAL CHANGE (Oct 6, 2026): Only include records with:
+    // 1. ETA in next 7 days (isThisWeek)
+    // 2. OR Overdue (customer due date passed)
+    // 3. OR Delayed (manual flag or auto-detected)
+    // 4. OR LFD Alert (approaching/critical)
+    // REMOVED: isActive condition (don't include just because status is open/in_transit)
+    const hasLFDAlert = isLFDCritical || isLFDApproaching;
+
     const shouldInclude = filters?.status
       ? true  // Status filter already applied in query
-      : (isActive || isThisWeek || isOverdue || isDelayed);
-
-    // Include if LFD is approaching/critical or delayed
-    const hasLFDAlert = isLFDCritical || isLFDApproaching;
-    const shouldIncludeFinal = shouldInclude || hasLFDAlert || isDelayed;
+      : (isThisWeek || isOverdue || isDelayed || hasLFDAlert);
 
     // Exclude delivered shipments from "Immediate Attention" section
     // EXCEPT if user specifically selects "DELIVERED" status filter
     const shouldShowDelivered = filters?.status === 'DELIVERED';
     const shouldExcludeDelivered = isDelivered && !shouldShowDelivered;
 
-    if (shouldIncludeFinal && !shouldExcludeDelivered) {
+    if (shouldInclude && !shouldExcludeDelivered) {
       // 🆕 Extract fulfillment allocation data
       // Only available from direct sales_orders, not from PO → SO (since PO query doesn't include items)
       const soItems = salesOrderData?.sales_order_items as Array<{
@@ -1191,171 +1192,11 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
   });
 
   // ============================================
-  // 2. Get from SALES_ORDERS table (for orders without shipments)
-  // Only DROPSHIP orders - warehouse orders shown in GDC1 Inventory tab
+  // REMOVED (Oct 6, 2026): Sales Orders query
+  // Only show records from SHIPMENTS table (not Sales Orders without shipments)
+  // Client requirement: Immediate Attention should only show shipments with ETA in next 7 days,
+  // plus overdue, delayed, and LFD alert shipments
   // ============================================
-
-  // Map ShipmentStatus to SO status for filtering
-  const statusToSoStatusMap: Partial<Record<ShipmentStatus, string[]>> = {
-    'OPEN': ['pending', 'draft'],
-    'SOLD': ['confirmed'],
-    'IN_TRANSIT': ['processing', 'shipped'],
-    'DELIVERED': ['delivered'],
-    // AVAILABLE is for warehouse inventory, not direct orders - returns empty
-  };
-
-  let soQuery = supabase
-    .from('sales_orders')
-    .select(`
-      id,
-      order_number,
-      customer_po_number,
-      status,
-      requested_delivery_date,
-      internal_notes,
-      customer_id,
-      customers(id, name),
-      sales_order_items(
-        quantity,
-        product_id,
-        fulfillment_allocations(
-          fulfillment_source,
-          quantity,
-          platinum_dealer:platinum_dealers(dealer_name),
-          dealer_location:platinum_dealer_locations(location_name)
-        )
-      )
-    `)
-    .is('deleted_at', null)
-    .order('requested_delivery_date', { ascending: true });
-
-  // Apply status filter - if status doesn't map to SO statuses, skip SO query
-  if (filters?.status) {
-    const soStatuses = statusToSoStatusMap[filters.status];
-    if (soStatuses && soStatuses.length > 0) {
-      soQuery = soQuery.in('status', soStatuses);
-    } else {
-      // Status like AVAILABLE doesn't apply to direct orders - return empty for SO
-      soQuery = soQuery.eq('status', 'NONE_MATCH'); // Will return empty
-    }
-  } else {
-    // No status filter - get all active statuses
-    soQuery = soQuery.in('status', ['pending', 'confirmed', 'processing', 'shipped']);
-  }
-
-  // Apply other filters
-  if (filters?.customerId) {
-    soQuery = soQuery.eq('customer_id', filters.customerId);
-  }
-  if (filters?.salesOrderId) {
-    soQuery = soQuery.eq('id', filters.salesOrderId);
-  }
-  if (filters?.customerPoNumber) {
-    soQuery = soQuery.eq('customer_po_number', filters.customerPoNumber);
-  }
-
-  const { data: salesOrders, error: soError } = await soQuery;
-
-  if (soError) {
-    console.error('Error fetching sales orders for immediate attention:', soError);
-  }
-
-  // Track SALES ORDER IDs we've already added from shipments (to avoid duplicates)
-  const addedSalesOrderIds = new Set<string>();
-  shipments?.forEach((s) => {
-    if (s.sales_order_id) {
-      addedSalesOrderIds.add(s.sales_order_id);
-    }
-  });
-
-  salesOrders?.forEach((so) => {
-    // Skip if already added from shipments (by sales_order_id)
-    if (addedSalesOrderIds.has(so.id)) { return; }
-
-    // Filter by productId if specified
-    const items = so.sales_order_items || [];
-    if (filters?.productId) {
-      const hasProduct = items.some((item: { product_id?: string }) => item.product_id === filters.productId);
-      if (!hasProduct) return;
-    }
-
-    const customerData = toOne(so.customers);
-    const deliveryDate = so.requested_delivery_date ? new Date(so.requested_delivery_date) : null;
-
-    // Check if delivery due in next 7 days or overdue
-    const isThisWeek = deliveryDate ? (deliveryDate >= now && deliveryDate <= next7Days) : false;
-    const isOverdue = deliveryDate ? deliveryDate < now : false;
-
-    // Delay Detection for Sales Orders:
-    // Auto-detect: Delivery date passed but status is not 'delivered'
-    const isDelayed = deliveryDate && deliveryDate < now && so.status !== 'delivered';
-
-    // Include if due this week, overdue, delayed, or in active status
-    const isActive = so.status === 'pending' || so.status === 'confirmed' || so.status === 'processing';
-
-    // If status filter is applied, include all matching items
-    // Otherwise, only include active/urgent items
-    const shouldInclude = filters?.status
-      ? true  // Status filter already applied in query
-      : (isThisWeek || isOverdue || isDelayed || isActive);
-
-    if (shouldInclude) {
-      // Calculate total qty from items
-      const items = so.sales_order_items || [];
-      const totalQty = items.reduce((sum: number, item: { quantity: number }) => sum + (item.quantity || 0), 0);
-
-      // Map SO status to display status
-      // Business Flow: confirmed → processing → shipped → delivered
-      let displayStatus: ShipmentStatus = 'OPEN';
-      if (so.status === 'confirmed') {
-        displayStatus = 'CONFIRMED'; // Order confirmed, waiting for supplier
-      } else if (so.status === 'processing') {
-        displayStatus = 'PROCESSING'; // Order being processed
-      } else if (so.status === 'shipped') {
-        displayStatus = 'IN_TRANSIT'; // Goods in transit
-      } else if (so.status === 'delivered') {
-        displayStatus = 'DELIVERED';
-      }
-
-      // 🆕 Extract fulfillment allocation data
-      const soItems = so.sales_order_items as Array<{
-        quantity: number;
-        product_id?: string;
-        fulfillment_allocations?: Array<{
-          fulfillment_source: string;
-          quantity: number;
-          platinum_dealer?: { dealer_name: string } | { dealer_name: string }[];
-          dealer_location?: { location_name: string } | { location_name: string }[];
-        }>;
-      }> | undefined;
-      const allocations = soItems?.[0]?.fulfillment_allocations || [];
-      const primaryAllocation = allocations[0]; // Get first allocation as primary
-
-      result.push({
-        id: so.id,
-        loadNumber: so.order_number || 'N/A',
-        customer: customerData?.name || 'Unknown',
-        po: so.customer_po_number || 'N/A',
-        qty: totalQty,
-        etaPort: null,
-        customerEtaDue: so.requested_delivery_date,
-        status: displayStatus,
-        actionRequired: so.internal_notes || '',
-        isOverdue,
-        isThisWeek,
-        productSource: 'direct', // Default value (product_source column removed)
-        // Delay Alert
-        isDelayed: isDelayed || false,
-        // Last Updated fields (Client requirement) - null for SOs without shipments
-        lastUpdated: null,
-        lastUpdatedSource: null,
-        // 🆕 NEW: Fulfillment allocation fields
-        fulfillmentSource: primaryAllocation?.fulfillment_source as import('../types').FulfillmentSource || null,
-        allocatedToDealerName: toOne(primaryAllocation?.platinum_dealer)?.dealer_name || null,
-        allocatedToDealerLocation: toOne(primaryAllocation?.dealer_location)?.location_name || null,
-      });
-    }
-  });
 
   // Sort by priority: LFD critical > LFD approaching > Delayed > Overdue > This week
   result.sort((a, b) => {
@@ -1861,12 +1702,14 @@ export async function getGDC1Inventory(filters?: OperationsFilters): Promise<{ d
       so.shipping_address_postal_code,
     ].filter(Boolean);
 
-    // Get shipment number if shipment exists, otherwise use order number
-    const shipment = toOne(so.shipments) as { shipment_number?: string; load_status?: string } | null;
+    // Get shipment data if exists (id, number, status)
+    const shipment = toOne(so.shipments) as { id?: string; shipment_number?: string; load_status?: string } | null;
     const loadNumber = shipment?.shipment_number || so.order_number;
 
+    // CRITICAL FIX: Use shipment ID (not SO ID) so status updates work correctly
+    // This allows updateShipmentOrOrder to find the record in shipments table
     result.push({
-      id: so.id,
+      id: shipment?.id || so.id,  // Shipment ID first, fallback to SO ID if no shipment
       no: index + 1,
       loadNumber,
       sku290Qty,   // 290/85R38 CW Qty
@@ -1940,6 +1783,7 @@ export async function getGDCInventoryByOrderSeries(
       po_date,
       expected_delivery_date,
       status,
+      load_status,
       order_series,
       internal_notes,
       sales_order_id,
@@ -2344,9 +2188,9 @@ export async function getGDCInventoryByOrderSeries(
     });
 
     // Determine which status to show:
-    // Priority: Shipment load_status > PO status
+    // Priority: Shipment load_status > PO load_status
     // Use load_status (Operations status: AVAILABLE, OPEN, CLOSED, etc.)
-    let displayStatus = po.status ? po.status.toUpperCase() : 'OPEN';
+    let displayStatus = po.load_status ? po.load_status.toUpperCase() : (po.status ? po.status.toUpperCase() : 'OPEN');
     if (shipment?.load_status) {
       displayStatus = shipment.load_status.toUpperCase();
     }
