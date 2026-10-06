@@ -35,21 +35,21 @@ interface OperationsFiltersProps {
   isLoading?: boolean;
 }
 
-// Status options for the dropdown
+// Operations Dashboard Status Options (12 GDC statuses from Excel)
+// Order matches user's Excel dropdown
 const STATUS_OPTIONS: { value: ShipmentStatus; label: string }[] = [
-  { value: 'AVAILABLE', label: 'Available' },
   { value: 'OPEN', label: 'Open' },
+  { value: 'CLOSED', label: 'Closed' },
   { value: 'HOLD', label: 'Hold' },
   { value: 'IN_TRANSIT', label: 'In Transit' },
-  { value: 'SOLD', label: 'Sold' },
-  { value: 'CLOSED', label: 'Closed' },
-  { value: 'INVOICED', label: 'Invoiced' },
   { value: 'NOT_INVOICED', label: 'Not Invoiced' },
+  { value: 'AVAILABLE', label: 'Available' },
+  { value: 'INVOICED', label: 'Invoiced' },
+  { value: 'SOLD', label: 'Sold' },
+  { value: 'PO_NEEDED', label: 'PO Needed' },
   { value: 'PARTIALLY_PAID', label: 'Partially Paid' },
   { value: 'PAID', label: 'Paid' },
   { value: 'DISPUTED', label: 'Disputed' },
-  { value: 'PO_NEEDED', label: 'PO Needed' },
-  { value: 'DELIVERED', label: 'Delivered' },
 ];
 
 // ============================================

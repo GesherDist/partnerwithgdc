@@ -54,6 +54,23 @@ export const PO_STATUSES: POStatus[] = [
   'cancelled',
 ];
 
+// Operations Dashboard statuses only (for UI dropdowns)
+// These are the 12 GDC statuses shown in Excel sheets
+export const PO_OPERATIONS_STATUSES: POStatus[] = [
+  'open',
+  'closed',
+  'hold',
+  'in_transit',
+  'not_invoiced',
+  'available',
+  'invoiced',
+  'sold',
+  'po_needed',
+  'partially_paid',
+  'paid',
+  'disputed',
+];
+
 export const PO_STATUS_LABELS: Record<POStatus, string> = {
   draft: 'Draft',
   sent: 'Sent',
