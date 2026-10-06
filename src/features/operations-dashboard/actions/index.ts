@@ -700,87 +700,98 @@ export async function updateShipmentOrOrder(
         console.error('Error updating shipment:', error);
         return { success: false, error: error.message };
       }
-    } else {
-      // Try sales_orders
-      const { data: salesOrder, error: soError } = await supabase
-        .from('sales_orders')
-        .select('id')
+
+      console.log('[updateShipmentOrOrder] ✅ Shipment updated successfully');
+
+      // ============================================
+      // NEW: Also update related Purchase Order if it exists
+      // ============================================
+      const { data: shipmentWithPO } = await supabase
+        .from('shipments')
+        .select('purchase_order_id')
         .eq('id', input.id)
         .single();
 
-      console.log('[updateShipmentOrOrder] Checked sales_orders table:', { found: !!salesOrder, error: soError?.message });
+      if (shipmentWithPO?.purchase_order_id) {
+        console.log('[updateShipmentOrOrder] Found related PO:', shipmentWithPO.purchase_order_id, '- updating it too');
 
-      if (salesOrder) {
-        console.log('[updateShipmentOrOrder] UPDATING SALES ORDER - status will be:', mapped.soStatus);
-        // Update sales order
-        const updateData: Record<string, unknown> = {
-          status: mapped.soStatus,
+        const poUpdateData: Record<string, unknown> = {
+          status: input.status.toLowerCase(), // Convert IN_TRANSIT → in_transit
           updated_at: new Date().toISOString(),
         };
 
         if (input.customerExpectedDelivery !== undefined) {
-          updateData.requested_delivery_date = input.customerExpectedDelivery || null;
+          poUpdateData.expected_delivery_date = input.customerExpectedDelivery || null;
+        }
+        if (input.actionRequired !== undefined) {
+          poUpdateData.internal_notes = input.actionRequired || null;
+        }
+
+        const { error: poError } = await supabase
+          .from('purchase_orders')
+          .update(poUpdateData)
+          .eq('id', shipmentWithPO.purchase_order_id);
+
+        if (poError) {
+          console.error('[updateShipmentOrOrder] Warning: Failed to update related PO:', poError.message);
+          // Don't fail the whole operation if PO update fails
+        } else {
+          console.log('[updateShipmentOrOrder] ✅ Related PO also updated successfully');
+        }
+      } else {
+        console.log('[updateShipmentOrOrder] No related PO found for this shipment');
+      }
+    } else {
+      // ============================================
+      // REMOVED: sales_orders update logic
+      // Operations Dashboard should NOT update Sales Orders
+      // ============================================
+
+      // Try purchase_orders directly
+      const { data: purchaseOrder, error: poError } = await supabase
+        .from('purchase_orders')
+        .select('id')
+        .eq('id', input.id)
+        .single();
+
+      console.log('[updateShipmentOrOrder] Checked purchase_orders table:', { found: !!purchaseOrder, error: poError?.message });
+
+      if (purchaseOrder) {
+        console.log('[updateShipmentOrOrder] UPDATING PURCHASE ORDER');
+        // Update purchase order
+        const updateData: Record<string, unknown> = {
+          updated_at: new Date().toISOString(),
+        };
+
+        // Update status (convert from uppercase to lowercase for PO)
+        // Operations dashboard shows uppercase (OPEN, CLOSED), but PO stores lowercase
+        const statusValue = input.status.toLowerCase();
+        updateData.status = statusValue;
+
+        // Note: purchase_orders table doesn't have eta_to_us_port column
+        // Only has expected_delivery_date
+        if (input.customerExpectedDelivery !== undefined) {
+          updateData.expected_delivery_date = input.customerExpectedDelivery || null;
         }
         if (input.actionRequired !== undefined) {
           updateData.internal_notes = input.actionRequired || null;
         }
 
+        console.log('[PO Update] Updating PO:', input.id, 'with data:', updateData);
+
         const { error } = await supabase
-          .from('sales_orders')
+          .from('purchase_orders')
           .update(updateData)
           .eq('id', input.id);
 
         if (error) {
-          console.error('Error updating sales order:', error);
+          console.error('Error updating purchase order:', error);
           return { success: false, error: error.message };
         }
+
+        console.log('[PO Update] Successfully updated PO:', input.id);
       } else {
-        // Try purchase_orders
-        const { data: purchaseOrder, error: poError } = await supabase
-          .from('purchase_orders')
-          .select('id')
-          .eq('id', input.id)
-          .single();
-
-        console.log('[updateShipmentOrOrder] Checked purchase_orders table:', { found: !!purchaseOrder, error: poError?.message });
-
-        if (purchaseOrder) {
-          console.log('[updateShipmentOrOrder] UPDATING PURCHASE ORDER');
-          // Update purchase order
-          const updateData: Record<string, unknown> = {
-            updated_at: new Date().toISOString(),
-          };
-
-          // Update status (convert from uppercase to lowercase for PO)
-          // Operations dashboard shows uppercase (OPEN, CLOSED), but PO stores lowercase
-          const statusValue = input.status.toLowerCase();
-          updateData.status = statusValue;
-
-          // Note: purchase_orders table doesn't have eta_to_us_port column
-          // Only has expected_delivery_date
-          if (input.customerExpectedDelivery !== undefined) {
-            updateData.expected_delivery_date = input.customerExpectedDelivery || null;
-          }
-          if (input.actionRequired !== undefined) {
-            updateData.internal_notes = input.actionRequired || null;
-          }
-
-          console.log('[PO Update] Updating PO:', input.id, 'with data:', updateData);
-
-          const { error } = await supabase
-            .from('purchase_orders')
-            .update(updateData)
-            .eq('id', input.id);
-
-          if (error) {
-            console.error('Error updating purchase order:', error);
-            return { success: false, error: error.message };
-          }
-
-          console.log('[PO Update] Successfully updated PO:', input.id);
-        } else {
-          return { success: false, error: 'Record not found' };
-        }
+        return { success: false, error: 'Record not found in shipments or purchase_orders table' };
       }
     }
 
