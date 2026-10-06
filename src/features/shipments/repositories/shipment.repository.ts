@@ -93,6 +93,7 @@ interface OrderLookups {
   salesOrders: Record<string, string>;
   purchaseOrders: Record<string, string>;
   salesOrderInfo: Record<string, { customerName: string | null; customerPo: string | null }>;
+  locations: Record<string, string>; // Pre-PO/SO: Warehouse names for unallocated inventory
 }
 
 interface DbShipmentItem {
@@ -150,6 +151,7 @@ class ShipmentRepositoryImpl {
         status,
         sales_order_id,
         purchase_order_id,
+        from_location_id,
         supplier_reference_number,
         eta_to_port,
         confirmed_eta,
@@ -312,14 +314,16 @@ class ShipmentRepositoryImpl {
    * Get order numbers for shipments
    */
   private async getOrderNumbers(
-    shipments: Array<{ sales_order_id: string | null; purchase_order_id: string | null }>
+    shipments: Array<{ sales_order_id: string | null; purchase_order_id: string | null; from_location_id: string | null }>
   ): Promise<OrderLookups> {
     const soIds = shipments.map((s) => s.sales_order_id).filter(Boolean) as string[];
     const poIds = shipments.map((s) => s.purchase_order_id).filter(Boolean) as string[];
+    const locationIds = shipments.map((s) => s.from_location_id).filter(Boolean) as string[];
 
     const salesOrders: Record<string, string> = {};
     const purchaseOrders: Record<string, string> = {};
     const salesOrderInfo: OrderLookups['salesOrderInfo'] = {};
+    const locations: Record<string, string> = {};
 
     if (soIds.length > 0) {
       const { data } = await db
@@ -351,7 +355,19 @@ class ShipmentRepositoryImpl {
       }
     }
 
-    return { salesOrders, purchaseOrders, salesOrderInfo };
+    // Pre-PO/SO: Fetch warehouse/location names for unallocated inventory
+    if (locationIds.length > 0) {
+      const { data } = await db
+        .from('locations')
+        .select('id, name')
+        .in('id', locationIds);
+
+      for (const row of data || []) {
+        locations[row.id] = row.name;
+      }
+    }
+
+    return { salesOrders, purchaseOrders, salesOrderInfo, locations };
   }
 
   /**
@@ -730,6 +746,7 @@ class ShipmentRepositoryImpl {
       status: ShipmentStatus;
       sales_order_id: string | null;
       purchase_order_id: string | null;
+      from_location_id: string | null;
       supplier_reference_number: string | null;
       eta_to_port: string | null;
       confirmed_eta: string | null;
@@ -776,6 +793,7 @@ class ShipmentRepositoryImpl {
       actionRequired: data.action_required,
       customerName: soInfo?.customerName ?? null,
       customerPo: soInfo?.customerPo ?? null,
+      warehouseName: data.from_location_id ? orderNumbers.locations[data.from_location_id] || null : null, // Pre-PO/SO: Warehouse name
     };
   }
 }

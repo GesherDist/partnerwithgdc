@@ -286,6 +286,7 @@ export interface GDCInventoryItem {
   no: number;
   poNumber: string | null;    // Purchase Order Number
   soNumber: string | null;    // Linked SO Number (if any)
+  shipmentNumber: string | null;  // Shipment number (e.g., SO2600063)
   customerPoNumber: string | null; // Customer PO Number (from sales_orders.customer_po_number)
   orderSeries: string;        // GDC 1, GDC 2, GDC 3
   items: ShipmentItemDetail[];

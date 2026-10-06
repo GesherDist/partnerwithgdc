@@ -13,11 +13,13 @@ import {
   fetchCompanyInfo,
   revokeToken,
   calculateTokenExpiry,
+  refreshAccessToken,
 } from '../lib/oauth';
 import {
   getConnection,
   upsertConnection,
   disconnectConnection,
+  updateTokens,
 } from '../repositories/quickbooks-connection.repository';
 import type {
   QuickBooksStatusResponse,
@@ -155,24 +157,51 @@ export async function getConnectionStatus(): Promise<QuickBooksStatusResponse> {
  * Get decrypted access token for making API calls
  *
  * This should only be used when actually calling QuickBooks API.
+ * Automatically refreshes token if expired or expiring soon (within 5 minutes).
  */
 export async function getAccessToken(): Promise<{
   accessToken: string;
   realmId: string;
   environment: QuickBooksEnvironment;
 } | null> {
-  const connection = await getConnection();
+  let connection = await getConnection();
 
   if (!connection || connection.status !== 'connected') {
     return null;
   }
 
-  // Check if token is expired
+  // Check if token is expired or expiring soon (within 5 minutes)
   const expiresAt = new Date(connection.token_expires_at);
-  if (expiresAt <= new Date()) {
-    // Token is expired, would need to refresh
-    // For now, return null - token refresh can be implemented later
-    return null;
+  const buffer = 5 * 60 * 1000; // 5 minutes buffer
+  const now = new Date();
+
+  if (expiresAt.getTime() - now.getTime() <= buffer) {
+    // Token is expired or expiring soon - refresh it
+    console.log('[QB Auth] Token expired or expiring soon, refreshing...');
+
+    try {
+      const refreshToken = decrypt(connection.refresh_token_encrypted);
+      const tokenResponse = await refreshAccessToken(refreshToken);
+
+      // Encrypt new tokens
+      const accessTokenEncrypted = encrypt(tokenResponse.access_token);
+      const refreshTokenEncrypted = encrypt(tokenResponse.refresh_token);
+      const tokenExpiresAt = calculateTokenExpiry(tokenResponse.expires_in);
+
+      // Update database with new tokens
+      connection = await updateTokens(
+        connection.id,
+        accessTokenEncrypted,
+        refreshTokenEncrypted,
+        tokenExpiresAt
+      );
+
+      console.log('[QB Auth] Token refreshed successfully');
+    } catch (error) {
+      console.error('[QB Auth] Token refresh failed:', error);
+      // If refresh fails, return null (connection might need to be re-authorized)
+      return null;
+    }
   }
 
   const accessToken = decrypt(connection.access_token_encrypted);

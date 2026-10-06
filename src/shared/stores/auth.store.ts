@@ -159,15 +159,24 @@ export const useAuthStore = create<AuthStore>()(
       hasPermission: (permission) => {
         const { appUser } = get();
         if (!appUser) {
+          console.log('[Auth Store] hasPermission: No appUser');
           return false;
         }
         // Super Admin bypass - ONLY by role name pattern (not isSystemRole alone)
         // This ensures only actual super admin role bypasses permissions
         const roleName = appUser.role?.name?.toLowerCase().replace(/[_\s]/g, '');
-        if (roleName === 'superadmin') {
+        const isSuperAdmin = roleName === 'superadmin';
+
+        if (isSuperAdmin) {
+          console.log(`[Auth Store] Super Admin detected - bypassing permission check for '${permission}'`);
           return true;
         }
-        return appUser.permissions.includes(permission);
+
+        const hasAccess = appUser.permissions.includes(permission);
+        if (!hasAccess) {
+          console.log(`[Auth Store] Permission '${permission}' denied - role: ${appUser.role?.name}, permissions: ${appUser.permissions.length}`);
+        }
+        return hasAccess;
       },
 
       hasAnyPermission: (permissions) => {
@@ -207,7 +216,7 @@ export const useAuthStore = create<AuthStore>()(
     }),
     {
       name: 'auth-storage',
-      version: 3, // Increment when schema changes - clears old cached data
+      version: 4, // Increment when schema changes - clears old cached data
       storage: createJSONStorage(() => sessionStorage),
       partialize: (state) => ({
         // Only persist essential data
@@ -216,7 +225,8 @@ export const useAuthStore = create<AuthStore>()(
       }),
       migrate: (persistedState, version) => {
         // If version is old, return fresh state (clears old data)
-        if (version < 3) {
+        if (version < 4) {
+          console.log('[Auth Store] Clearing old cache - version upgrade to 4');
           return { appUser: null, isAuthenticated: false };
         }
         return persistedState as { appUser: AppUser | null; isAuthenticated: boolean };

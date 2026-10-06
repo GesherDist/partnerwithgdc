@@ -56,7 +56,19 @@ export const SHIPMENT_SOURCE_LABELS: Record<ShipmentSource, string> = {
 // LOAD STATUS (Operations Dashboard - Jenny)
 // ============================================
 
-export type LoadStatus = 'available' | 'sold' | 'open' | 'hold' | 'in_transit' | 'invoiced';
+export type LoadStatus =
+  | 'available'
+  | 'sold'
+  | 'open'
+  | 'hold'
+  | 'in_transit'
+  | 'invoiced'
+  | 'not_invoiced'
+  | 'closed'
+  | 'po_needed'
+  | 'partially_paid'
+  | 'paid'
+  | 'disputed';
 
 export const LOAD_STATUSES: LoadStatus[] = [
   'available',
@@ -65,6 +77,12 @@ export const LOAD_STATUSES: LoadStatus[] = [
   'hold',
   'in_transit',
   'invoiced',
+  'not_invoiced',
+  'closed',
+  'po_needed',
+  'partially_paid',
+  'paid',
+  'disputed',
 ];
 
 export const LOAD_STATUS_LABELS: Record<LoadStatus, string> = {
@@ -74,6 +92,12 @@ export const LOAD_STATUS_LABELS: Record<LoadStatus, string> = {
   hold: 'Hold',
   in_transit: 'In Transit',
   invoiced: 'Invoiced',
+  not_invoiced: 'Not Invoiced',
+  closed: 'Closed',
+  po_needed: 'PO Needed',
+  partially_paid: 'Partially Paid',
+  paid: 'Paid',
+  disputed: 'Disputed',
 };
 
 export const LOAD_STATUS_COLORS: Record<LoadStatus, string> = {
@@ -83,6 +107,12 @@ export const LOAD_STATUS_COLORS: Record<LoadStatus, string> = {
   hold: 'bg-stone-100 text-stone-700 border border-stone-200',
   in_transit: 'bg-sky-100 text-sky-800 border border-sky-200',
   invoiced: 'bg-purple-100 text-purple-800 border border-purple-200',
+  not_invoiced: 'bg-orange-100 text-orange-800 border border-orange-200',
+  closed: 'bg-gray-100 text-gray-800 border border-gray-200',
+  po_needed: 'bg-red-100 text-red-800 border border-red-200',
+  partially_paid: 'bg-yellow-100 text-yellow-800 border border-yellow-200',
+  paid: 'bg-green-100 text-green-800 border border-green-200',
+  disputed: 'bg-rose-100 text-rose-800 border border-rose-200',
 };
 
 // ============================================
@@ -423,6 +453,7 @@ export interface ShipmentListItem {
   actionRequired: string | null;
   customerName: string | null;
   customerPo: string | null;
+  warehouseName: string | null; // Pre-PO/SO: Show warehouse name when no customer
 }
 
 export interface PaginatedResult<T> {

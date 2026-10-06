@@ -46,15 +46,23 @@ export function isSuperAdmin(user: AppUser | null): boolean {
  */
 export function hasPermission(user: AppUser | null, permission: string): boolean {
   if (!user) {
+    console.log('[Server Auth] hasPermission: No user');
     return false;
   }
 
   // Super Admin bypass
-  if (isSuperAdmin(user)) {
+  const isSuper = isSuperAdmin(user);
+  if (isSuper) {
+    console.log(`[Server Auth] Super Admin detected (${user.role?.name}) - bypassing permission '${permission}'`);
     return true;
   }
 
-  return user.permissions.includes(permission);
+  const hasAccess = user.permissions.includes(permission);
+  if (!hasAccess) {
+    console.log(`[Server Auth] Permission '${permission}' denied - role: ${user.role?.name}, has ${user.permissions.length} permissions`);
+  }
+
+  return hasAccess;
 }
 
 /**

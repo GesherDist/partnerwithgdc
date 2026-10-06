@@ -10,9 +10,9 @@ import { useState } from 'react';
 import { PageHeader } from '@/shared/components/layout/PageHeader';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/shared/components/ui/card';
 import { Button } from '@/shared/components/ui/button';
-import { Upload, FileSpreadsheet, CheckCircle2, Database } from 'lucide-react';
+import { Upload, FileSpreadsheet, CheckCircle2 } from 'lucide-react';
 import { ImportWizardModal } from '@/features/historical-import/components/ImportWizardModal';
-import { ImportMasterDataDialog } from '@/features/historical-import/components/dialogs/ImportMasterDataDialog';
+// import { ImportMasterDataDialog } from '@/features/historical-import/components/dialogs/ImportMasterDataDialog';
 
 // ============================================
 // COMPONENT
@@ -20,7 +20,7 @@ import { ImportMasterDataDialog } from '@/features/historical-import/components/
 
 export function HistoricalImportPageContent() {
   const [isWizardOpen, setIsWizardOpen] = useState(false);
-  const [isMasterDataDialogOpen, setIsMasterDataDialogOpen] = useState(false);
+  // const [isMasterDataDialogOpen, setIsMasterDataDialogOpen] = useState(false);
 
   return (
     <div className="flex flex-col gap-6 self-start w-full">
@@ -135,7 +135,8 @@ export function HistoricalImportPageContent() {
                 Start Import Wizard
               </Button>
 
-              <Button
+              {/* Hidden: Upload CSV for Products & Customers */}
+              {/* <Button
                 onClick={() => setIsMasterDataDialogOpen(true)}
                 variant="outline"
                 size="lg"
@@ -143,7 +144,7 @@ export function HistoricalImportPageContent() {
               >
                 <Database className="w-5 h-5 mr-2" />
                 Upload CSV for Products & Customers
-              </Button>
+              </Button> */}
             </div>
           </CardContent>
         </Card>
@@ -183,11 +184,11 @@ export function HistoricalImportPageContent() {
       {/* Import Wizard Modal */}
       <ImportWizardModal open={isWizardOpen} onOpenChange={setIsWizardOpen} />
 
-      {/* Import Master Data Dialog */}
-      <ImportMasterDataDialog
+      {/* Import Master Data Dialog - Hidden */}
+      {/* <ImportMasterDataDialog
         open={isMasterDataDialogOpen}
         onOpenChange={setIsMasterDataDialogOpen}
-      />
+      /> */}
     </div>
   );
 }

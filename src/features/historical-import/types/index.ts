@@ -279,7 +279,8 @@ export interface ShipmentPreview {
   salesOrderNumber: string;
   purchaseOrderId: string | null;
   purchaseOrderNumber: string | null;
-  status: string;
+  status: string; // Shipment workflow status (pending, in_transit, delivered, failed)
+  loadStatus?: string; // Operations Dashboard status (available, sold, open, hold, in_transit, invoiced, etc.)
   source: 'supplier' | 'warehouse';
 
   // Vendor/Supplier (if applicable)
@@ -321,6 +322,7 @@ export interface ImportResult {
     purchaseOrdersCreated: number;
     pickTicketsCreated: number;
     shipmentsCreated: number;
+    allocationsCreated: number;
   };
 }
 

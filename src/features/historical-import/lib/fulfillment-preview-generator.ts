@@ -151,8 +151,15 @@ export async function generatePOPreviews(
     // Build PO items from raw row quantities
     const items: PurchaseOrderItemPreview[] = [];
 
+    // DEBUG: Log what products are being used
+    console.log(`[FULFILLMENT] ${row.loadNumber}: Products from API:`, {
+      product38: products.product38 ? `${products.product38.sku} (${products.product38.name})` : 'NULL',
+      product24: products.product24 ? `${products.product24.sku} (${products.product24.name})` : 'NULL',
+    });
+
     if (row.qty38 > 0) {
       const lineTotal = row.qty38 * row.price38 * 100; // Convert to cents
+      console.log(`[FULFILLMENT] ${row.loadNumber}: Adding 38" tire: qty=${row.qty38}, sku=${products.product38.sku}, name=${products.product38.name}`);
       items.push({
         productId: products.product38.id,
         productName: products.product38.name,
@@ -167,6 +174,7 @@ export async function generatePOPreviews(
 
     if (row.qty24 > 0) {
       const lineTotal = row.qty24 * row.price24 * 100; // Convert to cents
+      console.log(`[FULFILLMENT] ${row.loadNumber}: Adding 24" tire: qty=${row.qty24}, sku=${products.product24.sku}, name=${products.product24.name}`);
       items.push({
         productId: products.product24.id,
         productName: products.product24.name,
@@ -309,38 +317,82 @@ export async function generateShipmentPreviews(
   const supplier = await getSupplier();
   const previews: ShipmentPreview[] = [];
 
-  // Create map of SO number -> PO
-  const poMap = new Map<string, PurchaseOrderPreview>();
-  poPreviews.forEach((po) => {
-    poMap.set(po.salesOrderNumber, po);
+  // Create map of SO number -> SO (for lookup)
+  const soMap = new Map<string, SalesOrderPreview>();
+  soPreviews.forEach((so) => {
+    soMap.set(so.orderNumber, so);
   });
 
-  for (const so of soPreviews) {
-    const rawRow = rawRowsMap.get(so.loadNumber);
-    const po = poMap.get(so.orderNumber);
+  // NEW: Create shipment for EVERY PO (not just SOs)
+  // This supports Pre-PO/SO workflow where POs exist before customer orders
+  console.log(`🚢 Generating ${poPreviews.length} shipments (one per PO)...`);
 
-    // Determine shipment status
+  // Track status mapping for debugging
+  const statusMappingLog: Record<string, number> = {};
+
+  for (const po of poPreviews) {
+    const rawRow = rawRowsMap.get(po.loadNumber);
+    const so = soMap.get(po.salesOrderNumber); // May be null for warehouse inventory
+
+    // Determine shipment status from Excel status
+    // Map Excel status to shipment workflow status (pending, in_transit, delivered, failed)
     let status = 'pending';
+
+    // Define load status type
+    type LoadStatusType = 'available' | 'sold' | 'open' | 'hold' | 'in_transit' | 'invoiced' | 'not_invoiced' | 'closed' | 'po_needed' | 'partially_paid' | 'paid' | 'disputed';
+    let loadStatus: LoadStatusType = 'available';
+
     if (rawRow?.status) {
       const excelStatus = rawRow.status.toUpperCase();
-      if (['IN TRANSIT', 'INVOICED', 'SOLD', 'DELIVERED'].includes(excelStatus)) {
-        if (excelStatus === 'IN TRANSIT') status = 'in_transit';
-        else if (['INVOICED', 'SOLD', 'DELIVERED'].includes(excelStatus)) status = 'delivered';
+
+      // Map to load_status (Operations Dashboard status - preserve Excel value)
+      const statusMap: Record<string, LoadStatusType> = {
+        'AVAILABLE': 'available',
+        'SOLD': 'sold',
+        'OPEN': 'open',
+        'HOLD': 'hold',
+        'IN TRANSIT': 'in_transit',
+        'INVOICED': 'invoiced',
+        'NOT INVOICED': 'not_invoiced',
+        'CLOSED': 'closed',
+        'PO NEEDED': 'po_needed',
+        'PARTIALLY PAID': 'partially_paid',
+        'PAID': 'paid',
+        'DISPUTED': 'disputed',
+      };
+
+      loadStatus = statusMap[excelStatus] || 'available';
+
+      // Map Operations Dashboard statuses to shipment workflow statuses
+      if (excelStatus === 'IN TRANSIT') {
+        status = 'in_transit';
+      } else if (['INVOICED', 'DELIVERED', 'CLOSED'].includes(excelStatus)) {
+        status = 'delivered';
+      } else if (['OPEN', 'SOLD', 'AVAILABLE', 'HOLD', 'NOT INVOICED', 'PO NEEDED'].includes(excelStatus)) {
+        // OPEN/SOLD/AVAILABLE/HOLD = confirmed order, not yet shipped
+        status = 'pending';
       }
+      // Default: pending
     }
 
-    // Determine source
-    const hasManufacturer = so.items.some((item) => item.fulfillmentSource === 'manufacturer');
-    const hasInventory = so.items.some((item) => item.fulfillmentSource === 'gdc_inventory');
-    const source = hasManufacturer ? 'supplier' : hasInventory ? 'warehouse' : 'supplier';
+    // DEBUG: Track status mapping
+    const excelStatus = rawRow?.status || 'UNKNOWN';
+    statusMappingLog[excelStatus] = (statusMappingLog[excelStatus] || 0) + 1;
+
+    // Determine source (default to supplier for all POs)
+    const source = 'supplier';
+
+    // Get delivery address (from raw row or SO if available)
+    const deliveryAddress = rawRow?.deliveryAddress || so?.shippingAddress || 'TBD';
 
     const preview: ShipmentPreview = {
       // Header
-      salesOrderId: null, // Will be populated after SO creation
-      salesOrderNumber: so.orderNumber,
-      purchaseOrderId: po ? null : null, // Will be populated if PO exists
-      purchaseOrderNumber: po ? po.poNumber : null,
+      salesOrderId: null, // Will be populated after SO creation (if SO exists)
+      salesOrderNumber: po.salesOrderNumber, // Load number (SO2600057)
+      purchaseOrderId: null, // Will be populated after PO creation
+      purchaseOrderNumber: po.poNumber,
       status,
+      loadStatus, // Operations Dashboard status from Excel
       source,
 
       // Supplier (if applicable)
@@ -352,24 +404,29 @@ export async function generateShipmentPreviews(
       containerNumbers: rawRow?.containerNumbers || null,
 
       // Delivery
-      deliveryAddress: rawRow?.deliveryAddress || so.shippingAddress,
+      deliveryAddress,
 
       // Dates
       shippedDate: status === 'in_transit' || status === 'delivered' ? rawRow?.etaPort : null,
-      estimatedDeliveryDate: rawRow?.confirmedEta || so.expectedDeliveryDate,
+      estimatedDeliveryDate: rawRow?.confirmedEta || po.expectedDeliveryDate,
       actualDeliveryDate: rawRow?.actualDelivery || null,
 
       // Notes
-      notes: `Imported from historical data - ${so.loadNumber}`,
+      notes: so
+        ? `Imported from historical data - ${po.loadNumber}`
+        : `Warehouse inventory shipment - ${po.loadNumber} (${rawRow?.customer})`,
 
       // Source
-      sourceRow: so.sourceRow,
-      loadNumber: so.loadNumber,
+      sourceRow: po.sourceRow,
+      loadNumber: po.loadNumber,
     };
 
     previews.push(preview);
   }
 
+  // DEBUG: Log status mapping summary
+  console.log(`✅ Generated ${previews.length} shipment previews`);
+  console.log(`📊 Excel Status Mapping:`, statusMappingLog);
   return previews;
 }
 

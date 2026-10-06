@@ -43,6 +43,7 @@ export async function importHistoricalData(data: {
     purchaseOrdersCreated: 0,
     pickTicketsCreated: 0,
     shipmentsCreated: 0,
+    allocationsCreated: 0,
   };
 
   // Get current user for audit purposes
@@ -73,12 +74,61 @@ export async function importHistoricalData(data: {
   const userId = userRecord.id;
 
   try {
-    // Track successfully imported sales order numbers
-    const importedSOs = new Set<string>();
+    // Track imported records for Pre-PO/SO workflow
+    const importedPOs = new Map<string, string>(); // Map<poNumber, poId>
+    const importedSOs = new Map<string, { id: string; customerId: string; items: any[] }>(); // Map<soNumber, data>
     const failedSOs = new Set<string>();
 
-    // 1. Import Quotes
-    for (const quote of data.quotes) {
+    // ============================================================================
+    // NEW WORKFLOW: Pre-PO/SO Flow
+    // Step 1: Purchase Orders FIRST (unallocated inventory)
+    // Step 2: Shipments (container tracking)
+    // Step 3: Quotes (customer requests)
+    // Step 4: Sales Orders (customer orders)
+    // Step 5: Allocations (link PO → SO)
+    // ============================================================================
+
+    // 1. Import Purchase Orders FIRST (unallocated, customer: null)
+    for (const po of data.purchaseOrders) {
+      try {
+        const result = await importPurchaseOrder(po, userId);
+        stats.purchaseOrdersCreated++;
+        if (result.poId) {
+          importedPOs.set(po.poNumber, result.poId);
+        }
+      } catch (error: any) {
+        errors.push(`PO ${po.poNumber}: ${error.message}`);
+      }
+    }
+
+    // 2. Import Shipments (container arrives)
+    for (const shipment of data.shipments) {
+      try {
+        await importShipment(shipment, userId);
+        stats.shipmentsCreated++;
+      } catch (error: any) {
+        errors.push(`Shipment for ${shipment.salesOrderNumber}: ${error.message}`);
+      }
+    }
+
+    // Helper function to check if customer is unallocated inventory (GDC/Gesher/Warehouse)
+    const isUnallocatedInventory = (customerName: string): boolean => {
+      const name = customerName.toUpperCase().trim();
+      return (
+        name === 'GDC' ||
+        name === 'GESHER' ||
+        name.includes('WAREHOUSE') ||
+        name.includes('GDC INVENTORY') ||
+        name === 'UNALLOCATED'
+      );
+    };
+
+    // 3. Import Quotes (customer requests) - ONLY for real customers (not GDC/Gesher/Warehouse)
+    const realCustomerQuotes = data.quotes.filter(q => !isUnallocatedInventory(q.customerName));
+
+    console.log(`\n📋 Importing ${realCustomerQuotes.length} quotes (skipping ${data.quotes.length - realCustomerQuotes.length} GDC/warehouse/unallocated)...`);
+
+    for (const quote of realCustomerQuotes) {
       try {
         const result = await importQuote(quote, userId);
         if (result.created) stats.quotesCreated++;
@@ -88,30 +138,54 @@ export async function importHistoricalData(data: {
       }
     }
 
-    // 2. Import Sales Orders (with Option B: Complete Replace)
-    for (const so of data.salesOrders) {
+    // 4. Import Sales Orders (customer orders) - ONLY for real customers (not GDC/Gesher/Warehouse)
+    const realCustomerSOs = data.salesOrders.filter(so => !isUnallocatedInventory(so.customerName));
+
+    console.log(`\n📦 Importing ${realCustomerSOs.length} sales orders (skipping ${data.salesOrders.length - realCustomerSOs.length} GDC/warehouse/unallocated)...`);
+
+    for (const so of realCustomerSOs) {
       try {
         const result = await importSalesOrder(so, userId);
         if (result.created) stats.salesOrdersCreated++;
         else stats.salesOrdersUpdated++;
-        importedSOs.add(so.orderNumber);
+
+        // Save SO data for allocation step
+        if (result.soId && result.items) {
+          importedSOs.set(so.orderNumber, {
+            id: result.soId,
+            customerId: so.customerId,
+            items: result.items
+          });
+        }
       } catch (error: any) {
         errors.push(`SO ${so.orderNumber}: ${error.message}`);
         failedSOs.add(so.orderNumber);
       }
     }
 
-    // 3. Import Purchase Orders
-    for (const po of data.purchaseOrders) {
+    // 5. Create Allocations (Link PO → SO) - NEW STEP
+    console.log(`\n📦 Creating allocations to link ${importedPOs.size} POs with ${importedSOs.size} SOs...`);
+    for (const [soNumber, soData] of importedSOs.entries()) {
       try {
-        await importPurchaseOrder(po, userId);
-        stats.purchaseOrdersCreated++;
+        const poNumber = soNumber.replace('SO', 'PO');
+        const poId = importedPOs.get(poNumber);
+
+        if (poId) {
+          const allocCount = await createAllocationsForHistoricalImport(
+            soData.id,
+            soData.customerId,
+            soData.items,
+            poId,
+            userId
+          );
+          stats.allocationsCreated += allocCount;
+        }
       } catch (error: any) {
-        errors.push(`PO ${po.poNumber}: ${error.message}`);
+        errors.push(`Allocation for ${soNumber}: ${error.message}`);
       }
     }
 
-    // 4. Import Pick Tickets (skip if SO not imported)
+    // 6. Import Pick Tickets (skip if SO not imported)
     for (const pt of data.pickTickets) {
       try {
         // Check if SO was successfully imported
@@ -126,24 +200,6 @@ export async function importHistoricalData(data: {
         stats.pickTicketsCreated++;
       } catch (error: any) {
         errors.push(`Pick Ticket for ${pt.salesOrderNumber}: ${error.message}`);
-      }
-    }
-
-    // 5. Import Shipments (skip if SO not imported)
-    for (const shipment of data.shipments) {
-      try {
-        // Check if SO was successfully imported
-        if (!importedSOs.has(shipment.salesOrderNumber)) {
-          errors.push(
-            `Shipment for ${shipment.salesOrderNumber}: SKIPPED - Sales order not imported (see SO errors above)`
-          );
-          continue;
-        }
-
-        await importShipment(shipment, userId);
-        stats.shipmentsCreated++;
-      } catch (error: any) {
-        errors.push(`Shipment for ${shipment.salesOrderNumber}: ${error.message}`);
       }
     }
 
@@ -277,7 +333,7 @@ async function importQuote(
 async function importSalesOrder(
   so: SalesOrderPreview,
   userId: string
-): Promise<{ created: boolean }> {
+): Promise<{ created: boolean; soId?: string; items?: any[] }> {
   const supabase = createAdminClient();
 
   // Check if SO exists by order_number
@@ -324,7 +380,7 @@ async function importSalesOrder(
     if (updateError) throw updateError;
 
     // 3. Create new items (with SKU field and customer_qty)
-    const items = so.items.map((item) => ({
+    const itemsToInsert = so.items.map((item) => ({
       sales_order_id: existing.id,
       product_id: item.productId,
       sku: item.productSku,
@@ -336,13 +392,14 @@ async function importSalesOrder(
       created_by: userId,
     }));
 
-    const { error: itemsError } = await supabase
+    const { data: insertedItems, error: itemsError } = await supabase
       .from('sales_order_items')
-      .insert(items);
+      .insert(itemsToInsert)
+      .select('id, product_id, quantity, customer_qty');
 
     if (itemsError) throw itemsError;
 
-    return { created: false };
+    return { created: false, soId: existing.id, items: insertedItems };
   } else {
     // Validate requested delivery date (constraint: requested_delivery_date >= order_date)
     let requestedDelivery = so.expectedDeliveryDate;
@@ -375,7 +432,7 @@ async function importSalesOrder(
     if (soError) throw soError;
 
     // Create items (with SKU field, customer_qty, and created_by)
-    const items = so.items.map((item) => ({
+    const itemsToInsert = so.items.map((item) => ({
       sales_order_id: newSO.id,
       product_id: item.productId,
       sku: item.productSku,
@@ -387,42 +444,41 @@ async function importSalesOrder(
       created_by: userId,
     }));
 
-    const { error: itemsError } = await supabase
+    const { data: insertedItems, error: itemsError } = await supabase
       .from('sales_order_items')
-      .insert(items);
+      .insert(itemsToInsert)
+      .select('id, product_id, quantity, customer_qty');
 
     if (itemsError) throw itemsError;
 
-    return { created: true };
+    return { created: true, soId: newSO.id, items: insertedItems };
   }
 }
 
 // ============================================================================
-// IMPORT PURCHASE ORDER
+// IMPORT PURCHASE ORDER (Pre-PO/SO Workflow)
 // ============================================================================
+// Creates unallocated POs (customer: null, sales_order_id: null)
+// Will be linked to SOs later via allocations
 
-async function importPurchaseOrder(po: PurchaseOrderPreview, userId: string): Promise<void> {
+async function importPurchaseOrder(
+  po: PurchaseOrderPreview,
+  userId: string
+): Promise<{ poId: string }> {
   const supabase = createAdminClient();
 
-  // Get sales order ID (if exists)
-  // For warehouse inventory POs, there is no sales order
-  let salesOrderId: string | null = null;
+  // PRE-PO/SO WORKFLOW: Do NOT link to SO during import
+  // POs are created first (unallocated)
+  // Linking happens later via fulfillment_allocations
 
-  // Try to find SO by order number
-  // Warehouse inventory POs won't have matching SOs (notes contain "Warehouse inventory")
-  const isWarehouseInventory = po.notes.includes('Warehouse inventory');
+  // Get GDC Inventory warehouse location for unallocated inventory
+  const { data: gdcLocation } = await supabase
+    .from('locations')
+    .select('id')
+    .eq('location_code', 'GDC-INV')
+    .single();
 
-  if (!isWarehouseInventory && po.salesOrderNumber) {
-    const { data: salesOrder } = await supabase
-      .from('sales_orders')
-      .select('id')
-      .eq('order_number', po.salesOrderNumber)
-      .maybeSingle(); // Use maybeSingle - no error if not found
-
-    if (salesOrder) {
-      salesOrderId = salesOrder.id;
-    }
-  }
+  const warehouseId = gdcLocation?.id || null;
 
   // Check if PO exists
   const { data: existing } = await supabase
@@ -438,14 +494,16 @@ async function importPurchaseOrder(po: PurchaseOrderPreview, userId: string): Pr
       expectedDelivery = po.orderDate; // Set to same date if invalid
     }
 
-    // Update existing PO (no supplier_id at PO level - it's on items now)
+    // Update existing PO (unallocated - no SO link)
     const { error: updateError } = await supabase
       .from('purchase_orders')
       .update({
-        sales_order_id: salesOrderId, // Can be null for warehouse inventory
+        sales_order_id: null, // Pre-PO/SO: Always null initially
+        warehouse_id: warehouseId, // GDC Inventory location
+        order_series: po.orderSeries || null, // GDC 1, GDC 2, etc. from Excel
         po_date: po.orderDate,
         expected_delivery_date: expectedDelivery,
-        status: po.status,
+        status: po.status, // Extract from Excel (AVAILABLE, SOLD, etc.)
         subtotal: po.subtotal,
         tax_total: po.taxTotal,
         grand_total: po.grandTotal,
@@ -478,6 +536,8 @@ async function importPurchaseOrder(po: PurchaseOrderPreview, userId: string): Pr
       .insert(items);
 
     if (itemsError) throw itemsError;
+
+    return { poId: existing.id }; // Return PO ID for allocation step
   } else {
     // Ensure expected_delivery_date >= po_date (constraint validation)
     let expectedDelivery = po.expectedDeliveryDate;
@@ -485,15 +545,17 @@ async function importPurchaseOrder(po: PurchaseOrderPreview, userId: string): Pr
       expectedDelivery = po.orderDate; // Set to same date if invalid
     }
 
-    // Create new PO (no supplier_id at PO level)
+    // Create new PO (unallocated - no SO link)
     const { data: newPO, error: poError } = await supabase
       .from('purchase_orders')
       .insert({
         po_number: po.poNumber,
-        sales_order_id: salesOrderId, // Can be null for warehouse inventory
+        sales_order_id: null, // Pre-PO/SO: Always null initially
+        warehouse_id: warehouseId, // GDC Inventory location
+        order_series: po.orderSeries || null, // GDC 1, GDC 2, etc. from Excel
         po_date: po.orderDate,
         expected_delivery_date: expectedDelivery,
-        status: po.status,
+        status: po.status, // Extract from Excel (AVAILABLE, SOLD, etc.)
         subtotal: po.subtotal,
         tax_total: po.taxTotal,
         grand_total: po.grandTotal,
@@ -523,6 +585,8 @@ async function importPurchaseOrder(po: PurchaseOrderPreview, userId: string): Pr
       .insert(items);
 
     if (itemsError) throw itemsError;
+
+    return { poId: newPO.id }; // Return PO ID for allocation step
   }
 }
 
@@ -617,31 +681,185 @@ async function importPickTicket(pt: PickTicketPreview, userId: string): Promise<
 }
 
 // ============================================================================
+// CREATE ALLOCATIONS FOR HISTORICAL IMPORT (Pre-PO/SO Workflow)
+// ============================================================================
+// Links Purchase Orders to Sales Orders via fulfillment_allocations
+// Updates PO with customer_id and sales_order_id
+
+async function createAllocationsForHistoricalImport(
+  salesOrderId: string,
+  customerId: string,
+  soItems: any[],
+  purchaseOrderId: string,
+  userId: string
+): Promise<number> {
+  const supabase = createAdminClient();
+  let allocationsCreated = 0;
+
+  // Get PO details (items with quantities)
+  const { data: po, error: poError } = await supabase
+    .from('purchase_orders')
+    .select('id, items:purchase_order_items(id, product_id, quantity_ordered)')
+    .eq('id', purchaseOrderId)
+    .single();
+
+  if (poError || !po) {
+    console.error(`⚠️  PO ${purchaseOrderId} not found for allocation`);
+    return 0;
+  }
+
+  // Get location (first location or default)
+  const { data: location } = await supabase
+    .from('locations')
+    .select('id')
+    .eq('location_type', 'warehouse')
+    .limit(1)
+    .single();
+
+  const locationId = location?.id;
+
+  // Create allocations for each SO item
+  for (const soItem of soItems) {
+    // Find matching PO item
+    const poItem = po.items.find((item: any) => item.product_id === soItem.product_id);
+
+    if (!poItem) {
+      console.warn(`⚠️  No matching PO item for product ${soItem.product_id}`);
+      continue;
+    }
+
+    // Create allocation
+    const { error: allocError } = await supabase
+      .from('fulfillment_allocations')
+      .insert({
+        sales_order_item_id: soItem.id,
+        purchase_order_id: purchaseOrderId,
+        fulfillment_source: 'gdc_inventory',
+        quantity: soItem.customer_qty || soItem.quantity,
+        container_qty: poItem.quantity_ordered,
+        container_remaining: poItem.quantity_ordered - (soItem.customer_qty || soItem.quantity),
+        status: 'allocated',
+        location_id: locationId,
+        created_by: userId,
+      });
+
+    if (allocError) {
+      console.error(`⚠️  Failed to create allocation: ${allocError.message}`);
+      continue;
+    }
+
+    allocationsCreated++;
+  }
+
+  // Update PO with customer and SO link
+  const { error: updateError } = await supabase
+    .from('purchase_orders')
+    .update({
+      customer_id: customerId,
+      sales_order_id: salesOrderId,
+      status: 'partially_allocated', // TODO: Calculate if fully allocated
+    })
+    .eq('id', purchaseOrderId);
+
+  if (updateError) {
+    console.error(`⚠️  Failed to update PO: ${updateError.message}`);
+  }
+
+  // Update Shipment with customer and SO link (assign customer to shipment)
+  // Get SO number to find matching shipment
+  const { data: salesOrder } = await supabase
+    .from('sales_orders')
+    .select('order_number')
+    .eq('id', salesOrderId)
+    .single();
+
+  if (salesOrder) {
+    // Shipment number matches SO number (e.g., SO2600043)
+    const shipmentNumber = salesOrder.order_number;
+
+    const { error: shipmentUpdateError } = await supabase
+      .from('shipments')
+      .update({
+        sales_order_id: salesOrderId,
+      })
+      .eq('shipment_number', shipmentNumber);
+
+    if (shipmentUpdateError) {
+      console.error(`⚠️  Failed to update shipment ${shipmentNumber}: ${shipmentUpdateError.message}`);
+    } else {
+      console.log(`✅ Shipment ${shipmentNumber} assigned to customer`);
+    }
+  }
+
+  return allocationsCreated;
+}
+
+// ============================================================================
 // IMPORT SHIPMENT (with container numbers)
 // ============================================================================
 
 async function importShipment(shipment: ShipmentPreview, userId: string): Promise<void> {
   const supabase = createAdminClient();
 
-  // Get sales order ID
+  // Pre-PO/SO: Sales order is OPTIONAL (may not exist for unallocated inventory)
   const { data: salesOrder } = await supabase
     .from('sales_orders')
-    .select('id')
+    .select('id, customer_id')
     .eq('order_number', shipment.salesOrderNumber)
-    .single();
+    .maybeSingle(); // Changed from .single() to .maybeSingle()
 
-  if (!salesOrder) {
-    throw new Error(
-      `Sales order ${shipment.salesOrderNumber} not found. This SO may have failed to import or was not included in the import data. Please check the Sales Orders import errors above.`
-    );
+  // SO is optional - unallocated inventory won't have SO yet
+  // That's OK in Pre-PO/SO workflow
+
+  // Pre-PO/SO: Look up Purchase Order by PO number
+  const { data: purchaseOrder } = await supabase
+    .from('purchase_orders')
+    .select('id, warehouse_id')
+    .eq('po_number', shipment.purchaseOrderNumber)
+    .maybeSingle();
+
+  if (!purchaseOrder) {
+    console.warn(`⚠️  PO ${shipment.purchaseOrderNumber} not found for shipment ${shipment.salesOrderNumber}`);
   }
 
-  // Check if shipment exists (by tracking_number or supplier_reference_number)
+  // Pre-PO/SO: Get warehouse location from PO (GDC Inventory)
+  const warehouseId = purchaseOrder?.warehouse_id || null;
+
+  // Use load_status from shipment preview (Operations Dashboard status from Excel)
+  // If not provided, map from shipment workflow status
+  let loadStatus: 'available' | 'sold' | 'open' | 'hold' | 'in_transit' | 'invoiced' | 'not_invoiced' | 'closed' | 'po_needed' | 'partially_paid' | 'paid' | 'disputed' = 'available';
+
+  if (shipment.loadStatus) {
+    // Use Excel status directly (OPEN, AVAILABLE, IN TRANSIT, etc.)
+    loadStatus = shipment.loadStatus as typeof loadStatus;
+  } else {
+    // Fallback: Map from shipment workflow status
+    if (shipment.status === 'in_transit') {
+      loadStatus = 'in_transit';
+    } else if (shipment.status === 'delivered') {
+      loadStatus = 'invoiced';
+    }
+  }
+
+  // Pre-PO/SO: Check if shipment exists (by PO number first, then SO number)
+  // Lookup priority: purchase_order_id > tracking_number > supplier_reference_number
+  const lookupConditions: string[] = [];
+
+  if (purchaseOrder?.id) {
+    lookupConditions.push(`purchase_order_id.eq.${purchaseOrder.id}`);
+  }
+  if (shipment.trackingNumber) {
+    lookupConditions.push(`tracking_number.eq.${shipment.trackingNumber}`);
+  }
+  if (shipment.salesOrderNumber) {
+    lookupConditions.push(`supplier_reference_number.eq.${shipment.salesOrderNumber}`);
+  }
+
   const { data: existing } = await supabase
     .from('shipments')
     .select('id, shipment_number')
-    .or(`tracking_number.eq.${shipment.trackingNumber || shipment.salesOrderNumber},supplier_reference_number.eq.${shipment.salesOrderNumber}`)
-    .single();
+    .or(lookupConditions.join(','))
+    .maybeSingle(); // Use maybeSingle instead of single to avoid error if not found
 
   // Prepare dates with constraint validation
   const shipmentDate = shipment.shippedDate || new Date().toISOString().split('T')[0];
@@ -663,7 +881,9 @@ async function importShipment(shipment: ShipmentPreview, userId: string): Promis
     const { error: updateError } = await supabase
       .from('shipments')
       .update({
-        sales_order_id: salesOrder.id,
+        sales_order_id: salesOrder?.id || null, // Pre-PO/SO: May be null for unallocated
+        purchase_order_id: purchaseOrder?.id || null, // Pre-PO/SO: Link to PO
+        from_location_id: warehouseId, // Pre-PO/SO: GDC Inventory warehouse
         carrier: 'Ocean Freight',
         tracking_number: shipment.trackingNumber,
         supplier_reference_number: shipment.salesOrderNumber,
@@ -672,6 +892,7 @@ async function importShipment(shipment: ShipmentPreview, userId: string): Promis
         estimated_arrival: estimatedArrival,
         actual_arrival: actualArrival,
         status: shipment.status,
+        load_status: loadStatus, // Pre-PO/SO: Operations Dashboard status (available, in_transit, etc.)
         updated_at: new Date().toISOString(),
         updated_by: userId,
       })
@@ -679,20 +900,18 @@ async function importShipment(shipment: ShipmentPreview, userId: string): Promis
 
     if (updateError) throw updateError;
   } else {
-    // Generate shipment number
-    const { data: shipmentNumber, error: numError } = await supabase
-      .rpc('generate_shipment_number');
-
-    if (numError || !shipmentNumber) {
-      throw new Error(`Failed to generate shipment number: ${numError?.message}`);
-    }
+    // Pre-PO/SO: Use PO number as shipment number (unique per PO)
+    // This allows multiple shipments for same SO (e.g., PO2600046, PO2600046-2)
+    const shipmentNumber = shipment.purchaseOrderNumber || shipment.salesOrderNumber;
 
     // Create new shipment
     const { error: shipmentError } = await supabase
       .from('shipments')
       .insert({
         shipment_number: shipmentNumber,
-        sales_order_id: salesOrder.id,
+        sales_order_id: salesOrder?.id || null, // Pre-PO/SO: May be null for unallocated
+        purchase_order_id: purchaseOrder?.id || null, // Pre-PO/SO: Link to PO
+        from_location_id: warehouseId, // Pre-PO/SO: GDC Inventory warehouse
         carrier: 'Ocean Freight',
         tracking_number: shipment.trackingNumber || null,
         supplier_reference_number: shipment.salesOrderNumber,
@@ -701,6 +920,7 @@ async function importShipment(shipment: ShipmentPreview, userId: string): Promis
         estimated_arrival: estimatedArrival,
         actual_arrival: actualArrival,
         status: shipment.status,
+        load_status: loadStatus, // Pre-PO/SO: Operations Dashboard status (available, in_transit, etc.)
         created_by: userId,
       });
 

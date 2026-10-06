@@ -122,6 +122,11 @@ function parseRow(
   const price38 = parseFloat(row[C.PRICE_38]) || 0;
   const price24 = parseFloat(row[C.PRICE_24]) || 0;
 
+  // DEBUG: Log product quantities for troubleshooting
+  if (loadNumber) {
+    console.log(`[PARSER] ${loadNumber}: Column ${C.QTY_38} (38") = ${row[C.QTY_38]} → qty38=${qty38}, Column ${C.QTY_24} (24") = ${row[C.QTY_24]} → qty24=${qty24}`);
+  }
+
   // Check multiple columns for "SOLD TO" pattern
   const actionNotes = row[C.ACTION_NOTES] || '';
   const additionalNotes = row[C.ADDITIONAL_NOTES] || '';

@@ -13,9 +13,20 @@ export type POStatus =
   | 'draft'
   | 'sent'
   | 'confirmed'
+  | 'available' // Operations Dashboard: Unallocated warehouse inventory
+  | 'sold' // Operations Dashboard: Allocated to customer
+  | 'open' // Operations Dashboard: Customer order placed
+  | 'hold' // Operations Dashboard: On hold
+  | 'in_transit' // Operations Dashboard: Shipment on the way
+  | 'invoiced' // Operations Dashboard: Delivered and invoiced
+  | 'not_invoiced' // Operations Dashboard: Not yet invoiced
+  | 'closed' // Operations Dashboard: Closed/completed
+  | 'po_needed' // Operations Dashboard: PO needs to be created
+  | 'partially_paid' // Operations Dashboard: Partial payment received
+  | 'paid' // Operations Dashboard: Fully paid
+  | 'disputed' // Operations Dashboard: Payment disputed
   | 'in_production'
   | 'ready_to_ship'
-  | 'in_transit'
   | 'partial'
   | 'received'
   | 'cancelled';
@@ -24,9 +35,20 @@ export const PO_STATUSES: POStatus[] = [
   'draft',
   'sent',
   'confirmed',
+  'available',
+  'sold',
+  'open',
+  'hold',
+  'in_transit',
+  'invoiced',
+  'not_invoiced',
+  'closed',
+  'po_needed',
+  'partially_paid',
+  'paid',
+  'disputed',
   'in_production',
   'ready_to_ship',
-  'in_transit',
   'partial',
   'received',
   'cancelled',
@@ -36,9 +58,20 @@ export const PO_STATUS_LABELS: Record<POStatus, string> = {
   draft: 'Draft',
   sent: 'Sent',
   confirmed: 'Confirmed',
+  available: 'Available',
+  sold: 'Sold',
+  open: 'Open',
+  hold: 'Hold',
+  in_transit: 'In Transit',
+  invoiced: 'Invoiced',
+  not_invoiced: 'Not Invoiced',
+  closed: 'Closed',
+  po_needed: 'PO Needed',
+  partially_paid: 'Partially Paid',
+  paid: 'Paid',
+  disputed: 'Disputed',
   in_production: 'In Production',
   ready_to_ship: 'Ready to Ship',
-  in_transit: 'In Transit',
   partial: 'Partial',
   received: 'Received',
   cancelled: 'Cancelled',
@@ -48,9 +81,20 @@ export const PO_STATUS_COLORS: Record<POStatus, string> = {
   draft: 'bg-stone-100 text-stone-700 border border-stone-200',
   sent: 'bg-sky-100 text-sky-800 border border-sky-200',
   confirmed: 'bg-indigo-100 text-indigo-800 border border-indigo-200',
+  available: 'bg-emerald-100 text-emerald-800 border border-emerald-200',
+  sold: 'bg-blue-100 text-blue-800 border border-blue-200',
+  open: 'bg-amber-100 text-amber-800 border border-amber-200',
+  hold: 'bg-stone-100 text-stone-700 border border-stone-200',
+  in_transit: 'bg-sky-100 text-sky-800 border border-sky-200',
+  invoiced: 'bg-purple-100 text-purple-800 border border-purple-200',
+  not_invoiced: 'bg-orange-100 text-orange-800 border border-orange-200',
+  closed: 'bg-gray-100 text-gray-800 border border-gray-200',
+  po_needed: 'bg-red-100 text-red-800 border border-red-200',
+  partially_paid: 'bg-yellow-100 text-yellow-800 border border-yellow-200',
+  paid: 'bg-green-100 text-green-800 border border-green-200',
+  disputed: 'bg-rose-100 text-rose-800 border border-rose-200',
   in_production: 'bg-violet-100 text-violet-800 border border-violet-200',
   ready_to_ship: 'bg-cyan-100 text-cyan-800 border border-cyan-200',
-  in_transit: 'bg-blue-100 text-blue-800 border border-blue-200',
   partial: 'bg-amber-100 text-amber-800 border border-amber-200',
   received: 'bg-emerald-100 text-emerald-800 border border-emerald-200',
   cancelled: 'bg-red-100 text-red-800 border border-red-200',
@@ -58,6 +102,7 @@ export const PO_STATUS_COLORS: Record<POStatus, string> = {
 
 // Valid status transitions
 // Production statuses (in_production, ready_to_ship, in_transit) are set automatically by supplier
+// Operations Dashboard statuses (available, sold, open, etc.) are display-only statuses
 export const PO_STATUS_TRANSITIONS: Record<POStatus, POStatus[]> = {
   draft: ['sent', 'cancelled'],
   sent: ['confirmed', 'cancelled'],
@@ -68,6 +113,18 @@ export const PO_STATUS_TRANSITIONS: Record<POStatus, POStatus[]> = {
   partial: ['received', 'cancelled'],
   received: [],
   cancelled: [],
+  // Operations Dashboard statuses (no workflow transitions)
+  available: [],
+  sold: [],
+  open: [],
+  hold: [],
+  invoiced: [],
+  not_invoiced: [],
+  closed: [],
+  po_needed: [],
+  partially_paid: [],
+  paid: [],
+  disputed: [],
 };
 
 // Supplier summary for dropdown
@@ -308,8 +365,8 @@ export interface POListItem {
   customerName: string | null;
   // Warehouse location (for unallocated inventory POs)
   warehouseLocationName: string | null;
-  // Shipment info (from linked shipments)
-  latestShipmentStatus?: 'pending' | 'in_transit' | 'delivered' | 'failed' | null;
+  // Shipment info (from linked shipments) - using load_status for Operations Dashboard
+  latestShipmentStatus?: 'available' | 'sold' | 'open' | 'hold' | 'in_transit' | 'invoiced' | 'not_invoiced' | 'closed' | 'po_needed' | 'partially_paid' | 'paid' | 'disputed' | null;
   latestShipmentNumber?: string | null;
   totalShipments?: number;
 }

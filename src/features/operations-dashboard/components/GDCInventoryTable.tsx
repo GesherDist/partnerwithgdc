@@ -129,8 +129,8 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
         bVal = b.no;
         break;
       case 'soNumber':
-        aVal = a.soNumber || '';
-        bVal = b.soNumber || '';
+        aVal = a.shipmentNumber || '';
+        bVal = b.shipmentNumber || '';
         break;
       case 'customerPoNumber':
         aVal = a.customerPoNumber || '';
@@ -359,7 +359,7 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
                     }
                   >
                     <TableCell className={`relative sticky left-0 z-20 w-[60px] font-medium ${getStickyBgClass(item.status)} after:absolute after:inset-0 after:w-[60px] after:bg-inherit after:-z-10`}>{item.no}</TableCell>
-                    <TableCell className={`relative sticky left-[60px] z-20 min-w-[120px] font-mono text-sm whitespace-nowrap ${getStickyBgClass(item.status)} after:absolute after:inset-0 after:min-w-[120px] after:bg-inherit after:-z-10`}>{item.soNumber || '-'}</TableCell>
+                    <TableCell className={`relative sticky left-[60px] z-20 min-w-[120px] font-mono text-sm whitespace-nowrap ${getStickyBgClass(item.status)} after:absolute after:inset-0 after:min-w-[120px] after:bg-inherit after:-z-10`}>{item.shipmentNumber || '-'}</TableCell>
                     <TableCell className={`relative sticky left-[180px] z-20 min-w-[140px] font-mono text-sm whitespace-nowrap ${getStickyBgClass(item.status)} border-r shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] after:absolute after:inset-0 after:min-w-[140px] after:bg-inherit after:-z-10`}>{item.poNumber || '-'}</TableCell>
                     {/* Dynamic SKU quantity columns */}
                     {uniqueSkus.map((skuInfo) => {

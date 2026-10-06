@@ -50,6 +50,12 @@ export async function generateQuotePreviews(
     throw new Error('Products not found. Please add 290/85R38 and 380/85R24 products first.');
   }
 
+  // DEBUG: Log what products API returned
+  console.log('[QUOTE PREVIEW] Products from API:', {
+    product38: products.product38 ? `${products.product38.sku} - ${products.product38.name}` : 'NULL',
+    product24: products.product24 ? `${products.product24.sku} - ${products.product24.name}` : 'NULL',
+  });
+
   const previews: QuotePreview[] = [];
 
   for (const row of validRows) {
@@ -75,7 +81,11 @@ export async function generateQuotePreviews(
     // Build quote items
     const items: QuoteItemPreview[] = [];
 
+    // DEBUG: Log quantities from Excel row
+    console.log(`[QUOTE PREVIEW] ${row.loadNumber}: qty38=${row.qty38}, qty24=${row.qty24}`);
+
     if (row.qty38 > 0) {
+      console.log(`[QUOTE PREVIEW] ${row.loadNumber}: Adding 38" item - using product38: ${products.product38.sku} - ${products.product38.name}`);
       items.push({
         productId: products.product38.id,
         productName: products.product38.name,
@@ -87,6 +97,7 @@ export async function generateQuotePreviews(
     }
 
     if (row.qty24 > 0) {
+      console.log(`[QUOTE PREVIEW] ${row.loadNumber}: Adding 24" item - using product24: ${products.product24.sku} - ${products.product24.name}`);
       items.push({
         productId: products.product24.id,
         productName: products.product24.name,

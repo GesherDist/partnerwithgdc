@@ -12,7 +12,7 @@ import {
 import { MoreHorizontal, Eye, Pencil, Trash2 } from 'lucide-react';
 import { cn } from '@/shared/lib/utils';
 import type { ShipmentListItem } from '../types';
-import { SHIPMENT_STATUS_COLORS, SHIPMENT_STATUS_LABELS } from '../types';
+import { LOAD_STATUS_COLORS, LOAD_STATUS_LABELS } from '../types';
 
 interface ColumnsOptions {
   onView?: (shipment: ShipmentListItem) => void;
@@ -60,7 +60,7 @@ export function ShipmentsTableColumns(options: ColumnsOptions = {}): ColumnDef<S
     },
     {
       accessorKey: 'salesOrderNumber',
-      header: 'Order',
+      header: 'PO#',
       cell: ({ row }) => (
         <span className="font-mono text-xs">
           {row.original.salesOrderNumber || row.original.purchaseOrderNumber || '-'}
@@ -72,21 +72,21 @@ export function ShipmentsTableColumns(options: ColumnsOptions = {}): ColumnDef<S
       header: 'Customer',
       cell: ({ row }) => (
         <span className="text-sm font-medium">
-          {row.original.customerName || '-'}
+          {row.original.customerName || row.original.warehouseName || '-'}
         </span>
       ),
     },
     {
-      accessorKey: 'status',
+      accessorKey: 'loadStatus',
       header: 'Status',
       cell: ({ row }) => {
-        const status = row.original.status;
+        const loadStatus = row.original.loadStatus;
         return (
           <Badge
             variant="outline"
-            className={cn('text-xs font-medium', SHIPMENT_STATUS_COLORS[status])}
+            className={cn('text-xs font-medium', LOAD_STATUS_COLORS[loadStatus])}
           >
-            {SHIPMENT_STATUS_LABELS[status]}
+            {LOAD_STATUS_LABELS[loadStatus]}
           </Badge>
         );
       },

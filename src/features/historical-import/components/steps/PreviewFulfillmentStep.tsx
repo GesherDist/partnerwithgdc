@@ -427,7 +427,9 @@ export function PreviewFulfillmentStep({
                       {shipment.deliveryAddress || 'N/A'}
                     </TableCell>
                     <TableCell>
-                      <Badge variant="secondary">{shipment.status}</Badge>
+                      <Badge variant="secondary">
+                        {(shipment.loadStatus || shipment.status).toUpperCase()}
+                      </Badge>
                     </TableCell>
                     <TableCell className="text-sm">
                       {shipment.shippedDate || 'N/A'}

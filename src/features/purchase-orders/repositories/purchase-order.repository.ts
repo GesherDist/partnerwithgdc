@@ -132,7 +132,7 @@ class PurchaseOrderRepositoryImpl {
         shipments!purchase_order_id (
           id,
           shipment_number,
-          status,
+          load_status,
           created_at
         )
       `,
@@ -747,8 +747,8 @@ class PurchaseOrderRepositoryImpl {
       salesOrderNumber: data.sales_orders?.order_number || null,
       customerName: data.sales_orders?.customers?.name || null,
       warehouseLocationName: data.locations?.name || null,
-      // Shipment info
-      latestShipmentStatus: latestShipment?.status || null,
+      // Shipment info (using load_status for Operations Dashboard)
+      latestShipmentStatus: latestShipment?.load_status || null,
       latestShipmentNumber: latestShipment?.shipment_number || null,
       totalShipments: shipments.length,
     };

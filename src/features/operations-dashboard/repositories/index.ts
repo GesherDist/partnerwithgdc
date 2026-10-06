@@ -2134,6 +2134,7 @@ export async function getGDCInventoryByOrderSeries(
     .from('shipments')
     .select(`
       id,
+      shipment_number,
       purchase_order_id,
       sales_order_id,
       status,
@@ -2151,6 +2152,7 @@ export async function getGDCInventoryByOrderSeries(
     .from('shipments')
     .select(`
       id,
+      shipment_number,
       purchase_order_id,
       sales_order_id,
       status,
@@ -2335,16 +2337,11 @@ export async function getGDCInventoryByOrderSeries(
     });
 
     // Determine which status to show:
-    // 1. If shipment exists and is delivered → show "delivered"
-    // 2. If shipment exists and is in_transit → show "in_transit"
-    // 3. Otherwise → show PO status (uppercase)
+    // Priority: Shipment load_status > PO status
+    // Use load_status (Operations status: AVAILABLE, OPEN, CLOSED, etc.)
     let displayStatus = po.status ? po.status.toUpperCase() : 'OPEN';
-    if (shipment?.status === 'delivered') {
-      displayStatus = 'DELIVERED';
-    } else if (shipment?.status === 'in_transit') {
-      displayStatus = 'IN_TRANSIT';
-    } else if (shipment?.status === 'pending') {
-      displayStatus = 'PENDING';
+    if (shipment?.load_status) {
+      displayStatus = shipment.load_status.toUpperCase();
     }
 
     const itemData = {
@@ -2352,6 +2349,7 @@ export async function getGDCInventoryByOrderSeries(
       no: index + 1,
       poNumber: po.po_number,
       soNumber: linkedSO?.order_number || null,
+      shipmentNumber: shipment?.shipment_number || null, // Shipment number (SO2600063)
       customerPoNumber: linkedSO?.customer_po_number || null, // Customer PO Number
       orderSeries: po.order_series,
       items: poItemsList.map(item => ({
@@ -2488,17 +2486,12 @@ export async function getGDCInventoryByOrderSeries(
       supplierName: toOne(alloc.platinum_dealer)?.dealer_name || null,
     }));
 
-    // Determine which status to show (same logic as POs):
-    // 1. If shipment exists and is delivered → show "delivered"
-    // 2. If shipment exists and is in_transit → show "in_transit"
-    // 3. Otherwise → show SO status
+    // Determine which status to show:
+    // Priority: Shipment load_status > SO status
+    // Use load_status (Operations status: AVAILABLE, OPEN, CLOSED, etc.)
     let displayStatus = so.status;
-    if (shipment?.status === 'delivered') {
-      displayStatus = 'delivered';
-    } else if (shipment?.status === 'in_transit') {
-      displayStatus = 'in_transit';
-    } else if (shipment?.status === 'pending') {
-      displayStatus = 'pending';
+    if (shipment?.load_status) {
+      displayStatus = shipment.load_status.toUpperCase();
     }
 
     result.push({
@@ -2506,6 +2499,7 @@ export async function getGDCInventoryByOrderSeries(
       no: soStartIndex + index + 1,
       poNumber: null, // No PO for this SO
       soNumber: so.order_number,
+      shipmentNumber: shipment?.shipment_number || null, // Shipment number (SO2600063)
       customerPoNumber: so.customer_po_number || null,
       orderSeries: so.order_series,
       items: soItemsList.map(item => ({
