@@ -45,6 +45,7 @@ import { sendPurchaseOrder, getSuppliersForDropdown, updatePOSupplier } from '..
 import { PO_STATUS_COLORS, PO_STATUS_LABELS } from '../types';
 import type { ViewPurchaseOrderDrawerProps, SupplierSummary } from '../types';
 import { ORDER_SERIES } from '@/shared/lib/global-data';
+import { LOAD_STATUS_COLORS, LOAD_STATUS_LABELS } from '@/features/shipments/types';
 import { updateSalesOrderSeries } from '@/features/sales-orders/actions';
 
 // ============================================
@@ -238,10 +239,10 @@ export function ViewPurchaseOrderDrawer({
                     variant="outline"
                     className={cn(
                       'text-xs font-medium',
-                      PO_STATUS_COLORS[po.status]
+                      po.load_status ? LOAD_STATUS_COLORS[po.load_status] : PO_STATUS_COLORS[po.status]
                     )}
                   >
-                    {PO_STATUS_LABELS[po.status]}
+                    {po.load_status ? LOAD_STATUS_LABELS[po.load_status] : PO_STATUS_LABELS[po.status]}
                   </Badge>
                 </div>
               </>

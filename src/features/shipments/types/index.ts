@@ -369,6 +369,7 @@ export interface UpdateShipmentDTO {
   actualArrival?: Date | null;
   carrier?: string | null;
   trackingNumber?: string | null;
+  containerNumber?: string | null; // Container number
   serviceType?: string | null;
   fromLocationId?: string | null;
   shipToName?: string | null;

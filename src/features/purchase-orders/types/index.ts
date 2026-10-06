@@ -174,6 +174,8 @@ export interface PurchaseOrder {
   // - Set directly on PO for unallocated POs (no linked SO)
   // - Inherited from linked Sales Order when PO has a linked SO
   orderSeries: string | null;
+  // Operations Dashboard status (from shipments/historical import)
+  load_status?: 'available' | 'sold' | 'open' | 'hold' | 'in_transit' | 'invoiced' | 'not_invoiced' | 'closed' | 'po_needed' | 'partially_paid' | 'paid' | 'disputed' | null;
 
   // Supplier Address (denormalized)
   vendorAddressStreet: string | null;
@@ -370,6 +372,7 @@ export interface POListItem {
   poDate: string;
   expectedDeliveryDate: string | null;
   status: POStatus;
+  load_status?: 'available' | 'sold' | 'open' | 'hold' | 'in_transit' | 'invoiced' | 'not_invoiced' | 'closed' | 'po_needed' | 'partially_paid' | 'paid' | 'disputed' | null;
   orderSeries: string | null;
   grandTotal: number; // cents
   currencyCode: string;

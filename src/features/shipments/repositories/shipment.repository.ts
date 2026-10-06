@@ -94,6 +94,7 @@ interface OrderLookups {
   purchaseOrders: Record<string, string>;
   salesOrderInfo: Record<string, { customerName: string | null; customerPo: string | null }>;
   locations: Record<string, string>; // Pre-PO/SO: Warehouse names for unallocated inventory
+  poWarehouses: Record<string, string>; // Pre-PO/SO: Warehouse names from PO warehouse_id
 }
 
 interface DbShipmentItem {
@@ -324,6 +325,7 @@ class ShipmentRepositoryImpl {
     const purchaseOrders: Record<string, string> = {};
     const salesOrderInfo: OrderLookups['salesOrderInfo'] = {};
     const locations: Record<string, string> = {};
+    const poWarehouses: Record<string, string> = {};
 
     if (soIds.length > 0) {
       const { data } = await db
@@ -347,11 +349,19 @@ class ShipmentRepositoryImpl {
     if (poIds.length > 0) {
       const { data } = await db
         .from('purchase_orders')
-        .select('id, po_number')
+        .select('id, po_number, warehouse_id, locations(name)')
         .in('id', poIds);
 
       for (const row of data || []) {
         purchaseOrders[row.id] = row.po_number;
+
+        // Get warehouse name from PO's warehouse_id
+        if (row.warehouse_id) {
+          const location = Array.isArray(row.locations) ? row.locations[0] : row.locations;
+          if (location?.name) {
+            poWarehouses[row.id] = location.name;
+          }
+        }
       }
     }
 
@@ -367,7 +377,7 @@ class ShipmentRepositoryImpl {
       }
     }
 
-    return { salesOrders, purchaseOrders, salesOrderInfo, locations };
+    return { salesOrders, purchaseOrders, salesOrderInfo, locations, poWarehouses };
   }
 
   /**
@@ -469,6 +479,7 @@ class ShipmentRepositoryImpl {
     }
     if (data.carrier !== undefined) {updateData.carrier = data.carrier;}
     if (data.trackingNumber !== undefined) {updateData.tracking_number = data.trackingNumber;}
+    if (data.containerNumber !== undefined) {updateData.container_number = data.containerNumber;}
     if (data.serviceType !== undefined) {updateData.service_type = data.serviceType;}
     if (data.fromLocationId !== undefined) {updateData.from_location_id = data.fromLocationId;}
     if (data.shipToName !== undefined) {updateData.ship_to_name = data.shipToName;}
@@ -766,6 +777,17 @@ class ShipmentRepositoryImpl {
       ? orderNumbers.salesOrderInfo[data.sales_order_id]
       : undefined;
 
+    // Pre-PO/SO: Get warehouse name from PO if no customer
+    let warehouseName: string | null = null;
+    if (!soInfo?.customerName && data.purchase_order_id) {
+      // Try to get warehouse name from PO's warehouse_id
+      warehouseName = orderNumbers.poWarehouses[data.purchase_order_id] || null;
+    }
+    // Fallback to from_location_id if still no warehouse name
+    if (!warehouseName && data.from_location_id) {
+      warehouseName = orderNumbers.locations[data.from_location_id] || null;
+    }
+
     return {
       id: data.id,
       shipmentNumber: data.shipment_number,
@@ -793,7 +815,7 @@ class ShipmentRepositoryImpl {
       actionRequired: data.action_required,
       customerName: soInfo?.customerName ?? null,
       customerPo: soInfo?.customerPo ?? null,
-      warehouseName: data.from_location_id ? orderNumbers.locations[data.from_location_id] || null : null, // Pre-PO/SO: Warehouse name
+      warehouseName, // Pre-PO/SO: Warehouse name from PO or from_location_id
     };
   }
 }

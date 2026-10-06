@@ -900,9 +900,9 @@ async function importShipment(shipment: ShipmentPreview, userId: string): Promis
 
     if (updateError) throw updateError;
   } else {
-    // Pre-PO/SO: Use PO number as shipment number (unique per PO)
-    // This allows multiple shipments for same SO (e.g., PO2600046, PO2600046-2)
-    const shipmentNumber = shipment.purchaseOrderNumber || shipment.salesOrderNumber;
+    // Use Load Number (SO number) as shipment number
+    // PO number is stored separately in purchase_order_id field
+    const shipmentNumber = shipment.salesOrderNumber; // Load Number (SO2600057)
 
     // Create new shipment
     const { error: shipmentError } = await supabase

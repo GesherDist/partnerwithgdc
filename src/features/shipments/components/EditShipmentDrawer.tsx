@@ -82,6 +82,7 @@ const editShipmentSchema = z.object({
   lfdDate: z.string(),
   carrier: z.string(),
   trackingNumber: z.string(),
+  containerNumber: z.string(), // Container number field
   serviceType: z.string(),
   shipToName: z.string(),
   shipToAddressStreet: z.string(),
@@ -154,6 +155,7 @@ export function EditShipmentDrawer({
       lfdDate: '',
       carrier: '',
       trackingNumber: '',
+      containerNumber: '',
       serviceType: '',
       shipToName: '',
       shipToAddressStreet: '',
@@ -193,6 +195,7 @@ export function EditShipmentDrawer({
           lfdDate: toDateInput(data.lfdDate),
           carrier: data.carrier || '',
           trackingNumber: data.trackingNumber || '',
+          containerNumber: data.containerNumber || '',
           serviceType: data.serviceType || '',
           shipToName: data.shipToName || '',
           shipToAddressStreet: data.shipToAddressStreet || '',
@@ -242,6 +245,7 @@ export function EditShipmentDrawer({
         lfdDate: data.lfdDate ? new Date(data.lfdDate) : null,
         carrier: data.carrier || null,
         trackingNumber: data.trackingNumber || null,
+        containerNumber: data.containerNumber || null,
         serviceType: data.serviceType || null,
         shipToName: data.shipToName || null,
         shipToAddress: {
@@ -456,12 +460,28 @@ export function EditShipmentDrawer({
                   />
                   <FormField
                     control={form.control}
+                    name="serviceType"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Service type</FormLabel>
+                        <FormControl>
+                          <Input placeholder="e.g. Ocean FCL" disabled={isLocked} {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <FormField
+                    control={form.control}
                     name="trackingNumber"
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>Tracking number</FormLabel>
                         <FormControl>
-                          <Input disabled={isLocked} {...field} />
+                          <Input placeholder="Bill of Lading" disabled={isLocked} {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -469,12 +489,12 @@ export function EditShipmentDrawer({
                   />
                   <FormField
                     control={form.control}
-                    name="serviceType"
+                    name="containerNumber"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Service type</FormLabel>
+                        <FormLabel>Container number</FormLabel>
                         <FormControl>
-                          <Input placeholder="e.g. Ocean FCL" disabled={isLocked} {...field} />
+                          <Input placeholder="e.g. CMAU1234567" disabled={isLocked} {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>

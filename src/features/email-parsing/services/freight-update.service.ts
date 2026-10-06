@@ -141,6 +141,60 @@ export async function processFreightUpdate(
 }
 
 // ============================================
+// SHIPMENT MATCHING HELPERS
+// ============================================
+
+/**
+ * Normalize SO/Shipment number to shipment_number formats
+ * IMPORTANT: In freight emails, "SO" refers to SHIPMENT number, not Sales Order!
+ * Converts: SO2600045 → SH-2026-00045 (database shipment_number format)
+ *
+ * Handles formats:
+ * - SO2600045 (compact from emails) → SH-2026-00045
+ * - SO-2600045 → SH-2600045 (current format without year expansion)
+ * - SO-2026-00045 → SH-2026-00045
+ */
+function normalizeShipmentNumber(soNumber: string): string[] {
+  const formats: string[] = [];
+
+  // Pattern 1: SO2600045 (compact) → SH-2026-00045
+  const compactMatch = soNumber.match(/^SO(\d{2})(\d{5})$/i);
+  if (compactMatch && compactMatch[1] && compactMatch[2]) {
+    const yearShort = compactMatch[1]; // "26"
+    const seqNum = compactMatch[2]; // "00045"
+    const yearFull = `20${yearShort}`; // "2026"
+    formats.push(`SH-${yearFull}-${seqNum}`); // Database format: SH-2026-00045
+    formats.push(`SH-${yearShort}${seqNum}`); // Alternative: SH-2600045
+  }
+
+  // Pattern 2: SO-2600045 (with dash, short year) → SH-2600045
+  const dashShortMatch = soNumber.match(/^SO-(\d{2})(\d{5})$/i);
+  if (dashShortMatch && dashShortMatch[1] && dashShortMatch[2]) {
+    const yearShort = dashShortMatch[1];
+    const seqNum = dashShortMatch[2];
+    const yearFull = `20${yearShort}`;
+    formats.push(`SH-${yearShort}${seqNum}`); // SH-2600045
+    formats.push(`SH-${yearFull}-${seqNum}`); // SH-2026-00045
+  }
+
+  // Pattern 3: SO-2026-00045 (expanded) → SH-2026-00045
+  const expandedMatch = soNumber.match(/^SO-(\d{4})-(\d{5})$/i);
+  if (expandedMatch && expandedMatch[1] && expandedMatch[2]) {
+    const yearFull = expandedMatch[1]; // "2026"
+    const seqNum = expandedMatch[2]; // "00045"
+    const yearShort = yearFull.slice(2); // "26"
+    formats.push(`SH-${yearFull}-${seqNum}`); // SH-2026-00045
+    formats.push(`SH-${yearShort}${seqNum}`); // SH-2600045
+  }
+
+  return [...new Set(formats)]; // Remove duplicates
+}
+
+// NOTE: normalizeSoNumber removed from here
+// Freight emails use normalizeShipmentNumber (SO actually means Shipment, not Sales Order)
+// For Sales Order matching, see src/features/shipping/repositories/shipping.repository.ts
+
+// ============================================
 // SHIPMENT MATCHING
 // ============================================
 
@@ -189,31 +243,27 @@ async function matchShipment(
     }
   }
 
-  // Try 3: Match by SO number
+  // Try 3: Match by SO number (actually SHIPMENT number in freight emails)
+  // IMPORTANT: Freight forwarders call shipments as "SO" but they mean SHIPMENT, not Sales Order
+  // Email format: "SO2600045" → Database format: "SH-2026-00045"
   if (!shipmentId && parsedData.soNumber) {
-    // Clean SO number (remove spaces, dashes)
-    const cleanSO = parsedData.soNumber.replace(/[\s-]/g, '');
+    // Convert SO number to shipment number formats
+    // Email: SO2600045 → Database: SH-2026-00045
+    const shipmentFormats = normalizeShipmentNumber(parsedData.soNumber);
+    console.log('[Freight Matching] Trying Shipment formats:', shipmentFormats);
 
-    const { data: soMatch } = await supabase
-      .from('sales_orders')
-      .select('id, so_number')
-      .eq('so_number', cleanSO)
+    const { data: shipmentMatch } = await supabase
+      .from('shipments')
+      .select('id, shipment_number')
+      .in('shipment_number', shipmentFormats)
+      .is('deleted_at', null)
       .single();
 
-    if (soMatch) {
-      // Find shipment for this SO
-      const { data: shipment } = await supabase
-        .from('shipments')
-        .select('id, sales_order_id')
-        .eq('sales_order_id', soMatch.id)
-        .single();
-
-      if (shipment) {
-        shipmentId = shipment.id;
-        matchType = 'so';
-        confidence = 0.9;
-        console.log('[Freight Matching] Matched by SO:', parsedData.soNumber);
-      }
+    if (shipmentMatch) {
+      shipmentId = shipmentMatch.id;
+      matchType = 'so'; // Keep as 'so' for backward compatibility
+      confidence = 0.95; // High confidence - direct shipment match
+      console.log('[Freight Matching] Matched by Shipment#:', parsedData.soNumber, '→', shipmentMatch.shipment_number);
     }
   }
 

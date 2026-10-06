@@ -559,12 +559,52 @@ async function matchSupplier(
 }
 
 /**
+ * Normalize PO number to all possible formats for matching
+ * Handles: PO2600064 (compact) ↔ PO-2600064 (database) ↔ PO-2026-00064 (old format)
+ */
+function normalizePoNumber(poNumber: string): string[] {
+  const formats: string[] = [poNumber.toUpperCase()]; // Always include original
+
+  // Pattern 1: PO2600064 (compact) -> PO-2600064, PO-2026-00064
+  const compactMatch = poNumber.match(/^PO(\d{2})(\d{5})$/i);
+  if (compactMatch && compactMatch[1] && compactMatch[2]) {
+    const yearShort = compactMatch[1]; // "26"
+    const seqNum = compactMatch[2]; // "00064"
+    const yearFull = `20${yearShort}`; // "2026"
+    formats.push(`PO-${yearShort}${seqNum}`); // Current format
+    formats.push(`PO-${yearFull}-${seqNum}`); // Old format
+  }
+
+  // Pattern 2: PO-2600064 (current) -> PO2600064, PO-2026-00064
+  const currentMatch = poNumber.match(/^PO-(\d{2})(\d{5})$/i);
+  if (currentMatch && currentMatch[1] && currentMatch[2]) {
+    const yearShort = currentMatch[1];
+    const seqNum = currentMatch[2];
+    const yearFull = `20${yearShort}`;
+    formats.push(`PO${yearShort}${seqNum}`); // Compact
+    formats.push(`PO-${yearFull}-${seqNum}`); // Old format
+  }
+
+  // Pattern 3: PO-2026-00064 (old) -> PO2600064, PO-2600064
+  const expandedMatch = poNumber.match(/^PO-(\d{4})-(\d{5})$/i);
+  if (expandedMatch && expandedMatch[1] && expandedMatch[2]) {
+    const yearFull = expandedMatch[1];
+    const seqNum = expandedMatch[2];
+    const yearShort = yearFull.slice(2);
+    formats.push(`PO${yearShort}${seqNum}`); // Compact
+    formats.push(`PO-${yearShort}${seqNum}`); // Current
+  }
+
+  return [...new Set(formats)]; // Remove duplicates
+}
+
+/**
  * Match purchase order by PO number and supplier
  */
 async function matchPurchaseOrder(
   supabase: any,
   poNumber: string | null,
-  supplierId: string | null
+  _supplierId: string | null // Intentionally unused - PO number is unique enough
 ): Promise<POMatchResult> {
   if (!poNumber) {
     return {
@@ -576,39 +616,26 @@ async function matchPurchaseOrder(
     };
   }
 
-  // Try exact match by PO number
-  let query = supabase
+  // Normalize PO number to handle multiple formats
+  const poFormats = normalizePoNumber(poNumber);
+  console.log('[PO Matching] Trying PO formats:', poFormats);
+
+  // Try exact match by PO number (try all formats)
+  const { data: exactMatch } = await supabase
     .from('purchase_orders')
     .select('id, po_number, status')
-    .eq('po_number', poNumber)
-    .in('status', ['draft', 'sent', 'confirmed', 'in_production', 'ready_to_ship', 'partial', 'in_transit']);
+    .in('po_number', poFormats)
+    .in('status', ['draft', 'sent', 'confirmed', 'in_production', 'ready_to_ship', 'partial', 'in_transit'])
+    .single();
 
-  // If we have supplier ID, add that filter
-  if (supplierId) {
-    // Note: PO has items with supplier_id, we'll check via join
-    const { data: exactMatch } = await query.single();
-
-    if (exactMatch) {
-      return {
-        poId: exactMatch.id,
-        poNumber: exactMatch.po_number,
-        matchType: 'exact',
-        confidence: 1.0,
-        existingStatus: exactMatch.status,
-      };
-    }
-  } else {
-    const { data: exactMatch } = await query.single();
-
-    if (exactMatch) {
-      return {
-        poId: exactMatch.id,
-        poNumber: exactMatch.po_number,
-        matchType: 'exact',
-        confidence: 1.0,
-        existingStatus: exactMatch.status,
-      };
-    }
+  if (exactMatch) {
+    return {
+      poId: exactMatch.id,
+      poNumber: exactMatch.po_number,
+      matchType: 'exact',
+      confidence: 1.0,
+      existingStatus: exactMatch.status,
+    };
   }
 
   // Try fuzzy match by PO number (case-insensitive, partial)

@@ -64,6 +64,7 @@ export const updateShipmentSchema = z.object({
   actualArrival: z.coerce.date().nullable().optional(),
   carrier: z.string().nullable().optional(),
   trackingNumber: z.string().nullable().optional(),
+  containerNumber: z.string().nullable().optional(), // Container number
   serviceType: z.string().nullable().optional(),
   fromLocationId: z.string().uuid().nullable().optional(),
   shipToName: z.string().nullable().optional(),
