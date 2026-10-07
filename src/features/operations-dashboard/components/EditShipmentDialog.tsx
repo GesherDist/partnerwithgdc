@@ -45,9 +45,12 @@ interface ShipmentData {
   customer: string;
   status: ShipmentStatus;
   actionRequired: string;
+  etaToPort?: string | null;
   confirmedEta?: string | null;
+  customerExpectedDelivery?: string | null;
   actualDeliveryDate?: string | null;
   qtyDelivered?: number;
+  outstandingQty?: number;
   totalQty?: number;
 }
 
@@ -147,16 +150,24 @@ export function EditShipmentDialog({
   // Form state
   const [status, setStatus] = useState<string>(shipment?.status || 'OPEN');
   const [actionRequired, setActionRequired] = useState(shipment?.actionRequired || '');
+  const [etaToPort, setEtaToPort] = useState(shipment?.etaToPort || '');
   const [confirmedEta, setConfirmedEta] = useState(shipment?.confirmedEta || '');
+  const [customerExpectedDelivery, setCustomerExpectedDelivery] = useState(shipment?.customerExpectedDelivery || '');
   const [actualDeliveryDate, setActualDeliveryDate] = useState(shipment?.actualDeliveryDate || '');
+  const [qtyDelivered, setQtyDelivered] = useState<number>(shipment?.qtyDelivered || 0);
+  const [outstandingQty, setOutstandingQty] = useState<number>(shipment?.outstandingQty || 0);
 
   // Reset form when shipment changes
   useEffect(() => {
     if (shipment) {
       setStatus(shipment.status);
       setActionRequired(shipment.actionRequired || '');
+      setEtaToPort(shipment.etaToPort || '');
       setConfirmedEta(shipment.confirmedEta || '');
+      setCustomerExpectedDelivery(shipment.customerExpectedDelivery || '');
       setActualDeliveryDate(shipment.actualDeliveryDate || '');
+      setQtyDelivered(shipment.qtyDelivered || 0);
+      setOutstandingQty(shipment.outstandingQty || 0);
     }
   }, [shipment]);
 
@@ -169,9 +180,13 @@ export function EditShipmentDialog({
       const result = await updateShipmentOrOrder({
         id: shipment.id,
         status: status,
-        etaToPort: confirmedEta || null,
-        customerExpectedDelivery: actualDeliveryDate || null,
+        etaToPort: etaToPort || null,
+        confirmedEta: confirmedEta || null,
+        customerExpectedDelivery: customerExpectedDelivery || null,
+        actualDeliveryDate: actualDeliveryDate || null,
         actionRequired: actionRequired || null,
+        qtyDelivered: qtyDelivered,
+        outstandingQty: outstandingQty,
       });
 
       if (result.success) {
@@ -248,10 +263,26 @@ export function EditShipmentDialog({
 
           {/* ETA to Port */}
           <div className="space-y-2">
-            <Label htmlFor="confirmedEta">
+            <Label htmlFor="etaToPort">
               <span className="flex items-center gap-2">
                 <Calendar className="h-4 w-4" />
                 ETA to Port
+              </span>
+            </Label>
+            <Input
+              id="etaToPort"
+              type="date"
+              value={etaToPort}
+              onChange={(e) => setEtaToPort(e.target.value)}
+            />
+          </div>
+
+          {/* Confirmed ETA */}
+          <div className="space-y-2">
+            <Label htmlFor="confirmedEta">
+              <span className="flex items-center gap-2">
+                <Calendar className="h-4 w-4" />
+                Confirmed ETA
               </span>
             </Label>
             <Input
@@ -264,10 +295,26 @@ export function EditShipmentDialog({
 
           {/* Customer Expected Delivery */}
           <div className="space-y-2">
-            <Label htmlFor="actualDeliveryDate">
+            <Label htmlFor="customerExpectedDelivery">
               <span className="flex items-center gap-2">
                 <Calendar className="h-4 w-4" />
                 Customer Expected Delivery
+              </span>
+            </Label>
+            <Input
+              id="customerExpectedDelivery"
+              type="date"
+              value={customerExpectedDelivery}
+              onChange={(e) => setCustomerExpectedDelivery(e.target.value)}
+            />
+          </div>
+
+          {/* Actual Delivery Date */}
+          <div className="space-y-2">
+            <Label htmlFor="actualDeliveryDate">
+              <span className="flex items-center gap-2">
+                <Calendar className="h-4 w-4" />
+                Actual Delivery Date
               </span>
             </Label>
             <Input
@@ -275,6 +322,40 @@ export function EditShipmentDialog({
               type="date"
               value={actualDeliveryDate}
               onChange={(e) => setActualDeliveryDate(e.target.value)}
+            />
+          </div>
+
+          {/* Qty Delivered */}
+          <div className="space-y-2">
+            <Label htmlFor="qtyDelivered">
+              <span className="flex items-center gap-2">
+                <Package className="h-4 w-4" />
+                Qty Delivered
+              </span>
+            </Label>
+            <Input
+              id="qtyDelivered"
+              type="number"
+              min="0"
+              value={qtyDelivered}
+              onChange={(e) => setQtyDelivered(Number(e.target.value))}
+            />
+          </div>
+
+          {/* Outstanding PO Qty */}
+          <div className="space-y-2">
+            <Label htmlFor="outstandingQty">
+              <span className="flex items-center gap-2">
+                <Package className="h-4 w-4" />
+                Outstanding PO Qty
+              </span>
+            </Label>
+            <Input
+              id="outstandingQty"
+              type="number"
+              min="0"
+              value={outstandingQty}
+              onChange={(e) => setOutstandingQty(Number(e.target.value))}
             />
           </div>
 

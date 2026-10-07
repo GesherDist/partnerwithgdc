@@ -7,7 +7,7 @@
  * Supports date range filtering for all queries.
  */
 
-import { createClient } from '@/shared/lib/supabase/server';
+import { createAdminClient } from '@/shared/lib/supabase/admin';
 import type { UnitsBySKUDataPoint, UnitsBySKUChartData, ProductLegendItem, ChannelPerformanceDataPoint, InventoryByLocation, DashboardStat, MarginDataPoint, RevenueDataPoint, DateRange, CommissionRevenueStats } from '../types';
 
 // Helper to format date as YYYY-MM-DD string
@@ -38,7 +38,7 @@ const PRODUCT_COLORS = [
  * @param dateRange - Optional date range filter. Defaults to last 6 months if not provided.
  */
 export async function getUnitsBySKU(dateRange?: DateRange): Promise<UnitsBySKUChartData> {
-  const supabase = await createClient();
+  const supabase = createAdminClient();
 
   // Use provided date range or default to last 6 months
   let startDate: string;
@@ -168,7 +168,7 @@ const CHANNEL_COLORS: Record<string, string> = {
  * @param dateRange - Optional date range filter. Defaults to current month if not provided.
  */
 export async function getChannelPerformance(dateRange?: DateRange): Promise<ChannelPerformanceDataPoint[]> {
-  const supabase = await createClient();
+  const supabase = createAdminClient();
 
   // Use provided date range or default to current month
   let startDate: string;
@@ -269,7 +269,7 @@ export async function getChannelPerformance(dateRange?: DateRange): Promise<Chan
  * Aggregates on_hand, allocated, available across all products per location
  */
 export async function getInventoryByLocation(): Promise<InventoryByLocation[]> {
-  const supabase = await createClient();
+  const supabase = createAdminClient();
 
   // Query inventory grouped by location
   const { data: inventoryData, error: inventoryError } = await supabase
@@ -422,7 +422,7 @@ export async function getInventoryByLocation(): Promise<InventoryByLocation[]> {
  * @param dateRange - Optional date range filter. Affects revenue and units calculations.
  */
 export async function getDashboardStats(dateRange?: DateRange): Promise<DashboardStat[]> {
-  const supabase = await createClient();
+  const supabase = createAdminClient();
 
   // Current dates for comparison periods
   const now = new Date();
@@ -465,70 +465,139 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
     now: now.toISOString(),
   });
 
-  // Fetch orders for the selected period (using requested_delivery_date = Customer Expected Delivery)
-  const { data: currentMonthOrders, error: currentMonthError } = await supabase
-    .from('sales_orders')
-    .select('id, grand_total, subtotal, order_date, order_number, status, requested_delivery_date')
-    .gte('requested_delivery_date', primaryStartDate)
-    .lte('requested_delivery_date', primaryEndDate)
-    .is('deleted_at', null)
-    .in('status', ['confirmed', 'processing', 'shipped', 'delivered']);
+  // Fetch INVOICED shipments for the selected period (actual_arrival date = delivery date)
+  // Revenue should only count when shipment is invoiced, not when order is placed
+  // Use load_status (not status) to match Operations Dashboard
+  // Include purchase_orders to calculate margin (SO - PO)
+  const { data: currentMonthShipments, error: currentMonthError } = await supabase
+    .from('shipments')
+    .select(`
+      id,
+      sales_order_id,
+      purchase_order_id,
+      actual_arrival,
+      shipment_number,
+      load_status,
+      sales_orders(grand_total, subtotal, order_number),
+      purchase_orders(grand_total)
+    `)
+    .gte('actual_arrival', primaryStartDate)
+    .lte('actual_arrival', primaryEndDate)
+    .eq('load_status', 'invoiced'); // Only invoiced shipments count toward revenue
 
-  // DEBUG: Log query results (now using requested_delivery_date = Customer Expected Delivery)
-  console.log('📊 Current Month Orders Query:', {
-    count: currentMonthOrders?.length || 0,
-    totalRevenue: (currentMonthOrders?.reduce((sum, o) => sum + (o.grand_total || 0), 0) || 0) / 100,
+  // DEBUG: Log query results with margin calculation (SO - PO)
+  console.log('📊 Current Period Invoiced Shipments Query:', {
+    count: currentMonthShipments?.length || 0,
+    totalMargin: (currentMonthShipments?.reduce((sum, s) => {
+      const so = (s as any).sales_orders;
+      const po = (s as any).purchase_orders;
+      const soTotal = so?.grand_total || 0;
+      const poTotal = po?.grand_total || 0;
+      return sum + (soTotal - poTotal);
+    }, 0) || 0) / 100,
     error: currentMonthError,
-    sampleOrders: currentMonthOrders?.slice(0, 3).map(o => ({
-      number: o.order_number,
-      orderDate: o.order_date,
-      requestedDeliveryDate: (o as any).requested_delivery_date,
-      status: o.status,
-      total: (o.grand_total || 0) / 100,
+    sampleShipments: currentMonthShipments?.slice(0, 3).map(s => ({
+      number: s.shipment_number,
+      actualArrival: s.actual_arrival,
+      loadStatus: s.load_status,
+      soNumber: (s as any).sales_orders?.order_number,
+      soTotal: ((s as any).sales_orders?.grand_total || 0) / 100,
+      poTotal: ((s as any).purchase_orders?.grand_total || 0) / 100,
+      margin: (((s as any).sales_orders?.grand_total || 0) - ((s as any).purchase_orders?.grand_total || 0)) / 100,
     })),
   });
 
-  // Fetch last month orders for comparison (using requested_delivery_date)
-  const { data: lastMonthOrders } = await supabase
-    .from('sales_orders')
-    .select('id, grand_total, subtotal')
-    .gte('requested_delivery_date', formatDateString(lastMonthStart))
-    .lte('requested_delivery_date', formatDateString(lastMonthEnd))
-    .is('deleted_at', null)
-    .in('status', ['confirmed', 'processing', 'shipped', 'delivered']);
+  // Fetch last month invoiced shipments for comparison (using actual_arrival)
+  const { data: lastMonthShipments } = await supabase
+    .from('shipments')
+    .select(`
+      id,
+      sales_order_id,
+      sales_orders(grand_total, subtotal),
+      purchase_orders(grand_total)
+    `)
+    .gte('actual_arrival', formatDateString(lastMonthStart))
+    .lte('actual_arrival', formatDateString(lastMonthEnd))
+    .eq('load_status', 'invoiced');
 
-  // Fetch YTD orders (Jan 1 to today, using requested_delivery_date)
-  const { data: ytdOrders, error: ytdError } = await supabase
-    .from('sales_orders')
-    .select('id, grand_total, subtotal, order_date, requested_delivery_date')
-    .gte('requested_delivery_date', formatDateString(currentYearStart))
-    .is('deleted_at', null)
-    .in('status', ['confirmed', 'processing', 'shipped', 'delivered']);
+  // Fetch YTD invoiced shipments (Jan 1 to today, using actual_arrival)
+  const { data: ytdShipments, error: ytdError } = await supabase
+    .from('shipments')
+    .select(`
+      id,
+      sales_order_id,
+      purchase_order_id,
+      actual_arrival,
+      shipment_number,
+      sales_orders(grand_total, subtotal, order_number),
+      purchase_orders(grand_total)
+    `)
+    .gte('actual_arrival', formatDateString(currentYearStart))
+    .eq('load_status', 'invoiced');
 
-  // DEBUG: Log YTD query results
-  console.log('📊 YTD Orders Query:', {
+  // DEBUG: Log YTD query results with margin calculation
+  console.log('📊 YTD Invoiced Shipments Query:', {
     yearStart: formatDateString(currentYearStart),
-    count: ytdOrders?.length || 0,
-    totalRevenue: (ytdOrders?.reduce((sum, o) => sum + (o.grand_total || 0), 0) || 0) / 100,
+    count: ytdShipments?.length || 0,
+    totalMargin: (ytdShipments?.reduce((sum, s) => {
+      const so = (s as any).sales_orders;
+      const po = (s as any).purchase_orders;
+      const soTotal = so?.grand_total || 0;
+      const poTotal = po?.grand_total || 0;
+      return sum + (soTotal - poTotal);
+    }, 0) || 0) / 100,
+    totalSales: (ytdShipments?.reduce((sum, s) => {
+      const so = (s as any).sales_orders;
+      return sum + (so?.grand_total || 0);
+    }, 0) || 0) / 100,
     error: ytdError,
   });
 
-  // Fetch last year same period orders for YTD comparison (using requested_delivery_date)
-  const { data: lastYearYtdOrders } = await supabase
-    .from('sales_orders')
-    .select('id, grand_total, subtotal')
-    .gte('requested_delivery_date', formatDateString(lastYearStart))
-    .lte('requested_delivery_date', formatDateString(lastYearSameDay))
-    .is('deleted_at', null)
-    .in('status', ['confirmed', 'processing', 'shipped', 'delivered']);
+  // Fetch last year same period invoiced shipments for YTD comparison (using actual_arrival)
+  const { data: lastYearYtdShipments } = await supabase
+    .from('shipments')
+    .select(`
+      id,
+      sales_order_id,
+      sales_orders(grand_total, subtotal),
+      purchase_orders(grand_total)
+    `)
+    .gte('actual_arrival', formatDateString(lastYearStart))
+    .lte('actual_arrival', formatDateString(lastYearSameDay))
+    .eq('load_status', 'invoiced');
 
-  // Fetch current month items for units
-  const currentOrderIds = currentMonthOrders?.map(o => o.id) || [];
+  // ===================================================================
+  // SHIPMENT-BASED KPI CALCULATION ARCHITECTURE
+  // ===================================================================
+  // All KPIs (Revenue MTD/YTD, Units Sold MTD/YTD, Open Orders) are now
+  // calculated from SHIPMENTS instead of SALES ORDERS.
+  //
+  // IMPORTANT: Uses load_status (not status) to match Operations Dashboard
+  //
+  // Revenue Recognition: Only count when shipment is INVOICED
+  //   - Filter: load_status = 'invoiced'
+  //   - Date: actual_arrival (actual delivery date)
+  //   - Calculation: Margin (SO.grand_total - PO.grand_total)
+  //   - Note: 'delivered' status does NOT exist in load_status enum
+  //
+  // Units Calculation: Only count units from invoiced shipments
+  //   - Get sales_order_id from invoiced shipments
+  //   - Fetch sales_order_items for those orders
+  //   - Sum quantities and calculate 38"/24" breakdown
+  //
+  // Open Orders: Count OPEN status loads (match Operations Dashboard)
+  //   - Filter: load_status = 'open' only
+  //   - Excludes: in_transit, available, invoiced, closed, etc.
+  //   - Value: Sum of linked sales_orders.grand_total
+  // ===================================================================
+
+  // Fetch current month items for units (from delivered shipments)
+  const currentShipmentIds = currentMonthShipments?.map(s => s.sales_order_id).filter(Boolean) || [];
   let currentMonthUnits = 0;
   let currentMonthUnits38 = 0;
   let currentMonthUnits24 = 0;
 
-  if (currentOrderIds.length > 0) {
+  if (currentShipmentIds.length > 0) {
     const { data: itemsData } = await supabase
       .from('sales_order_items')
       .select(`
@@ -538,7 +607,7 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
           name
         )
       `)
-      .in('sales_order_id', currentOrderIds);
+      .in('sales_order_id', currentShipmentIds);
 
     if (itemsData) {
       for (const item of itemsData) {
@@ -575,30 +644,30 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
     }
   }
 
-  // Fetch last month items for units comparison
-  const lastOrderIds = lastMonthOrders?.map(o => o.id) || [];
+  // Fetch last month items for units comparison (from delivered shipments)
+  const lastShipmentIds = lastMonthShipments?.map(s => s.sales_order_id).filter(Boolean) || [];
   let lastMonthUnits = 0;
 
-  if (lastOrderIds.length > 0) {
+  if (lastShipmentIds.length > 0) {
     const { data: lastItemsData } = await supabase
       .from('sales_order_items')
       .select('quantity')
-      .in('sales_order_id', lastOrderIds);
+      .in('sales_order_id', lastShipmentIds);
 
     if (lastItemsData) {
       lastMonthUnits = lastItemsData.reduce((sum, item) => sum + (item.quantity || 0), 0);
     }
   }
 
-  // Fetch YTD items for units and margin calculation
-  const ytdOrderIds = ytdOrders?.map(o => o.id) || [];
+  // Fetch YTD items for units and margin calculation (from delivered shipments)
+  const ytdShipmentIds = ytdShipments?.map(s => s.sales_order_id).filter(Boolean) || [];
   let ytdUnits = 0;
   let ytdUnits38 = 0;
   let ytdUnits24 = 0;
   let ytdTotalRevenue = 0;
   let ytdTotalCost = 0;
 
-  if (ytdOrderIds.length > 0) {
+  if (ytdShipmentIds.length > 0) {
     const { data: ytdItemsData } = await supabase
       .from('sales_order_items')
       .select(`
@@ -613,7 +682,7 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
           item_type
         )
       `)
-      .in('sales_order_id', ytdOrderIds);
+      .in('sales_order_id', ytdShipmentIds);
 
     if (ytdItemsData) {
       // Helper function to check if item is a commission item
@@ -679,13 +748,13 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
     }
   }
 
-  // Fetch last year YTD items for units and margin comparison
-  const lastYearYtdOrderIds = lastYearYtdOrders?.map(o => o.id) || [];
+  // Fetch last year YTD items for units and margin comparison (from delivered shipments)
+  const lastYearYtdShipmentIds = lastYearYtdShipments?.map(s => s.sales_order_id).filter(Boolean) || [];
   let lastYearYtdUnits = 0;
   let lastYearYtdTotalRevenue = 0;
   let lastYearYtdTotalCost = 0;
 
-  if (lastYearYtdOrderIds.length > 0) {
+  if (lastYearYtdShipmentIds.length > 0) {
     const { data: lastYearYtdItemsData } = await supabase
       .from('sales_order_items')
       .select(`
@@ -698,7 +767,7 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
           item_type
         )
       `)
-      .in('sales_order_id', lastYearYtdOrderIds);
+      .in('sales_order_id', lastYearYtdShipmentIds);
 
     if (lastYearYtdItemsData) {
       // Helper function to check if item is a commission item
@@ -738,59 +807,98 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
     }
   }
 
-  // Fetch open orders count
+  // Fetch open shipments count (match Operations Dashboard "OPEN" status)
+  // Use load_status (not status) to match Operations Dashboard
+  // Only count: load_status = 'open' (orders being processed)
   const { count: openOrdersCount } = await supabase
-    .from('sales_orders')
+    .from('shipments')
     .select('id', { count: 'exact', head: true })
-    .is('deleted_at', null)
-    .in('status', ['confirmed', 'processing']);
+    .eq('load_status', 'open');
 
-  // Calculate last month open orders for comparison
+  // Calculate last month open shipments for comparison
   const { count: lastMonthOpenCount } = await supabase
-    .from('sales_orders')
+    .from('shipments')
     .select('id', { count: 'exact', head: true })
-    .is('deleted_at', null)
-    .in('status', ['confirmed', 'processing'])
+    .eq('load_status', 'open')
     .lte('created_at', lastMonthEnd.toISOString());
 
-  // Calculate open orders value
-  const { data: openOrdersData } = await supabase
-    .from('sales_orders')
-    .select('grand_total')
-    .is('deleted_at', null)
-    .in('status', ['confirmed', 'processing']);
+  // Calculate open shipments value (from linked sales orders)
+  const { data: openShipmentsData } = await supabase
+    .from('shipments')
+    .select('sales_order_id, sales_orders(grand_total)')
+    .eq('load_status', 'open');
 
-  const openOrdersValue = openOrdersData?.reduce((sum, o) => sum + (o.grand_total || 0), 0) || 0;
+  const openOrdersValue = openShipmentsData?.reduce((sum, s) => {
+    const so = (s as any).sales_orders;
+    return sum + (so?.grand_total || 0);
+  }, 0) || 0;
 
-  // Calculate metrics
-  const currentRevenue = currentMonthOrders?.reduce((sum, o) => sum + (o.grand_total || 0), 0) || 0;
-  const lastRevenue = lastMonthOrders?.reduce((sum, o) => sum + (o.grand_total || 0), 0) || 0;
+  // Calculate metrics from delivered shipments (margin-based: SO - PO)
+  const currentRevenue = currentMonthShipments?.reduce((sum, s) => {
+    const so = (s as any).sales_orders;
+    const po = (s as any).purchase_orders;
+    const soTotal = so?.grand_total || 0;
+    const poTotal = po?.grand_total || 0;
+    const margin = soTotal - poTotal;  // Gross Margin = Revenue
+    return sum + margin;
+  }, 0) || 0;
 
-  // Calculate YTD metrics
-  const ytdRevenue = ytdOrders?.reduce((sum, o) => sum + (o.grand_total || 0), 0) || 0;
-  const lastYearYtdRevenue = lastYearYtdOrders?.reduce((sum, o) => sum + (o.grand_total || 0), 0) || 0;
+  const lastRevenue = lastMonthShipments?.reduce((sum, s) => {
+    const so = (s as any).sales_orders;
+    const po = (s as any).purchase_orders;
+    const soTotal = so?.grand_total || 0;
+    const poTotal = po?.grand_total || 0;
+    const margin = soTotal - poTotal;  // Gross Margin = Revenue
+    return sum + margin;
+  }, 0) || 0;
 
-  // STATIC COGS value to subtract from Revenue (YTD) - $337,680
-  const STATIC_COGS = 33768000; // $337,680 in cents
+  // Calculate YTD metrics from delivered shipments (margin-based: SO - PO)
+  const ytdRevenue = ytdShipments?.reduce((sum, s) => {
+    const so = (s as any).sales_orders;
+    const po = (s as any).purchase_orders;
+    const soTotal = so?.grand_total || 0;
+    const poTotal = po?.grand_total || 0;
+    const margin = soTotal - poTotal;  // Gross Margin = Revenue
+    return sum + margin;
+  }, 0) || 0;
 
-  // Calculate Net Revenue (Revenue - Static COGS) for Revenue (YTD) card
-  const ytdNetRevenue = ytdRevenue - STATIC_COGS;
-  const lastYearYtdNetRevenue = lastYearYtdRevenue - STATIC_COGS;
+  const lastYearYtdRevenue = lastYearYtdShipments?.reduce((sum, s) => {
+    const so = (s as any).sales_orders;
+    const po = (s as any).purchase_orders;
+    const soTotal = so?.grand_total || 0;
+    const poTotal = po?.grand_total || 0;
+    const margin = soTotal - poTotal;  // Gross Margin = Revenue
+    return sum + margin;
+  }, 0) || 0;
+
+  // Revenue is now margin-based (SO - PO), no STATIC COGS subtraction needed
+  // ytdRevenue already contains margin (gross profit) from each shipment
+  const ytdNetRevenue = ytdRevenue;  // Direct margin from delivered shipments
+  const lastYearYtdNetRevenue = lastYearYtdRevenue;  // Direct margin from last year
 
   const ytdNetRevenueChange = lastYearYtdNetRevenue > 0 ? ((ytdNetRevenue - lastYearYtdNetRevenue) / lastYearYtdNetRevenue) * 100 : 0;
   const ytdUnitsChange = lastYearYtdUnits > 0 ? ((ytdUnits - lastYearYtdUnits) / lastYearYtdUnits) * 100 : 0;
 
-  // Calculate Net Total Revenue (from line items) for Blended Margin calculation
-  const ytdNetTotalRevenue = ytdTotalRevenue - STATIC_COGS;
-  const lastYearYtdNetTotalRevenue = lastYearYtdTotalRevenue - STATIC_COGS;
+  // For Blended Margin calculation, we need total sales (not margin)
+  // Calculate total sales from delivered shipments
+  const ytdTotalSales = ytdShipments?.reduce((sum, s) => {
+    const so = (s as any).sales_orders;
+    return sum + (so?.grand_total || 0);
+  }, 0) || 0;
 
-  // Calculate YTD Blended Margin (using MODIFIED revenue - static COGS subtracted)
-  // Uses ytdNetTotalRevenue (modified) and ytdTotalCost (database COGS)
-  const ytdBlendedMargin = ytdNetTotalRevenue > 0
-    ? ((ytdNetTotalRevenue - ytdTotalCost) / ytdNetTotalRevenue) * 100
+  const lastYearYtdTotalSales = lastYearYtdShipments?.reduce((sum, s) => {
+    const so = (s as any).sales_orders;
+    return sum + (so?.grand_total || 0);
+  }, 0) || 0;
+
+  // Calculate YTD Blended Margin using margin-based approach
+  // Margin % = (Total Margin / Total Sales) × 100
+  // Where: Total Margin = Sum(SO - PO), Total Sales = Sum(SO)
+  const ytdBlendedMargin = ytdTotalSales > 0
+    ? (ytdRevenue / ytdTotalSales) * 100
     : 0;
-  const lastYearYtdBlendedMargin = lastYearYtdNetTotalRevenue > 0
-    ? ((lastYearYtdNetTotalRevenue - lastYearYtdTotalCost) / lastYearYtdNetTotalRevenue) * 100
+  const lastYearYtdBlendedMargin = lastYearYtdTotalSales > 0
+    ? (lastYearYtdRevenue / lastYearYtdTotalSales) * 100
     : 0;
   const marginChange = ytdBlendedMargin - lastYearYtdBlendedMargin; // Absolute difference in margin %
 
@@ -882,7 +990,7 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
  * @param dateRange - Optional date range filter. Defaults to last 6 months if not provided.
  */
 export async function getMarginAnalysis(dateRange?: DateRange): Promise<MarginDataPoint[]> {
-  const supabase = await createClient();
+  const supabase = createAdminClient();
 
   // Use provided date range or default to last 6 months
   let startDate: string;
@@ -1051,7 +1159,7 @@ export async function getMarginAnalysis(dateRange?: DateRange): Promise<MarginDa
  * @param dateRange - Optional date range filter. Affects the data period shown.
  */
 export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDataPoint[]> {
-  const supabase = await createClient();
+  const supabase = createAdminClient();
 
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -1183,7 +1291,7 @@ export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDat
  * Commission items are identified by item_type='service' AND (sku or description contains 'commission')
  */
 export async function getCommissionRevenue(): Promise<CommissionRevenueStats> {
-  const supabase = await createClient();
+  const supabase = createAdminClient();
 
   // Current year dates
   const now = new Date();

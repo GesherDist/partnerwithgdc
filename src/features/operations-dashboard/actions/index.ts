@@ -7,7 +7,7 @@
  * These are called from client components.
  */
 
-import { revalidatePath } from 'next/cache';
+import { revalidatePath, unstable_noStore as noStore } from 'next/cache';
 import { db } from '@/shared/lib/supabase/database';
 import { createAdminClient } from '@/shared/lib/supabase/admin';
 import { getCurrentUser } from '@/shared/lib/auth';
@@ -53,9 +53,15 @@ interface ActionResult<T> {
 
 /**
  * Fetch all operations dashboard data
+ *
+ * IMPORTANT: Uses noStore() to disable Next.js caching
+ * This ensures fresh data after updates
  */
 export async function fetchOperationsData(filters?: OperationsFilters): Promise<ActionResult<OperationsData>> {
   try {
+    // Disable Next.js caching to ensure fresh data after updates
+    noStore();
+
     const data = await getOperationsData(filters);
     return { success: true, data };
   } catch (error) {
@@ -69,9 +75,14 @@ export async function fetchOperationsData(filters?: OperationsFilters): Promise<
 
 /**
  * Fetch filter options for dropdowns
+ *
+ * IMPORTANT: Uses noStore() to disable Next.js caching
  */
 export async function fetchFilterOptions(): Promise<ActionResult<FilterOptions>> {
   try {
+    // Disable Next.js caching
+    noStore();
+
     const data = await getFilterOptionsData();
     return { success: true, data };
   } catch (error) {
@@ -617,7 +628,11 @@ export interface UpdateShipmentOrOrderInput {
   id: string;
   status: string; // ShipmentStatus for shipments/SOs, or PO status for POs (confirmed, sent, draft, etc.)
   etaToPort?: string | null;
+  confirmedEta?: string | null;
   customerExpectedDelivery?: string | null;
+  actualDeliveryDate?: string | null;
+  qtyDelivered?: number;
+  outstandingQty?: number;
   actionRequired?: string | null;
 }
 
@@ -639,29 +654,30 @@ export async function updateShipmentOrOrder(
     // Use admin client to bypass RLS policies
     const supabase = createAdminClient();
 
-    // Map ShipmentStatus to database values (based on Jenny's Master Sheet)
-    const statusMap: Record<ShipmentStatus, { loadStatus: string; soStatus: string }> = {
+    // Map ShipmentStatus to load_status (Operations Dashboard tracking)
+    // Note: Sales Orders are NOT updated - only Shipments and Purchase Orders
+    const statusMap: Record<ShipmentStatus, string> = {
       // Common statuses
-      'AVAILABLE': { loadStatus: 'available', soStatus: 'pending' },
-      'OPEN': { loadStatus: 'open', soStatus: 'pending' },
-      'IN_TRANSIT': { loadStatus: 'in_transit', soStatus: 'shipped' },
-      'SOLD': { loadStatus: 'sold', soStatus: 'confirmed' },
-      'HOLD': { loadStatus: 'hold', soStatus: 'pending' },
-      'CLOSED': { loadStatus: 'closed', soStatus: 'cancelled' },
+      'AVAILABLE': 'available',
+      'OPEN': 'open',
+      'IN_TRANSIT': 'in_transit',
+      'SOLD': 'sold',
+      'HOLD': 'hold',
+      'CLOSED': 'closed',
       // Invoice/Payment statuses
-      'INVOICED': { loadStatus: 'invoiced', soStatus: 'delivered' },
-      'NOT_INVOICED': { loadStatus: 'not_invoiced', soStatus: 'confirmed' },
-      'PARTIALLY_PAID': { loadStatus: 'partially_paid', soStatus: 'delivered' },
-      'PAID': { loadStatus: 'paid', soStatus: 'delivered' },
-      'DISPUTED': { loadStatus: 'disputed', soStatus: 'pending' },
+      'INVOICED': 'invoiced',
+      'NOT_INVOICED': 'not_invoiced',
+      'PARTIALLY_PAID': 'partially_paid',
+      'PAID': 'paid',
+      'DISPUTED': 'disputed',
       // Other statuses
-      'PO_NEEDED': { loadStatus: 'po_needed', soStatus: 'draft' },
-      'DELIVERED': { loadStatus: 'delivered', soStatus: 'delivered' },
-      'CONFIRMED': { loadStatus: 'confirmed', soStatus: 'confirmed' },
-      'PROCESSING': { loadStatus: 'processing', soStatus: 'processing' },
+      'PO_NEEDED': 'po_needed',
+      'DELIVERED': 'delivered',
+      'CONFIRMED': 'confirmed',
+      'PROCESSING': 'processing',
     };
 
-    const mapped = statusMap[input.status as ShipmentStatus] || { loadStatus: 'open', soStatus: 'pending' };
+    const loadStatus = statusMap[input.status as ShipmentStatus] || 'open';
 
     // CRITICAL: input.id could be either Shipment ID or Purchase Order ID
     // Try shipment by ID first, then by purchase_order_id
@@ -699,7 +715,7 @@ export async function updateShipmentOrOrder(
       console.log('[updateShipmentOrOrder] UPDATING SHIPMENT');
       // Update shipment
       const updateData: Record<string, unknown> = {
-        load_status: mapped.loadStatus,
+        load_status: loadStatus,
         updated_at: new Date().toISOString(),
         updated_by: user.id,
       };
@@ -707,8 +723,20 @@ export async function updateShipmentOrOrder(
       if (input.etaToPort !== undefined) {
         updateData.eta_to_port = input.etaToPort || null;
       }
+      if (input.confirmedEta !== undefined) {
+        updateData.confirmed_eta = input.confirmedEta || null;
+      }
       if (input.customerExpectedDelivery !== undefined) {
         updateData.customer_expected_delivery = input.customerExpectedDelivery || null;
+      }
+      if (input.actualDeliveryDate !== undefined) {
+        updateData.actual_arrival = input.actualDeliveryDate || null;
+      }
+      if (input.qtyDelivered !== undefined) {
+        updateData.qty_delivered = input.qtyDelivered;
+      }
+      if (input.outstandingQty !== undefined) {
+        updateData.outstanding_qty = input.outstandingQty;
       }
       if (input.actionRequired !== undefined) {
         updateData.action_required = input.actionRequired || null;
@@ -739,15 +767,28 @@ export async function updateShipmentOrOrder(
         console.log('[updateShipmentOrOrder] Found related PO:', shipmentWithPO.purchase_order_id, '- updating it too');
 
         const poUpdateData: Record<string, unknown> = {
-          load_status: mapped.loadStatus, // Update load_status for Operations Dashboard tracking
+          load_status: loadStatus, // Update load_status for Operations Dashboard tracking
           updated_at: new Date().toISOString(),
         };
 
+        // Update PO fields - Supplier → Warehouse tracking
         if (input.customerExpectedDelivery !== undefined) {
           poUpdateData.expected_delivery_date = input.customerExpectedDelivery || null;
         }
+        if (input.confirmedEta !== undefined) {
+          poUpdateData.confirmed_eta = input.confirmedEta || null;  // Supplier shipping date
+        }
+        if (input.actualDeliveryDate !== undefined) {
+          poUpdateData.actual_delivery_date = input.actualDeliveryDate || null;  // Warehouse receipt date
+        }
         if (input.actionRequired !== undefined) {
           poUpdateData.internal_notes = input.actionRequired || null;
+        }
+        if (input.qtyDelivered !== undefined) {
+          poUpdateData.qty_delivered = input.qtyDelivered;  // Qty delivered to warehouse
+        }
+        if (input.outstandingQty !== undefined) {
+          poUpdateData.outstanding_qty = input.outstandingQty;  // Qty pending from supplier
         }
 
         const { error: poError } = await supabase
@@ -783,17 +824,28 @@ export async function updateShipmentOrOrder(
         console.log('[updateShipmentOrOrder] UPDATING PURCHASE ORDER');
         // Update purchase order
         const updateData: Record<string, unknown> = {
-          load_status: mapped.loadStatus, // Update load_status for Operations Dashboard tracking
+          load_status: loadStatus, // Update load_status for Operations Dashboard tracking
           updated_at: new Date().toISOString(),
         };
 
-        // Note: purchase_orders table doesn't have eta_to_us_port column
-        // Only has expected_delivery_date
+        // Update PO fields - Supplier → Warehouse tracking
         if (input.customerExpectedDelivery !== undefined) {
           updateData.expected_delivery_date = input.customerExpectedDelivery || null;
         }
+        if (input.confirmedEta !== undefined) {
+          updateData.confirmed_eta = input.confirmedEta || null;  // Supplier shipping date
+        }
+        if (input.actualDeliveryDate !== undefined) {
+          updateData.actual_delivery_date = input.actualDeliveryDate || null;  // Warehouse receipt date
+        }
         if (input.actionRequired !== undefined) {
           updateData.internal_notes = input.actionRequired || null;
+        }
+        if (input.qtyDelivered !== undefined) {
+          updateData.qty_delivered = input.qtyDelivered;  // Qty delivered to warehouse
+        }
+        if (input.outstandingQty !== undefined) {
+          updateData.outstanding_qty = input.outstandingQty;  // Qty pending from supplier
         }
 
         console.log('[PO Update] Updating PO:', input.id, 'with data:', updateData);
@@ -809,8 +861,97 @@ export async function updateShipmentOrOrder(
         }
 
         console.log('[PO Update] Successfully updated PO:', input.id);
+
+        // ============================================
+        // NEW: Also update related Sales Order if it exists
+        // Customer-related fields go to sales_orders table
+        // ============================================
+        const { data: poWithSO } = await supabase
+          .from('purchase_orders')
+          .select('sales_order_id')
+          .eq('id', input.id)
+          .single();
+
+        if (poWithSO?.sales_order_id) {
+          console.log('[updateShipmentOrOrder] Found related SO:', poWithSO.sales_order_id, '- updating customer fields');
+
+          const soUpdateData: Record<string, unknown> = {
+            updated_at: new Date().toISOString(),
+          };
+
+          // Customer-related fields go in sales_orders
+          if (input.customerExpectedDelivery !== undefined) {
+            soUpdateData.customer_expected_delivery = input.customerExpectedDelivery || null;
+          }
+          if (input.actualDeliveryDate !== undefined) {
+            soUpdateData.actual_delivery_date = input.actualDeliveryDate || null;
+          }
+          if (input.qtyDelivered !== undefined) {
+            soUpdateData.qty_delivered = input.qtyDelivered;
+          }
+          if (input.outstandingQty !== undefined) {
+            soUpdateData.outstanding_qty = input.outstandingQty;
+          }
+
+          const { error: soError } = await supabase
+            .from('sales_orders')
+            .update(soUpdateData)
+            .eq('id', poWithSO.sales_order_id);
+
+          if (soError) {
+            console.error('[updateShipmentOrOrder] Warning: Failed to update related SO:', soError.message);
+            // Don't fail the whole operation if SO update fails
+          } else {
+            console.log('[updateShipmentOrOrder] ✅ Related SO also updated successfully');
+          }
+        }
       } else {
         return { success: false, error: 'Record not found in shipments or purchase_orders table' };
+      }
+    }
+
+    // ============================================
+    // NEW: Also update Sales Order if Shipment was updated and has SO
+    // (For SOs without POs - customer-related fields go to sales_orders)
+    // ============================================
+    if (shipment) {
+      const { data: shipmentWithSO } = await supabase
+        .from('shipments')
+        .select('sales_order_id')
+        .eq('id', shipment.id)
+        .single();
+
+      if (shipmentWithSO?.sales_order_id) {
+        console.log('[updateShipmentOrOrder] Shipment has related SO:', shipmentWithSO.sales_order_id, '- updating customer fields');
+
+        const soUpdateData: Record<string, unknown> = {
+          updated_at: new Date().toISOString(),
+        };
+
+        // Customer-related fields go in sales_orders
+        if (input.customerExpectedDelivery !== undefined) {
+          soUpdateData.customer_expected_delivery = input.customerExpectedDelivery || null;
+        }
+        if (input.actualDeliveryDate !== undefined) {
+          soUpdateData.actual_delivery_date = input.actualDeliveryDate || null;
+        }
+        if (input.qtyDelivered !== undefined) {
+          soUpdateData.qty_delivered = input.qtyDelivered;
+        }
+        if (input.outstandingQty !== undefined) {
+          soUpdateData.outstanding_qty = input.outstandingQty;
+        }
+
+        const { error: soError } = await supabase
+          .from('sales_orders')
+          .update(soUpdateData)
+          .eq('id', shipmentWithSO.sales_order_id);
+
+        if (soError) {
+          console.error('[updateShipmentOrOrder] Warning: Failed to update related SO from shipment:', soError.message);
+        } else {
+          console.log('[updateShipmentOrOrder] ✅ Related SO from shipment also updated successfully');
+        }
       }
     }
 

@@ -66,10 +66,13 @@ interface EditableShipment {
   customer: string;
   status: ShipmentStatus;
   actionRequired: string;
-  confirmedEta?: string | null;
-  actualDeliveryDate?: string | null;
-  qtyDelivered?: number;
-  totalQty?: number;
+  etaToPort?: string | null;                   // ETA to US Port
+  confirmedEta?: string | null;                 // Confirmed ETA
+  customerExpectedDelivery?: string | null;     // Customer Expected Delivery
+  actualDeliveryDate?: string | null;           // Actual Delivery Date
+  qtyDelivered?: number;                        // Qty Delivered
+  outstandingQty?: number;                      // Outstanding Qty
+  totalQty?: number;                            // Total Qty
 }
 
 // Empty data structure for initial state
@@ -278,17 +281,27 @@ export default function OperationsPage() {
   // Handle edit from dynamic GDC Inventory table (Sales Orders)
   const handleEditGDCItem = (item: GDCInventoryItem) => {
     // Convert GDCInventoryItem to EditableShipment format
-    // Note: Dialog's confirmedEta = ETA to Port (item.etaToUsPort)
-    //       Dialog's actualDeliveryDate = Customer Expected Delivery (item.expectedDelivery)
+    // Map all 8 fields properly:
+    // 1. Status
+    // 2. ETA to Port (item.etaToUsPort)
+    // 3. Confirmed ETA (item.confirmedEta) ← NEW
+    // 4. Customer Expected Delivery (item.expectedDelivery)
+    // 5. Actual Delivery Date (item.actualDeliveryDate) ← NEW
+    // 6. Qty Delivered (item.qtyDelivered) ← NEW
+    // 7. Outstanding PO Qty (item.outstandingQty) ← NEW
+    // 8. Action Required / Notes
     setEditingShipment({
       id: item.id,
       loadNumber: item.shipmentNumber || item.soNumber || item.poNumber || 'N/A', // Use shipment number from table
       customer: item.customer || 'Unknown',
       status: item.status as ShipmentStatus,
       actionRequired: item.actionRequired || '',
-      confirmedEta: item.etaToUsPort || '', // ETA to US Port maps to dialog's "ETA to Port"
-      actualDeliveryDate: item.expectedDelivery || '', // Expected Delivery maps to dialog's "Customer Expected Delivery"
-      qtyDelivered: item.qtyDelivered,
+      etaToPort: item.etaToUsPort || '',                     // ETA to US Port
+      confirmedEta: item.confirmedEta || '',                  // Confirmed ETA ← NEW
+      customerExpectedDelivery: item.expectedDelivery || '',  // Customer Expected Delivery
+      actualDeliveryDate: item.actualDeliveryDate || '',      // Actual Delivery Date ← NEW
+      qtyDelivered: item.qtyDelivered || 0,                   // Qty Delivered ← NEW
+      outstandingQty: item.outstandingQty || 0,               // Outstanding PO Qty ← NEW
       totalQty: item.totalQty,
     });
 
