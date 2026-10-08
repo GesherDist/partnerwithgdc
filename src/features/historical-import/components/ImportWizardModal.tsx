@@ -6,7 +6,7 @@
 
 'use client';
 
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -120,11 +120,11 @@ export function ImportWizardModal({ open, onOpenChange }: ImportWizardModalProps
   // UPDATE STATE
   // ============================================================================
 
-  const updateState = (updates: Partial<ImportWizardState>) => {
+  const updateState = useCallback((updates: Partial<ImportWizardState>) => {
     setState((prev) => ({ ...prev, ...updates }));
-  };
+  }, []);
 
-  const updateRow = async (rowIndex: number, updates: Partial<RawExcelRow>) => {
+  const updateRow = useCallback(async (rowIndex: number, updates: Partial<RawExcelRow>) => {
     // If customer field is being updated, re-validate the row
     if (updates.customer !== undefined) {
       const { isInternalCustomer } = await import('../lib/parser');
@@ -172,7 +172,7 @@ export function ImportWizardModal({ open, onOpenChange }: ImportWizardModalProps
         row.rowIndex === rowIndex ? { ...row, ...updates } : row
       ),
     }));
-  };
+  }, []);
 
   // ============================================================================
   // RESET & CLOSE

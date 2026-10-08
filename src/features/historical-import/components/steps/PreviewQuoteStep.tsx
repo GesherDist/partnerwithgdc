@@ -159,16 +159,30 @@ export function PreviewQuoteStep({
 
   if (state.quotePreviews.length === 0) {
     return (
-      <div className="text-center py-12">
-        <Alert variant="destructive">
+      <div className="text-center py-12 space-y-4">
+        <Alert>
           <AlertDescription>
-            No valid quotes to preview. Please go back and fix validation errors.
+            No quotes to create. All orders are for warehouse inventory (GDC/Gesher) or have validation errors.
           </AlertDescription>
         </Alert>
-        <Button variant="outline" onClick={onBack} className="mt-4">
-          <ChevronLeft className="w-4 h-4 mr-2" />
-          Back
-        </Button>
+        <div className="text-sm text-muted-foreground">
+          <p>This is normal if you're importing:</p>
+          <ul className="list-disc list-inside mt-2 space-y-1">
+            <li>Warehouse inventory (customer = GDC, Gesher)</li>
+            <li>Purchase Orders without customer sales</li>
+          </ul>
+          <p className="mt-4 font-medium">You can still create Purchase Orders and Shipments in the next steps.</p>
+        </div>
+        <div className="flex gap-4 justify-center">
+          <Button variant="outline" onClick={onBack}>
+            <ChevronLeft className="w-4 h-4 mr-2" />
+            Back
+          </Button>
+          <Button onClick={onNext}>
+            Skip to Purchase Orders
+            <ChevronRight className="w-4 h-4 ml-2" />
+          </Button>
+        </div>
       </div>
     );
   }

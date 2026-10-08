@@ -35,7 +35,7 @@ import { SupplierPODrawer } from './SupplierPODrawer';
 // HELPERS
 // ============================================
 
-function getStatusBadge(status: POStatus) {
+function getStatusBadge(status: POStatus | undefined | null) {
   const configs: Record<POStatus, { label: string; variant: 'default' | 'secondary' | 'outline' | 'destructive'; className?: string }> = {
     draft: { label: 'Draft', variant: 'secondary' },
     sent: { label: 'Sent', variant: 'outline', className: 'bg-blue-50 text-blue-700 border-blue-200' },
@@ -48,7 +48,16 @@ function getStatusBadge(status: POStatus) {
     cancelled: { label: 'Cancelled', variant: 'destructive' },
   };
 
-  const config = configs[status];
+  // Default fallback for undefined/null/unknown status
+  const config = status ? configs[status] : null;
+  if (!config) {
+    return (
+      <Badge variant="secondary" className="bg-gray-50 text-gray-700 border-gray-200">
+        Unknown
+      </Badge>
+    );
+  }
+
   return (
     <Badge variant={config.variant} className={config.className}>
       {config.label}
@@ -56,7 +65,7 @@ function getStatusBadge(status: POStatus) {
   );
 }
 
-function getProductionStatusBadge(status: ProductionStatus) {
+function getProductionStatusBadge(status: ProductionStatus | undefined | null) {
   const configs: Record<ProductionStatus, { label: string; icon: React.ElementType; className: string }> = {
     not_started: { label: 'Not Started', icon: Clock, className: 'bg-gray-100 text-gray-700' },
     in_production: { label: 'In Production', icon: Factory, className: 'bg-blue-100 text-blue-700' },
@@ -64,9 +73,18 @@ function getProductionStatusBadge(status: ProductionStatus) {
     shipped: { label: 'Shipped', icon: Truck, className: 'bg-emerald-100 text-emerald-700' },
   };
 
-  const config = configs[status];
-  const Icon = config.icon;
+  // Default fallback for undefined/null/unknown status
+  const config = status ? configs[status] : null;
+  if (!config) {
+    return (
+      <span className={cn('inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium', 'bg-gray-100 text-gray-700')}>
+        <Clock className="h-3 w-3" />
+        Unknown
+      </span>
+    );
+  }
 
+  const Icon = config.icon;
   return (
     <span className={cn('inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium', config.className)}>
       <Icon className="h-3 w-3" />

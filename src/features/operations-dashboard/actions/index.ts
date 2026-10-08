@@ -807,16 +807,14 @@ export async function updateShipmentOrOrder(
       }
     } else {
       // ============================================
-      // REMOVED: sales_orders update logic
-      // Operations Dashboard should NOT update Sales Orders
+      // Try purchase_orders directly
       // ============================================
 
-      // Try purchase_orders directly
       const { data: purchaseOrder, error: poError } = await supabase
         .from('purchase_orders')
         .select('id')
         .eq('id', input.id)
-        .single();
+        .maybeSingle();
 
       console.log('[updateShipmentOrOrder] Checked purchase_orders table:', { found: !!purchaseOrder, error: poError?.message });
 
@@ -906,7 +904,64 @@ export async function updateShipmentOrOrder(
           }
         }
       } else {
-        return { success: false, error: 'Record not found in shipments or purchase_orders table' };
+        // ============================================
+        // Try sales_orders directly
+        // (For GDC table rows showing SOs without POs)
+        // ============================================
+        const { data: salesOrder, error: soDirectError } = await supabase
+          .from('sales_orders')
+          .select('id')
+          .eq('id', input.id)
+          .maybeSingle();
+
+        console.log('[updateShipmentOrOrder] Checked sales_orders table:', { found: !!salesOrder, error: soDirectError?.message });
+
+        if (salesOrder) {
+          console.log('[updateShipmentOrOrder] UPDATING SALES ORDER (without PO)');
+          // Update sales order
+          const updateData: Record<string, unknown> = {
+            updated_at: new Date().toISOString(),
+          };
+
+          // Customer-related fields go in sales_orders
+          if (input.customerExpectedDelivery !== undefined) {
+            updateData.customer_expected_delivery = input.customerExpectedDelivery || null;
+          }
+          if (input.confirmedEta !== undefined) {
+            updateData.confirmed_eta = input.confirmedEta || null;
+          }
+          if (input.etaToPort !== undefined) {
+            updateData.eta_to_us_port = input.etaToPort || null;
+          }
+          if (input.actualDeliveryDate !== undefined) {
+            updateData.actual_delivery_date = input.actualDeliveryDate || null;
+          }
+          if (input.qtyDelivered !== undefined) {
+            updateData.qty_delivered = input.qtyDelivered;
+          }
+          if (input.outstandingQty !== undefined) {
+            updateData.outstanding_qty = input.outstandingQty;
+          }
+          if (input.actionRequired !== undefined) {
+            updateData.internal_notes = input.actionRequired || null;
+          }
+
+          console.log('[SO Update] Updating SO:', input.id, 'with data:', updateData);
+
+          const { error } = await supabase
+            .from('sales_orders')
+            .update(updateData)
+            .eq('id', input.id);
+
+          if (error) {
+            console.error('Error updating sales order:', error);
+            return { success: false, error: error.message };
+          }
+
+          console.log('[SO Update] Successfully updated SO:', input.id);
+        } else {
+          return { success: false, error: 'Record not found in shipments, purchase_orders, or sales_orders table' };
+        }
       }
     }
 

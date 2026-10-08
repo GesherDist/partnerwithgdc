@@ -1127,7 +1127,7 @@ export async function getSupplierShipmentSchedule(filters?: OperationsFilters): 
       customerExpectedDelivery: so.requested_delivery_date,
       actualDeliveryDate: so.actual_delivery_date || null,
       qtyDelivered: so.qty_delivered || 0,
-      outstandingQtyForPO: so.outstanding_qty || totalQty,
+      outstandingQtyForPO: so.outstanding_qty ?? totalQty,
       invoiceNumber: null,  // Invoice #
       invoiceAmount: so.grand_total ? so.grand_total / 100 : 0,  // Invoice Amount (cents to dollars)
       // Prices are dynamic per product via items[].unitPrice
@@ -1890,8 +1890,8 @@ export async function getGDCInventoryByOrderSeries(
       etaToUsPort: shipment?.eta_to_port || linkedSO?.eta_to_us_port || null,
       confirmedEta: shipment?.confirmed_eta || linkedSO?.confirmed_eta || po.confirmed_eta || null,
       actualDeliveryDate: shipment?.actual_arrival || linkedSO?.actual_delivery_date || po.actual_delivery_date || null,
-      qtyDelivered: shipment?.qty_delivered || linkedSO?.qty_delivered || po.qty_delivered || 0,
-      outstandingQty: shipment?.outstanding_qty || linkedSO?.outstanding_qty || po.outstanding_qty || totalQty,
+      qtyDelivered: shipment?.qty_delivered ?? linkedSO?.qty_delivered ?? po.qty_delivered ?? 0,
+      outstandingQty: shipment?.outstanding_qty ?? linkedSO?.outstanding_qty ?? po.outstanding_qty ?? totalQty,
       invoiceAmount: linkedSO?.grand_total
         ? linkedSO.grand_total / 100  // Customer invoice (for allocated POs)
         : po.grand_total / 100 || 0,  // PO amount (for warehouse/unallocated POs)
@@ -2040,8 +2040,8 @@ export async function getGDCInventoryByOrderSeries(
       etaToUsPort: shipment?.eta_to_port || so.eta_to_us_port || null,
       confirmedEta: shipment?.confirmed_eta || so.confirmed_eta || null,
       actualDeliveryDate: shipment?.actual_arrival || so.actual_delivery_date || null,
-      qtyDelivered: shipment?.qty_delivered || so.qty_delivered || 0,
-      outstandingQty: shipment?.outstanding_qty || so.outstanding_qty || totalQty,
+      qtyDelivered: shipment?.qty_delivered ?? so.qty_delivered ?? 0,
+      outstandingQty: shipment?.outstanding_qty ?? so.outstanding_qty ?? totalQty,
       invoiceAmount: so.grand_total ? so.grand_total / 100 : 0,
       deliveryAddress: addressParts.join(', '),
       expectedDelivery: shipment?.customer_expected_delivery || so.requested_delivery_date || null,

@@ -198,10 +198,26 @@ export function PreviewSalesOrderStep({
 
   if (state.soPreviews.length === 0) {
     return (
-      <div className="text-center py-12">
+      <div className="text-center py-12 space-y-4">
         <Alert>
-          <AlertDescription>Generating sales order previews...</AlertDescription>
+          <AlertDescription>
+            No sales orders to create. All orders are for warehouse inventory (GDC/Gesher) or have validation errors.
+          </AlertDescription>
         </Alert>
+        <div className="text-sm text-muted-foreground">
+          <p>This is normal if you're importing warehouse inventory or purchase orders without customer sales.</p>
+          <p className="mt-4 font-medium">You can still create Purchase Orders and Shipments in the next steps.</p>
+        </div>
+        <div className="flex gap-4 justify-center">
+          <Button variant="outline" onClick={onBack}>
+            <ChevronLeft className="w-4 h-4 mr-2" />
+            Back
+          </Button>
+          <Button onClick={onNext}>
+            Skip to Fulfillment
+            <ChevronRight className="w-4 h-4 ml-2" />
+          </Button>
+        </div>
       </div>
     );
   }

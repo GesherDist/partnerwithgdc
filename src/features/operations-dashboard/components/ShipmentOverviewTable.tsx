@@ -38,17 +38,17 @@ import {
   SelectValue,
 } from '@/shared/components/ui/select';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
-import type { ImmediateAttentionItem, CustomerCommitment } from '../types';
+import type { ImmediateAttentionItem, GDCInventoryData } from '../types';
 import { StatusBadge } from '../lib/status-badge';
 
 interface ShipmentOverviewTableProps {
   inTransitItems: ImmediateAttentionItem[];
-  customerSummary: CustomerCommitment[];
+  gdcInventories: GDCInventoryData[];  // 🆕 NEW: All GDC inventory data for Invoice Amount calculation
 }
 
 export function ShipmentOverviewTable({
   inTransitItems,
-  customerSummary,
+  gdcInventories,
 }: ShipmentOverviewTableProps) {
   // Pagination state for each section
   const [immediateAttentionPage, setImmediateAttentionPage] = useState(1);
@@ -111,11 +111,34 @@ export function ShipmentOverviewTable({
     const inTransitNext7Days = filteredItems.filter(item => item.isThisWeek || item.status === 'IN_TRANSIT').length;
     const openLoads = filteredItems.filter(item => item.status === 'OPEN').length;
     const outstandingQty = filteredItems.reduce((sum, item) => sum + item.qty, 0);
-    // Get invoice amount from customerSummary (direct filtered)
-    const invoiceAmount = customerSummary
-      .filter(c => c.productSource === 'direct')
-      .reduce((sum, c) => sum + c.invoiceAmount, 0) ||
-      filteredItems.reduce((sum, item) => sum + (item.qty * 1000), 0); // Fallback estimate
+
+    // Invoice Amount = SUM(GDC 0 Invoice Amount) + SUM(GDC 1 Invoice Amount) + SUM(GDC 2 Invoice Amount)
+    // FILTER by specific statuses: AVAILABLE, OPEN, IN TRANSIT, INVOICED, SOLD
+    const allowedStatuses = [
+      'AVAILABLE',
+      'OPEN',
+      'IN TRANSIT',
+      'IN_TRANSIT',
+      'INVOICED',
+      'SOLD'
+    ];
+
+    const invoiceAmount = gdcInventories.reduce((total, gdcData) => {
+      return total + gdcData.items.reduce((sum, item) => {
+        const status = String(item.status || '')
+          .trim()
+          .toUpperCase();
+
+        if (
+          allowedStatuses.includes(status) &&
+          Number(item.invoiceAmount) > 0
+        ) {
+          return sum + Number(item.invoiceAmount);
+        }
+
+        return sum;
+      }, 0);
+    }, 0);
 
     return {
       inTransitNext7Days,
@@ -123,7 +146,7 @@ export function ShipmentOverviewTable({
       outstandingQty,
       invoiceAmount,
     };
-  }, [filteredItems, customerSummary]);
+  }, [filteredItems, gdcInventories]);
 
   // Pagination for Immediate Attention section
   const immediateAttentionTotal = immediateAttentionItems.length;

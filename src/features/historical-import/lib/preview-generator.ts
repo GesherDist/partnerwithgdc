@@ -57,10 +57,20 @@ export async function generateQuotePreviews(
   });
 
   const previews: QuotePreview[] = [];
+  let skippedInternal = 0;
+  let skippedNoCustomerId = 0;
 
   for (const row of validRows) {
     // Skip internal customers (warehouse inventory) - they don't need quotes
-    if (row.isInternalCustomer || !row.customerId) {
+    if (row.isInternalCustomer) {
+      skippedInternal++;
+      console.log(`[QUOTE PREVIEW] Skipping internal customer: ${row.loadNumber} - ${row.customer}`);
+      continue;
+    }
+
+    if (!row.customerId) {
+      skippedNoCustomerId++;
+      console.log(`[QUOTE PREVIEW] Skipping no customerId: ${row.loadNumber} - ${row.customer} (not found in database)`);
       continue;
     }
 
@@ -168,6 +178,14 @@ export async function generateQuotePreviews(
 
     previews.push(preview);
   }
+
+  // Summary
+  console.log('[QUOTE PREVIEW] Summary:', {
+    totalValidRows: validRows.length,
+    skippedInternal,
+    skippedNoCustomerId,
+    quotesGenerated: previews.length,
+  });
 
   return previews;
 }
