@@ -424,7 +424,7 @@ export default function OperationsPage() {
         <TabsContent value="shipment-overview" className={`space-y-6 ${isRefreshing ? 'hidden' : ''}`}>
           <ShipmentOverviewTable
             inTransitItems={data.immediateAttention}
-            customerSummary={data.customerCommitments}
+            gdcInventories={data.gdcInventories || []}
           />
         </TabsContent>
 

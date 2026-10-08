@@ -175,7 +175,7 @@ export function OperationsDashboardContent() {
         <TabsContent value="shipment-overview" className="space-y-6">
           <ShipmentOverviewTable
             inTransitItems={data.immediateAttention}
-            customerSummary={data.customerCommitments}
+            gdcInventories={data.gdcInventories}
           />
         </TabsContent>
 

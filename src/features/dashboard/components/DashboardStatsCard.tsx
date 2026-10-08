@@ -27,43 +27,43 @@ import { getIcon } from '../lib/icons';
 const CALCULATION_FORMULAS: Record<string, { title: string; formula: string; notes?: string }> = {
   'revenue-mtd': {
     title: 'Revenue (MTD) Calculation',
-    formula: 'Sum of all confirmed/processing/shipped/delivered sales orders grand_total for current month\n\nFiltered by: requested_delivery_date (Customer Expected Delivery)',
-    notes: 'Compared to last month\'s revenue. Amounts stored in cents, displayed in dollars.',
+    formula: 'Sum of margins (Customer Invoice - Supplier Cost) from INVOICED shipments for current month\n\nCalculation: Sum(SO.grand_total - PO.grand_total)\nFiltered by: actual_arrival (Delivery Date)\nStatus: load_status = "invoiced"',
+    notes: 'Compared to last month\'s revenue. Revenue = Gross Margin (profit), not total sales. Amounts stored in cents, displayed in dollars.',
   },
   'revenue-ytd': {
     title: 'Revenue (YTD) Calculation',
-    formula: 'Sum of all confirmed/processing/shipped/delivered sales orders grand_total from Jan 1 to today\n\nFiltered by: requested_delivery_date (Customer Expected Delivery)',
-    notes: 'Compared to same period last year (YTD).',
+    formula: 'Sum of margins (Customer Invoice - Supplier Cost) from INVOICED shipments from Jan 1 to today\n\nCalculation: Sum(SO.grand_total - PO.grand_total)\nFiltered by: actual_arrival (Delivery Date)\nStatus: load_status = "invoiced"',
+    notes: 'Compared to same period last year (YTD). Revenue = Gross Margin (profit), not total sales.',
   },
   'units-sold': {
     title: 'Units Sold (MTD) Calculation',
-    formula: 'Sum of quantity from all sales_order_items for current month orders\n\nFiltered by: requested_delivery_date (Customer Expected Delivery)\n\nBreakdown by tire size:\n• 38" tires: Items where rim_size = "38" or name contains "38"\n• 24" tires: Items where rim_size = "24" or name contains "24"',
-    notes: 'Only counts orders with status: confirmed, processing, shipped, delivered.',
+    formula: 'Sum of quantity from sales_order_items for INVOICED shipments in current month\n\nFiltered by: actual_arrival (Delivery Date)\nStatus: load_status = "invoiced"\n\nBreakdown by tire size:\n• 38" tires: Items where rim_size = "38" or name contains "38"\n• 24" tires: Items where rim_size = "24" or name contains "24"',
+    notes: 'Only counts units from delivered/invoiced shipments, not from open orders.',
   },
   'units-sold-ytd': {
     title: 'Units Sold (YTD) Calculation',
-    formula: 'Sum of quantity from all sales_order_items from Jan 1 to today\n\nFiltered by: requested_delivery_date (Customer Expected Delivery)\n\nBreakdown by tire size:\n• 38" tires: Items where rim_size = "38" or name contains "38"\n• 24" tires: Items where rim_size = "24" or name contains "24"',
-    notes: 'Compared to same period last year (YTD).',
+    formula: 'Sum of quantity from sales_order_items for INVOICED shipments from Jan 1 to today\n\nFiltered by: actual_arrival (Delivery Date)\nStatus: load_status = "invoiced"\n\nBreakdown by tire size:\n• 38" tires: Items where rim_size = "38" or name contains "38"\n• 24" tires: Items where rim_size = "24" or name contains "24"',
+    notes: 'Compared to same period last year (YTD). Only counts units from delivered/invoiced shipments.',
   },
   'blended-margin': {
     title: 'Blended Margin (YTD) Calculation',
-    formula: 'Margin % = ((Total Revenue - Total Cost) / Total Revenue) × 100\n\nWhere:\n• Total Revenue = Sum of (unit_price × quantity) for all items\n• Total Cost = Sum of (base_cost × quantity) for all items\n• Commission items excluded from calculation',
-    notes: 'Commission items: service items with "commission" in SKU or description. Compared to last year YTD margin.',
+    formula: 'Margin % = (Total Margin / Total Sales) × 100\n\nWhere:\n• Total Margin = Sum(SO.grand_total - PO.grand_total) for all invoiced shipments\n• Total Sales = Sum(SO.grand_total) for all invoiced shipments\n• Filtered by: actual_arrival (Jan 1 to today)\n• Status: load_status = "invoiced"',
+    notes: 'Margin based on actual delivered orders with real COGS (Purchase Orders). Compared to last year YTD margin.',
   },
   'open-orders': {
     title: 'Open Orders Calculation',
-    formula: 'Count of sales orders with status = "confirmed" OR "processing"\n\nOrder Value = Sum of grand_total for all open orders',
-    notes: 'Does not filter by date - shows ALL open orders regardless of order date.',
+    formula: 'Count of shipments with load_status = "open"\n\nOrder Value = Sum of linked sales_orders.grand_total for all open shipments',
+    notes: 'Shows shipments currently in OPEN status (not yet invoiced/delivered). Does not filter by date.',
   },
   'commission-expected-ytd': {
     title: 'Commission Expected (YTD) Calculation',
-    formula: 'Sum of (unit_price × quantity) for all commission items in YTD orders\n\nFiltered by: requested_delivery_date (Customer Expected Delivery)\n\nCommission Item Criteria:\n• item_type = "service"\n• SKU or description contains "commission"\n• Order status: confirmed, processing, shipped, delivered',
-    notes: 'Includes all open and delivered orders. Compared to same period last year.',
+    formula: 'Sum of (unit_price × quantity) for all commission items in YTD invoiced shipments\n\nFiltered by: actual_arrival (Delivery Date)\nStatus: load_status = "invoiced"\n\nCommission Item Criteria:\n• item_type = "service"\n• SKU or description contains "commission"',
+    notes: 'Based on invoiced shipments from Jan 1 to today. Compared to same period last year.',
   },
   'commission-actual-ytd': {
     title: 'Commission Actual (YTD) Calculation',
-    formula: 'Sum of (unit_price × quantity) for all commission items in DELIVERED orders only\n\nFiltered by: requested_delivery_date (Customer Expected Delivery)\n\nCommission Item Criteria:\n• item_type = "service"\n• SKU or description contains "commission"\n• Order status: delivered (only)',
-    notes: 'Only counts revenue from delivered orders. Compared to same period last year.',
+    formula: 'Sum of (unit_price × quantity) for all commission items in INVOICED shipments only\n\nFiltered by: actual_arrival (Delivery Date)\nStatus: load_status = "invoiced"\n\nCommission Item Criteria:\n• item_type = "service"\n• SKU or description contains "commission"',
+    notes: 'Only counts commission from delivered/invoiced orders. Compared to same period last year.',
   },
 };
 
