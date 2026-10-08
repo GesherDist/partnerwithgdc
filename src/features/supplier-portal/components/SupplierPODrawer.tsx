@@ -24,10 +24,9 @@ import {
   SheetTitle,
 } from '@/shared/components/ui/sheet';
 import { Button } from '@/shared/components/ui/button';
-import { Badge } from '@/shared/components/ui/badge';
 import { Separator } from '@/shared/components/ui/separator';
 import { cn, formatCurrency, formatDate } from '@/shared/lib/utils';
-import type { SupplierPurchaseOrder, POStatus, ProductionStatus } from '../types';
+import type { SupplierPurchaseOrder, ProductionStatus } from '../types';
 import { ConfirmPODialog } from './ConfirmPODialog';
 import { RejectPODialog } from './RejectPODialog';
 import { ProductionStatusForm } from './ProductionStatusForm';
@@ -35,27 +34,6 @@ import { ProductionStatusForm } from './ProductionStatusForm';
 // ============================================
 // HELPERS
 // ============================================
-
-function getStatusBadge(status: POStatus) {
-  const configs: Record<POStatus, { label: string; className: string }> = {
-    draft: { label: 'Draft', className: 'bg-gray-100 text-gray-700' },
-    sent: { label: 'Sent', className: 'bg-blue-50 text-blue-700 border-blue-200' },
-    confirmed: { label: 'Confirmed', className: 'bg-green-50 text-green-700 border-green-200' },
-    in_production: { label: 'In Production', className: 'bg-violet-50 text-violet-700 border-violet-200' },
-    ready_to_ship: { label: 'Ready to Ship', className: 'bg-cyan-50 text-cyan-700 border-cyan-200' },
-    in_transit: { label: 'In Transit', className: 'bg-blue-50 text-blue-700 border-blue-200' },
-    partial: { label: 'Partial', className: 'bg-amber-50 text-amber-700 border-amber-200' },
-    received: { label: 'Received', className: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-    cancelled: { label: 'Cancelled', className: 'bg-red-50 text-red-700 border-red-200' },
-  };
-
-  const config = configs[status];
-  return (
-    <Badge variant="outline" className={cn('text-sm', config.className)}>
-      {config.label}
-    </Badge>
-  );
-}
 
 function getProductionStatusBadge(status: ProductionStatus) {
   const configs: Record<ProductionStatus, { label: string; icon: React.ElementType; className: string }> = {
@@ -116,10 +94,7 @@ export function SupplierPODrawer({
       <Sheet open={open} onOpenChange={onClose}>
         <SheetContent className="w-full sm:max-w-lg overflow-y-auto">
           <SheetHeader className="space-y-3">
-            <div className="flex items-center gap-3">
-              <SheetTitle className="text-xl">{purchaseOrder.poNumber}</SheetTitle>
-              {getStatusBadge(purchaseOrder.status)}
-            </div>
+            <SheetTitle className="text-xl">{purchaseOrder.poNumber}</SheetTitle>
             <p className="text-sm text-muted-foreground">
               Purchase Order from Gesher Distribution
             </p>
@@ -197,7 +172,7 @@ export function SupplierPODrawer({
                 {isConfirmed && (
                   <>
                     <div>
-                      <p className="text-muted-foreground">Production Status</p>
+                      <p className="text-muted-foreground">Load Status</p>
                       <div className="mt-1">
                         {getProductionStatusBadge(purchaseOrder.productionStatus)}
                       </div>
@@ -308,7 +283,7 @@ export function SupplierPODrawer({
               {isConfirmed && (
                 <Button onClick={() => setShowProductionForm(true)} className="w-full">
                   <Factory className="mr-2 h-4 w-4" />
-                  Update Production Status
+                  Update Load Status
                 </Button>
               )}
             </div>

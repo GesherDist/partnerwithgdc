@@ -9,7 +9,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/shared/components/ui/dropdown-menu';
-import { MoreHorizontal, Eye, Pencil, Trash2 } from 'lucide-react';
+import { MoreHorizontal, Eye, Pencil, Trash2, FileEdit, Send } from 'lucide-react';
 import { cn } from '@/shared/lib/utils';
 import type { POListItem } from '../types';
 import { LOAD_STATUS_COLORS, LOAD_STATUS_LABELS } from '@/features/shipments/types';
@@ -17,11 +17,13 @@ import { LOAD_STATUS_COLORS, LOAD_STATUS_LABELS } from '@/features/shipments/typ
 interface ColumnsOptions {
   onView?: (po: POListItem) => void;
   onEdit?: (po: POListItem) => void;
+  onEditStatus?: (po: POListItem) => void;
+  onSendToSupplier?: (po: POListItem) => void;
   onDelete?: (po: POListItem) => void;
 }
 
 export function PurchaseOrdersTableColumns(options: ColumnsOptions = {}): ColumnDef<POListItem>[] {
-  const { onView, onEdit, onDelete } = options;
+  const { onView, onEdit, onEditStatus, onSendToSupplier, onDelete } = options;
 
   return [
     {
@@ -155,6 +157,18 @@ export function PurchaseOrdersTableColumns(options: ColumnsOptions = {}): Column
                   <DropdownMenuItem onClick={() => onView(po)}>
                     <Eye className="mr-2 h-4 w-4" />
                     View
+                  </DropdownMenuItem>
+                )}
+                {onEditStatus && (
+                  <DropdownMenuItem onClick={() => onEditStatus(po)}>
+                    <FileEdit className="mr-2 h-4 w-4" />
+                    Edit Status
+                  </DropdownMenuItem>
+                )}
+                {onSendToSupplier && ['draft'].includes(po.status) && (
+                  <DropdownMenuItem onClick={() => onSendToSupplier(po)} className="text-blue-600">
+                    <Send className="mr-2 h-4 w-4" />
+                    Send to Supplier
                   </DropdownMenuItem>
                 )}
                 {onEdit && ['draft', 'sent'].includes(po.status) && (

@@ -39,8 +39,9 @@ import {
   CreatePurchaseOrderDrawer,
   EditPurchaseOrderDrawer,
 } from '@/features/purchase-orders/components';
+import { UpdateSupplierStatusDialog } from '@/features/purchase-orders/components/UpdateSupplierStatusDialog';
 import { usePurchaseOrders } from '@/features/purchase-orders/hooks';
-import { deletePurchaseOrder } from '@/features/purchase-orders/actions';
+import { deletePurchaseOrder, sendPurchaseOrder } from '@/features/purchase-orders/actions';
 import type { POListItem, POStatus, PurchaseOrderWithItems } from '@/features/purchase-orders/types';
 import { PO_STATUS_LABELS } from '@/features/purchase-orders/types';
 
@@ -53,7 +54,9 @@ export default function PurchaseOrdersPage() {
   const [isViewDrawerOpen, setIsViewDrawerOpen] = useState(false);
   const [isCreateDrawerOpen, setIsCreateDrawerOpen] = useState(false);
   const [isEditDrawerOpen, setIsEditDrawerOpen] = useState(false);
+  const [isEditStatusDialogOpen, setIsEditStatusDialogOpen] = useState(false);
   const [selectedPOId, setSelectedPOId] = useState<string | null>(null);
+  const [selectedPOForStatus, setSelectedPOForStatus] = useState<POListItem | null>(null);
 
   // Delete confirmation
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -129,6 +132,15 @@ export default function PurchaseOrdersPage() {
     await refetchPOs();
   }, [refetchPOs]);
 
+  const handleEditStatus = useCallback((po: POListItem) => {
+    setSelectedPOForStatus(po);
+    setIsEditStatusDialogOpen(true);
+  }, []);
+
+  const handleEditStatusSuccess = useCallback(async () => {
+    await refetchPOs();
+  }, [refetchPOs]);
+
   const handleDeleteClick = useCallback((po: POListItem) => {
     setPOToDelete(po);
     setDeleteDialogOpen(true);
@@ -161,6 +173,21 @@ export default function PurchaseOrdersPage() {
     setDeleteDialogOpen(false);
     setPOToDelete(null);
   };
+
+  const handleSendToSupplier = useCallback(async (po: POListItem) => {
+    try {
+      const result = await sendPurchaseOrder(po.id);
+      if (result.success) {
+        toast.success(`Purchase Order ${po.poNumber} sent to supplier`);
+        refetchPOs();
+      } else {
+        toast.error(result.error || 'Failed to send purchase order');
+      }
+    } catch (error) {
+      console.error('[handleSendToSupplier] Error:', error);
+      toast.error('Failed to send purchase order');
+    }
+  }, [refetchPOs]);
 
   const handleRowClick = useCallback((po: POListItem) => {
     handleView(po);
@@ -209,6 +236,8 @@ export default function PurchaseOrdersPage() {
         onRowClick={handleRowClick}
         onView={handleView}
         onEdit={handleEdit}
+        onEditStatus={handleEditStatus}
+        onSendToSupplier={handleSendToSupplier}
         onDelete={handleDeleteClick}
         toolbarContent={
           <Select value={statusFilter} onValueChange={handleStatusFilterChange}>
@@ -260,6 +289,18 @@ export default function PurchaseOrdersPage() {
         onClose={handleEditDrawerClose}
         onSuccess={handleEditSuccess}
       />
+
+      {/* Update Supplier Status Dialog (Shipment Load Status) */}
+      {selectedPOForStatus && (
+        <UpdateSupplierStatusDialog
+          open={isEditStatusDialogOpen}
+          onOpenChange={setIsEditStatusDialogOpen}
+          poId={selectedPOForStatus.id}
+          poNumber={selectedPOForStatus.poNumber}
+          currentStatus={selectedPOForStatus.latestShipmentStatus || 'No shipment'}
+          onSuccess={handleEditStatusSuccess}
+        />
+      )}
 
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>

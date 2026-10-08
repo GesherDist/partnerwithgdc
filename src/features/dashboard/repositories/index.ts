@@ -465,103 +465,162 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
     now: now.toISOString(),
   });
 
-  // Fetch INVOICED shipments for the selected period (actual_arrival date = delivery date)
-  // Revenue should only count when shipment is invoiced, not when order is placed
-  // Use load_status (not status) to match Operations Dashboard
-  // Include purchase_orders to calculate margin (SO - PO)
-  const { data: currentMonthShipments, error: currentMonthError } = await supabase
-    .from('shipments')
-    .select(`
-      id,
-      sales_order_id,
-      purchase_order_id,
-      actual_arrival,
-      shipment_number,
-      load_status,
-      sales_orders(grand_total, subtotal, order_number),
-      purchase_orders(grand_total)
-    `)
-    .gte('actual_arrival', primaryStartDate)
-    .lte('actual_arrival', primaryEndDate)
-    .eq('load_status', 'invoiced'); // Only invoiced shipments count toward revenue
+  // ===================================================================
+  // REVENUE CALCULATION (Ankur's Definition 3.1)
+  // ===================================================================
+  // Revenue = Gross Recognized Sales - Discounts - Returns and Credits
+  //
+  // Sources:
+  // - Gross Sales: invoices.subtotal WHERE status IN ('sent', 'partial', 'paid')
+  // - Discounts: invoices.discount_total
+  // - Returns: credit_notes.grand_total WHERE status = 'approved'
+  // ===================================================================
 
-  // DEBUG: Log query results with margin calculation (SO - PO)
-  console.log('📊 Current Period Invoiced Shipments Query:', {
-    count: currentMonthShipments?.length || 0,
-    totalMargin: (currentMonthShipments?.reduce((sum, s) => {
-      const so = (s as any).sales_orders;
-      const po = (s as any).purchase_orders;
-      const soTotal = so?.grand_total || 0;
-      const poTotal = po?.grand_total || 0;
-      return sum + (soTotal - poTotal);
-    }, 0) || 0) / 100,
-    error: currentMonthError,
-    sampleShipments: currentMonthShipments?.slice(0, 3).map(s => ({
-      number: s.shipment_number,
-      actualArrival: s.actual_arrival,
-      loadStatus: s.load_status,
-      soNumber: (s as any).sales_orders?.order_number,
-      soTotal: ((s as any).sales_orders?.grand_total || 0) / 100,
-      poTotal: ((s as any).purchase_orders?.grand_total || 0) / 100,
-      margin: (((s as any).sales_orders?.grand_total || 0) - ((s as any).purchase_orders?.grand_total || 0)) / 100,
-    })),
+  // Fetch invoices for current period (using invoice_date)
+  const { data: currentPeriodInvoices, error: currentInvoicesError } = await supabase
+    .from('invoices')
+    .select('id, invoice_number, subtotal, discount_total, grand_total, invoice_date')
+    .in('status', ['sent', 'partial', 'paid'])
+    .gte('invoice_date', primaryStartDate)
+    .lte('invoice_date', primaryEndDate)
+    .is('deleted_at', null);
+
+  // Fetch credit notes for current period (returns/credits)
+  const { data: currentPeriodCredits } = await supabase
+    .from('credit_notes')
+    .select('id, grand_total, credit_note_date')
+    .eq('status', 'approved')
+    .gte('credit_note_date', primaryStartDate)
+    .lte('credit_note_date', primaryEndDate)
+    .is('deleted_at', null);
+
+  // Calculate current period revenue
+  const currentGrossSales = currentPeriodInvoices?.reduce((sum, inv) => sum + (inv.subtotal || 0), 0) || 0;
+  const currentDiscounts = currentPeriodInvoices?.reduce((sum, inv) => sum + (inv.discount_total || 0), 0) || 0;
+  const currentReturns = currentPeriodCredits?.reduce((sum, cn) => sum + (cn.grand_total || 0), 0) || 0;
+  const currentRevenue = currentGrossSales - currentDiscounts - currentReturns;
+
+  // DEBUG: Log current period invoice-based revenue calculation
+  console.log('📊 Current Period Revenue (Ankur Definition 3.1):', {
+    period: { start: primaryStartDate, end: primaryEndDate },
+    invoiceCount: currentPeriodInvoices?.length || 0,
+    creditNoteCount: currentPeriodCredits?.length || 0,
+    grossSales: currentGrossSales / 100,
+    discounts: currentDiscounts / 100,
+    returns: currentReturns / 100,
+    netRevenue: currentRevenue / 100,
+    formula: 'Revenue = Gross Sales - Discounts - Returns',
+    error: currentInvoicesError,
   });
 
-  // Fetch last month invoiced shipments for comparison (using actual_arrival)
+  // Fetch last month invoices for comparison
+  const { data: lastMonthInvoices } = await supabase
+    .from('invoices')
+    .select('subtotal, discount_total')
+    .in('status', ['sent', 'partial', 'paid'])
+    .gte('invoice_date', formatDateString(lastMonthStart))
+    .lte('invoice_date', formatDateString(lastMonthEnd))
+    .is('deleted_at', null);
+
+  const { data: lastMonthCredits } = await supabase
+    .from('credit_notes')
+    .select('grand_total')
+    .eq('status', 'approved')
+    .gte('credit_note_date', formatDateString(lastMonthStart))
+    .lte('credit_note_date', formatDateString(lastMonthEnd))
+    .is('deleted_at', null);
+
+  const lastGrossSales = lastMonthInvoices?.reduce((sum, inv) => sum + (inv.subtotal || 0), 0) || 0;
+  const lastDiscounts = lastMonthInvoices?.reduce((sum, inv) => sum + (inv.discount_total || 0), 0) || 0;
+  const lastReturns = lastMonthCredits?.reduce((sum, cn) => sum + (cn.grand_total || 0), 0) || 0;
+  const lastRevenue = lastGrossSales - lastDiscounts - lastReturns;
+
+  // Fetch YTD invoices (Jan 1 to today)
+  const { data: ytdInvoices, error: ytdInvoicesError } = await supabase
+    .from('invoices')
+    .select('subtotal, discount_total')
+    .in('status', ['sent', 'partial', 'paid'])
+    .gte('invoice_date', formatDateString(currentYearStart))
+    .is('deleted_at', null);
+
+  const { data: ytdCredits } = await supabase
+    .from('credit_notes')
+    .select('grand_total')
+    .eq('status', 'approved')
+    .gte('credit_note_date', formatDateString(currentYearStart))
+    .is('deleted_at', null);
+
+  const ytdGrossSales = ytdInvoices?.reduce((sum, inv) => sum + (inv.subtotal || 0), 0) || 0;
+  const ytdDiscounts = ytdInvoices?.reduce((sum, inv) => sum + (inv.discount_total || 0), 0) || 0;
+  const ytdReturnsAmount = ytdCredits?.reduce((sum, cn) => sum + (cn.grand_total || 0), 0) || 0;
+  const ytdNetRevenue = ytdGrossSales - ytdDiscounts - ytdReturnsAmount;
+
+  // DEBUG: Log YTD revenue calculation
+  console.log('📊 YTD Revenue (Ankur Definition 3.1):', {
+    yearStart: formatDateString(currentYearStart),
+    invoiceCount: ytdInvoices?.length || 0,
+    creditNoteCount: ytdCredits?.length || 0,
+    grossSales: ytdGrossSales / 100,
+    discounts: ytdDiscounts / 100,
+    returns: ytdReturnsAmount / 100,
+    netRevenue: ytdNetRevenue / 100,
+    error: ytdInvoicesError,
+  });
+
+  // Fetch last year same period invoices for YTD comparison
+  const { data: lastYearYtdInvoices } = await supabase
+    .from('invoices')
+    .select('subtotal, discount_total')
+    .in('status', ['sent', 'partial', 'paid'])
+    .gte('invoice_date', formatDateString(lastYearStart))
+    .lte('invoice_date', formatDateString(lastYearSameDay))
+    .is('deleted_at', null);
+
+  const { data: lastYearYtdCredits } = await supabase
+    .from('credit_notes')
+    .select('grand_total')
+    .eq('status', 'approved')
+    .gte('credit_note_date', formatDateString(lastYearStart))
+    .lte('credit_note_date', formatDateString(lastYearSameDay))
+    .is('deleted_at', null);
+
+  const lastYearYtdGrossSales = lastYearYtdInvoices?.reduce((sum, inv) => sum + (inv.subtotal || 0), 0) || 0;
+  const lastYearYtdDiscounts = lastYearYtdInvoices?.reduce((sum, inv) => sum + (inv.discount_total || 0), 0) || 0;
+  const lastYearYtdReturns = lastYearYtdCredits?.reduce((sum, cn) => sum + (cn.grand_total || 0), 0) || 0;
+  const lastYearYtdRevenue = lastYearYtdGrossSales - lastYearYtdDiscounts - lastYearYtdReturns;
+
+  // Calculate YTD revenue change
+  const ytdNetRevenueChange = lastYearYtdRevenue > 0
+    ? ((ytdNetRevenue - lastYearYtdRevenue) / lastYearYtdRevenue) * 100
+    : 0;
+
+  // ===================================================================
+  // UNITS CALCULATION (Still from shipments for delivery tracking)
+  // ===================================================================
+  // Fetch INVOICED shipments for units calculation
+  const { data: currentMonthShipments } = await supabase
+    .from('shipments')
+    .select('id, sales_order_id')
+    .gte('actual_arrival', primaryStartDate)
+    .lte('actual_arrival', primaryEndDate)
+    .eq('load_status', 'invoiced');
+
   const { data: lastMonthShipments } = await supabase
     .from('shipments')
-    .select(`
-      id,
-      sales_order_id,
-      sales_orders(grand_total, subtotal),
-      purchase_orders(grand_total)
-    `)
+    .select('id, sales_order_id')
     .gte('actual_arrival', formatDateString(lastMonthStart))
     .lte('actual_arrival', formatDateString(lastMonthEnd))
     .eq('load_status', 'invoiced');
 
-  // Fetch YTD invoiced shipments (Jan 1 to today, using actual_arrival)
-  const { data: ytdShipments, error: ytdError } = await supabase
+  const { data: ytdShipments } = await supabase
     .from('shipments')
-    .select(`
-      id,
-      sales_order_id,
-      purchase_order_id,
-      actual_arrival,
-      shipment_number,
-      sales_orders(grand_total, subtotal, order_number),
-      purchase_orders(grand_total)
-    `)
+    .select('id, sales_order_id')
     .gte('actual_arrival', formatDateString(currentYearStart))
     .eq('load_status', 'invoiced');
 
-  // DEBUG: Log YTD query results with margin calculation
-  console.log('📊 YTD Invoiced Shipments Query:', {
-    yearStart: formatDateString(currentYearStart),
-    count: ytdShipments?.length || 0,
-    totalMargin: (ytdShipments?.reduce((sum, s) => {
-      const so = (s as any).sales_orders;
-      const po = (s as any).purchase_orders;
-      const soTotal = so?.grand_total || 0;
-      const poTotal = po?.grand_total || 0;
-      return sum + (soTotal - poTotal);
-    }, 0) || 0) / 100,
-    totalSales: (ytdShipments?.reduce((sum, s) => {
-      const so = (s as any).sales_orders;
-      return sum + (so?.grand_total || 0);
-    }, 0) || 0) / 100,
-    error: ytdError,
-  });
-
-  // Fetch last year same period invoiced shipments for YTD comparison (using actual_arrival)
   const { data: lastYearYtdShipments } = await supabase
     .from('shipments')
-    .select(`
-      id,
-      sales_order_id,
-      sales_orders(grand_total, subtotal),
-      purchase_orders(grand_total)
-    `)
+    .select('id, sales_order_id')
     .gte('actual_arrival', formatDateString(lastYearStart))
     .lte('actual_arrival', formatDateString(lastYearSameDay))
     .eq('load_status', 'invoiced');
@@ -833,76 +892,23 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
     return sum + (so?.grand_total || 0);
   }, 0) || 0;
 
-  // Calculate metrics from delivered shipments (margin-based: SO - PO)
-  const currentRevenue = currentMonthShipments?.reduce((sum, s) => {
-    const so = (s as any).sales_orders;
-    const po = (s as any).purchase_orders;
-    const soTotal = so?.grand_total || 0;
-    const poTotal = po?.grand_total || 0;
-    const margin = soTotal - poTotal;  // Gross Margin = Revenue
-    return sum + margin;
-  }, 0) || 0;
-
-  const lastRevenue = lastMonthShipments?.reduce((sum, s) => {
-    const so = (s as any).sales_orders;
-    const po = (s as any).purchase_orders;
-    const soTotal = so?.grand_total || 0;
-    const poTotal = po?.grand_total || 0;
-    const margin = soTotal - poTotal;  // Gross Margin = Revenue
-    return sum + margin;
-  }, 0) || 0;
-
-  // Calculate YTD metrics from delivered shipments (margin-based: SO - PO)
-  const ytdRevenue = ytdShipments?.reduce((sum, s) => {
-    const so = (s as any).sales_orders;
-    const po = (s as any).purchase_orders;
-    const soTotal = so?.grand_total || 0;
-    const poTotal = po?.grand_total || 0;
-    const margin = soTotal - poTotal;  // Gross Margin = Revenue
-    return sum + margin;
-  }, 0) || 0;
-
-  const lastYearYtdRevenue = lastYearYtdShipments?.reduce((sum, s) => {
-    const so = (s as any).sales_orders;
-    const po = (s as any).purchase_orders;
-    const soTotal = so?.grand_total || 0;
-    const poTotal = po?.grand_total || 0;
-    const margin = soTotal - poTotal;  // Gross Margin = Revenue
-    return sum + margin;
-  }, 0) || 0;
-
-  // Revenue is now margin-based (SO - PO), no STATIC COGS subtraction needed
-  // ytdRevenue already contains margin (gross profit) from each shipment
-  const ytdNetRevenue = ytdRevenue;  // Direct margin from delivered shipments
-  const lastYearYtdNetRevenue = lastYearYtdRevenue;  // Direct margin from last year
-
-  const ytdNetRevenueChange = lastYearYtdNetRevenue > 0 ? ((ytdNetRevenue - lastYearYtdNetRevenue) / lastYearYtdNetRevenue) * 100 : 0;
+  // Units change calculation
   const ytdUnitsChange = lastYearYtdUnits > 0 ? ((ytdUnits - lastYearYtdUnits) / lastYearYtdUnits) * 100 : 0;
 
-  // For Blended Margin calculation, we need total sales (not margin)
-  // Calculate total sales from delivered shipments
-  const ytdTotalSales = ytdShipments?.reduce((sum, s) => {
-    const so = (s as any).sales_orders;
-    return sum + (so?.grand_total || 0);
-  }, 0) || 0;
+  // For Blended Margin calculation, use Gross Profit / Revenue
+  // Gross Profit = Revenue - COGS (from ytdTotalRevenue and ytdTotalCost calculated earlier)
+  const ytdGrossProfit = ytdTotalRevenue - ytdTotalCost;
+  const lastYearYtdGrossProfit = lastYearYtdTotalRevenue - lastYearYtdTotalCost;
 
-  const lastYearYtdTotalSales = lastYearYtdShipments?.reduce((sum, s) => {
-    const so = (s as any).sales_orders;
-    return sum + (so?.grand_total || 0);
-  }, 0) || 0;
-
-  // Calculate YTD Blended Margin using margin-based approach
-  // Margin % = (Total Margin / Total Sales) × 100
-  // Where: Total Margin = Sum(SO - PO), Total Sales = Sum(SO)
-  const ytdBlendedMargin = ytdTotalSales > 0
-    ? (ytdRevenue / ytdTotalSales) * 100
+  const ytdBlendedMargin = ytdTotalRevenue > 0
+    ? (ytdGrossProfit / ytdTotalRevenue) * 100
     : 0;
-  const lastYearYtdBlendedMargin = lastYearYtdTotalSales > 0
-    ? (lastYearYtdRevenue / lastYearYtdTotalSales) * 100
+  const lastYearYtdBlendedMargin = lastYearYtdTotalRevenue > 0
+    ? (lastYearYtdGrossProfit / lastYearYtdTotalRevenue) * 100
     : 0;
   const marginChange = ytdBlendedMargin - lastYearYtdBlendedMargin; // Absolute difference in margin %
 
-  // Calculate changes
+  // Calculate revenue change (using invoice-based revenue calculated above)
   const revenueChange = lastRevenue > 0 ? ((currentRevenue - lastRevenue) / lastRevenue) * 100 : 0;
   const unitsChange = lastMonthUnits > 0 ? ((currentMonthUnits - lastMonthUnits) / lastMonthUnits) * 100 : 0;
   const openOrdersChange = (openOrdersCount || 0) - (lastMonthOpenCount || 0);

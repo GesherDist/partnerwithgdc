@@ -502,8 +502,9 @@ export async function getCustomerCommitments(filters?: OperationsFilters): Promi
     gdcData.items.forEach(item => {
       const status = item.status.toUpperCase();
 
-      // CRITICAL: EXCLUDE AVAILABLE status (not committed to customer)
-      if (status === 'AVAILABLE') return;
+      // CRITICAL: EXCLUDE AVAILABLE, INVOICED, SOLD (not outstanding)
+      // Outstanding Qty = GDC 0+1+2 where Status ≠ AVAILABLE AND ≠ INVOICED AND ≠ SOLD
+      if (status === 'AVAILABLE' || status === 'INVOICED' || status === 'SOLD') return;
 
       // Customer info
       const customerName = item.customer || 'Unknown';
@@ -1869,6 +1870,11 @@ export async function getGDCInventoryByOrderSeries(
       displayStatus = shipment.load_status.toUpperCase();
     }
 
+    // Calculate qtyDelivered first, then compute outstandingQty
+    const qtyDelivered = shipment?.qty_delivered ?? linkedSO?.qty_delivered ?? po.qty_delivered ?? 0;
+    // Outstanding Qty = MAX(Total Qty - Qty Delivered, 0)
+    const outstandingQty = Math.max(totalQty - qtyDelivered, 0);
+
     const itemData = {
       id: po.id, // Always use PO ID (not SO ID)
       no: index + 1,
@@ -1890,8 +1896,8 @@ export async function getGDCInventoryByOrderSeries(
       etaToUsPort: shipment?.eta_to_port || linkedSO?.eta_to_us_port || null,
       confirmedEta: shipment?.confirmed_eta || linkedSO?.confirmed_eta || po.confirmed_eta || null,
       actualDeliveryDate: shipment?.actual_arrival || linkedSO?.actual_delivery_date || po.actual_delivery_date || null,
-      qtyDelivered: shipment?.qty_delivered ?? linkedSO?.qty_delivered ?? po.qty_delivered ?? 0,
-      outstandingQty: shipment?.outstanding_qty ?? linkedSO?.outstanding_qty ?? po.outstanding_qty ?? totalQty,
+      qtyDelivered,
+      outstandingQty,
       invoiceAmount: linkedSO?.grand_total
         ? linkedSO.grand_total / 100  // Customer invoice (for allocated POs)
         : po.grand_total / 100 || 0,  // PO amount (for warehouse/unallocated POs)
@@ -2020,6 +2026,11 @@ export async function getGDCInventoryByOrderSeries(
       displayStatus = shipment.load_status.toUpperCase();
     }
 
+    // Calculate qtyDelivered first, then compute outstandingQty
+    const qtyDeliveredSO = shipment?.qty_delivered ?? so.qty_delivered ?? 0;
+    // Outstanding Qty = MAX(Total Qty - Qty Delivered, 0)
+    const outstandingQtySO = Math.max(totalQty - qtyDeliveredSO, 0);
+
     result.push({
       id: so.id,
       no: soStartIndex + index + 1,
@@ -2040,8 +2051,8 @@ export async function getGDCInventoryByOrderSeries(
       etaToUsPort: shipment?.eta_to_port || so.eta_to_us_port || null,
       confirmedEta: shipment?.confirmed_eta || so.confirmed_eta || null,
       actualDeliveryDate: shipment?.actual_arrival || so.actual_delivery_date || null,
-      qtyDelivered: shipment?.qty_delivered ?? so.qty_delivered ?? 0,
-      outstandingQty: shipment?.outstanding_qty ?? so.outstanding_qty ?? totalQty,
+      qtyDelivered: qtyDeliveredSO,
+      outstandingQty: outstandingQtySO,
       invoiceAmount: so.grand_total ? so.grand_total / 100 : 0,
       deliveryAddress: addressParts.join(', '),
       expectedDelivery: shipment?.customer_expected_delivery || so.requested_delivery_date || null,

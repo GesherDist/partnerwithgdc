@@ -1,9 +1,9 @@
 'use client';
 
 /**
- * Production Status Form
+ * Load Status Form
  *
- * Dialog for supplier to update production status of a PO.
+ * Dialog for supplier to update load status of a PO.
  */
 
 import { useState, useTransition } from 'react';
@@ -123,17 +123,17 @@ export function ProductionStatusForm({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Factory className="h-5 w-5 text-blue-600" />
-            Update Production Status
+            Update Load Status
           </DialogTitle>
           <DialogDescription>
-            Update the production status for {purchaseOrder.poNumber}
+            Update the load status for {purchaseOrder.poNumber}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-6 py-4">
           {/* Status Selection */}
           <div className="space-y-3">
-            <Label>Production Status</Label>
+            <Label>Load Status</Label>
             <RadioGroup
               value={productionStatus}
               onValueChange={(value) => setProductionStatus(value as ProductionStatus)}

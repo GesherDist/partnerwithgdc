@@ -26,14 +26,14 @@ import { getIcon } from '../lib/icons';
 
 const CALCULATION_FORMULAS: Record<string, { title: string; formula: string; notes?: string }> = {
   'revenue-mtd': {
-    title: 'Revenue (MTD) Calculation',
-    formula: 'Sum of margins (Customer Invoice - Supplier Cost) from INVOICED shipments for current month\n\nCalculation: Sum(SO.grand_total - PO.grand_total)\nFiltered by: actual_arrival (Delivery Date)\nStatus: load_status = "invoiced"',
-    notes: 'Compared to last month\'s revenue. Revenue = Gross Margin (profit), not total sales. Amounts stored in cents, displayed in dollars.',
+    title: 'Revenue (MTD) Calculation - Definition 3.1',
+    formula: 'Revenue = Gross Recognized Sales - Discounts - Returns and Credits\n\nDatabase Sources:\n• Gross Sales: invoices.subtotal WHERE status IN (sent, partial, paid)\n• Discounts: invoices.discount_total\n• Returns: credit_notes.grand_total WHERE status = approved\n\nFiltered by: invoice_date (Invoice Date)',
+    notes: 'As per Ankur\'s Definition 3.1. Net recognized top-line revenue for the period. Amounts stored in cents.',
   },
   'revenue-ytd': {
-    title: 'Revenue (YTD) Calculation',
-    formula: 'Sum of margins (Customer Invoice - Supplier Cost) from INVOICED shipments from Jan 1 to today\n\nCalculation: Sum(SO.grand_total - PO.grand_total)\nFiltered by: actual_arrival (Delivery Date)\nStatus: load_status = "invoiced"',
-    notes: 'Compared to same period last year (YTD). Revenue = Gross Margin (profit), not total sales.',
+    title: 'Revenue (YTD) Calculation - Definition 3.1',
+    formula: 'Revenue = Gross Recognized Sales - Discounts - Returns and Credits\n\nDatabase Sources:\n• Gross Sales: invoices.subtotal WHERE status IN (sent, partial, paid)\n• Discounts: invoices.discount_total\n• Returns: credit_notes.grand_total WHERE status = approved\n\nFiltered by: invoice_date (Jan 1 to today)',
+    notes: 'As per Ankur\'s Definition 3.1. Compared to same period last year (YTD).',
   },
   'units-sold': {
     title: 'Units Sold (MTD) Calculation',
@@ -46,9 +46,9 @@ const CALCULATION_FORMULAS: Record<string, { title: string; formula: string; not
     notes: 'Compared to same period last year (YTD). Only counts units from delivered/invoiced shipments.',
   },
   'blended-margin': {
-    title: 'Blended Margin (YTD) Calculation',
-    formula: 'Margin % = (Total Margin / Total Sales) × 100\n\nWhere:\n• Total Margin = Sum(SO.grand_total - PO.grand_total) for all invoiced shipments\n• Total Sales = Sum(SO.grand_total) for all invoiced shipments\n• Filtered by: actual_arrival (Jan 1 to today)\n• Status: load_status = "invoiced"',
-    notes: 'Margin based on actual delivered orders with real COGS (Purchase Orders). Compared to last year YTD margin.',
+    title: 'Blended Margin (YTD) Calculation - Definition 3.2',
+    formula: 'Gross Profit % = (Gross Profit / Revenue) × 100\n\nWhere:\n• Revenue = from sales_order_items.unit_price × quantity\n• COGS = from products.base_cost × quantity\n• Gross Profit = Revenue - COGS\n\nExcludes: Commission items (service items with "commission" in SKU/description)\nFiltered by: INVOICED shipments (Jan 1 to today)',
+    notes: 'As per Ankur\'s Definition 3.2. GP% based on actual delivered orders. Compared to last year YTD margin.',
   },
   'open-orders': {
     title: 'Open Orders Calculation',

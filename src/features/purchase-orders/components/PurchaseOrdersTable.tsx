@@ -33,11 +33,13 @@ export function PurchaseOrdersTable({
   onRowClick,
   onView,
   onEdit,
+  onEditStatus,
+  onSendToSupplier,
   onDelete,
   toolbarContent,
   pagination,
 }: PurchaseOrdersTableProps) {
-  const columns = PurchaseOrdersTableColumns({ onView, onEdit, onDelete });
+  const columns = PurchaseOrdersTableColumns({ onView, onEdit, onEditStatus, onSendToSupplier, onDelete });
 
   const table = useReactTable({
     data,

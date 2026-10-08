@@ -311,6 +311,196 @@ export async function updatePOOrderSeries(
   return result;
 }
 
+/**
+ * Update PO load status (Operations Dashboard tracking)
+ * This updates only the load_status field, not the system PO status
+ * @deprecated Use updatePOSupplierStatus instead
+ */
+export async function updatePOLoadStatus(
+  id: string,
+  loadStatus: string
+): Promise<ActionResult> {
+  const auth = await authorize('purchase_orders.edit');
+  if (!auth.ok) {
+    return auth.result;
+  }
+
+  try {
+    const supabase = await createClient();
+
+    const { error } = await supabase
+      .from('purchase_orders')
+      .update({
+        load_status: loadStatus,
+        updated_at: new Date().toISOString(),
+        updated_by: auth.user.id,
+      })
+      .eq('id', id);
+
+    if (error) {
+      console.error('[updatePOLoadStatus] Error:', error);
+      return {
+        success: false,
+        error: 'Failed to update load status',
+      };
+    }
+
+    revalidatePath('/purchase-orders');
+    revalidatePath(`/purchase-orders/${id}`);
+    revalidatePath('/dashboard/operations');
+
+    return { success: true };
+  } catch (err) {
+    console.error('[updatePOLoadStatus] Error:', err);
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'An unexpected error occurred',
+    };
+  }
+}
+
+/**
+ * Update PO Supplier/Production Status
+ * This updates the system PO status (draft → confirmed → in_production, etc.)
+ * When status changes to "confirmed" or "in_production", shipment is auto-created
+ */
+export async function updatePOSupplierStatus(
+  id: string,
+  newStatus: string
+): Promise<ActionResult<{ shipmentCreated?: boolean; shipmentNumber?: string }>> {
+  const auth = await authorize('purchase_orders.edit');
+  if (!auth.ok) {
+    return auth.result;
+  }
+
+  try {
+    const result = await purchaseOrderService.updateSupplierStatus(id, newStatus, auth.user.id);
+
+    if (result.success) {
+      revalidatePath('/purchase-orders');
+      revalidatePath(`/purchase-orders/${id}`);
+      revalidatePath('/dashboard/operations');
+      revalidatePath('/shipments');
+    }
+
+    return result;
+  } catch (err) {
+    console.error('[updatePOSupplierStatus] Error:', err);
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'An unexpected error occurred',
+    };
+  }
+}
+
+// ============================================
+// UPDATE SHIPMENT LOAD STATUS
+// ============================================
+
+/**
+ * Update Shipment Load Status
+ * This updates the shipment's load_status field (AVAILABLE, OPEN, SOLD, IN_TRANSIT, etc.)
+ * If no shipment exists, it creates one first
+ */
+export async function updateShipmentLoadStatus(
+  poId: string,
+  loadStatus: string,
+  shipmentId?: string
+): Promise<ActionResult> {
+  const auth = await authorize('purchase_orders.edit');
+  if (!auth.ok) {
+    return auth.result;
+  }
+
+  try {
+    const supabase = await createClient();
+
+    // If we have a shipment ID, update it directly
+    if (shipmentId) {
+      const { error } = await supabase
+        .from('shipments')
+        .update({
+          load_status: loadStatus,
+          updated_at: new Date().toISOString(),
+          updated_by: auth.user.id,
+        })
+        .eq('id', shipmentId);
+
+      if (error) {
+        console.error('[updateShipmentLoadStatus] Error updating shipment:', error);
+        return { success: false, error: 'Failed to update shipment status' };
+      }
+    } else {
+      // Find existing shipment for this PO
+      const { data: existingShipment, error: findError } = await supabase
+        .from('shipments')
+        .select('id')
+        .eq('purchase_order_id', poId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (findError) {
+        console.error('[updateShipmentLoadStatus] Error finding shipment:', findError);
+        return { success: false, error: 'Failed to find shipment' };
+      }
+
+      if (existingShipment) {
+        // Update existing shipment
+        const { error: updateError } = await supabase
+          .from('shipments')
+          .update({
+            load_status: loadStatus,
+            updated_at: new Date().toISOString(),
+            updated_by: auth.user.id,
+          })
+          .eq('id', existingShipment.id);
+
+        if (updateError) {
+          console.error('[updateShipmentLoadStatus] Error updating shipment:', updateError);
+          return { success: false, error: 'Failed to update shipment status' };
+        }
+      } else {
+        // No shipment exists - create one via the service
+        await purchaseOrderService.createSupplierShipment(poId, auth.user.id);
+
+        // Now update the newly created shipment with the load_status
+        const { data: newShipment } = await supabase
+          .from('shipments')
+          .select('id')
+          .eq('purchase_order_id', poId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single();
+
+        if (newShipment) {
+          await supabase
+            .from('shipments')
+            .update({
+              load_status: loadStatus,
+              updated_at: new Date().toISOString(),
+              updated_by: auth.user.id,
+            })
+            .eq('id', newShipment.id);
+        }
+      }
+    }
+
+    revalidatePath('/purchase-orders');
+    revalidatePath(`/purchase-orders/${poId}`);
+    revalidatePath('/dashboard/operations');
+    revalidatePath('/operations');
+
+    return { success: true };
+  } catch (err) {
+    console.error('[updateShipmentLoadStatus] Error:', err);
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'An unexpected error occurred',
+    };
+  }
+}
+
 // ============================================
 // GET NEXT PO NUMBER
 // ============================================

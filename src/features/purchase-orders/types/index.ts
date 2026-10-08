@@ -420,6 +420,8 @@ export interface PurchaseOrdersTableProps {
   onRowClick?: (po: POListItem) => void;
   onView?: (po: POListItem) => void;
   onEdit?: (po: POListItem) => void;
+  onEditStatus?: (po: POListItem) => void;
+  onSendToSupplier?: (po: POListItem) => void;
   onDelete?: (po: POListItem) => void;
   toolbarContent?: React.ReactNode;
   // Server-side pagination

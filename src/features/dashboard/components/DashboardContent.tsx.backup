@@ -14,7 +14,6 @@ import { DashboardStatsGrid } from './DashboardStatsCard';
 import { DashboardChartsGrid } from './DashboardCharts';
 import { InventoryOverview } from './InventoryOverview';
 import { DateRangeFilter } from './DateRangeFilter';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/components/ui/tabs';
 import {
   getUnitsBySKUData,
   getChannelPerformanceData,
@@ -24,22 +23,6 @@ import {
   getRevenueTrendData,
   getCommissionStatsData,
 } from '../actions';
-
-// Financial Metrics components
-import { LiquidityTable } from './financial-metrics/LiquidityTable';
-import { WorkingCapitalPosition } from './financial-metrics/WorkingCapitalPosition';
-import { WorkingCapitalEfficiency } from './financial-metrics/WorkingCapitalEfficiency';
-import { CashOperations } from './financial-metrics/CashOperations';
-
-// Profitability components
-import { ProfitabilityTable } from './profitability/ProfitabilityTable';
-import { PerTireEconomics } from './profitability/PerTireEconomics';
-import { OpexRunRate } from './profitability/OpexRunRate';
-import { BacklogSummary } from './profitability/BacklogSummary';
-
-// Supply Chain components
-import { IncomingSupply } from './supply-chain/IncomingSupply';
-import { CurrentInventory } from './supply-chain/CurrentInventory';
 import type {
   DateRange,
   DateRangePreset,
@@ -215,69 +198,26 @@ export function DashboardContent({
         />
       </div>
 
-      {/* Tab Navigation */}
-      <Tabs defaultValue="overview" className="w-full">
-        <TabsList className="grid w-full grid-cols-4 mb-6">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="financial">Financial Metrics</TabsTrigger>
-          <TabsTrigger value="profitability">Profitability</TabsTrigger>
-          <TabsTrigger value="supply">Supply Chain</TabsTrigger>
-        </TabsList>
+      {/* KPI Stats Grid */}
+      {canViewAnalytics && (
+        <DashboardStatsGrid stats={stats} />
+      )}
 
-        {/* Tab 1: Overview - Existing Content */}
-        <TabsContent value="overview" className="space-y-6 mt-0">
-          {/* KPI Stats Grid */}
-          {canViewAnalytics && (
-            <DashboardStatsGrid stats={stats} />
-          )}
+      {/* Charts Grid */}
+      {canViewAnalytics && (
+        <DashboardChartsGrid
+          revenueData={revenueData}
+          unitsData={unitsBySKU.data}
+          unitsProducts={unitsBySKU.products}
+          channelData={channelData}
+          marginData={marginData}
+        />
+      )}
 
-          {/* Charts Grid */}
-          {canViewAnalytics && (
-            <DashboardChartsGrid
-              revenueData={revenueData}
-              unitsData={unitsBySKU.data}
-              unitsProducts={unitsBySKU.products}
-              channelData={channelData}
-              marginData={marginData}
-            />
-          )}
-
-          {/* Inventory Overview */}
-          {canViewInventory && (
-            <InventoryOverview byLocation={inventory} />
-          )}
-        </TabsContent>
-
-        {/* Tab 2: Financial Metrics */}
-        <TabsContent value="financial" className="space-y-6 mt-0">
-          <div className="grid gap-6">
-            <LiquidityTable />
-            <WorkingCapitalPosition />
-            <WorkingCapitalEfficiency />
-            <CashOperations />
-          </div>
-        </TabsContent>
-
-        {/* Tab 3: Profitability */}
-        <TabsContent value="profitability" className="space-y-6 mt-0">
-          <div className="grid gap-6">
-            <ProfitabilityTable dateRange={currentDateRange} />
-            <PerTireEconomics dateRange={currentDateRange} />
-            <div className="grid gap-6 md:grid-cols-2">
-              <OpexRunRate />
-              <BacklogSummary />
-            </div>
-          </div>
-        </TabsContent>
-
-        {/* Tab 4: Supply Chain */}
-        <TabsContent value="supply" className="space-y-6 mt-0">
-          <div className="grid gap-6">
-            <IncomingSupply />
-            <CurrentInventory />
-          </div>
-        </TabsContent>
-      </Tabs>
+      {/* Inventory Overview */}
+      {canViewInventory && (
+        <InventoryOverview byLocation={inventory} />
+      )}
     </div>
   );
 }

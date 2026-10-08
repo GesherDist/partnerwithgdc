@@ -5,6 +5,8 @@
  */
 
 import * as repo from '../repositories/supplier-portal.repository';
+import { purchaseOrderService } from '@/features/purchase-orders/services/purchase-order.service';
+import { createClient } from '@/shared/lib/supabase/server';
 import type {
   Supplier,
   SupplierPurchaseOrder,
@@ -90,11 +92,63 @@ export async function confirmPO(
     return { success: false, error: 'Purchase order has been rejected' };
   }
 
-  return repo.confirmPurchaseOrder(input.poId, userId, {
-    expectedCompletionDate: input.expectedCompletionDate,
-    supplierNotes: input.supplierNotes,
-    supplierReferenceNumber: input.supplierReferenceNumber,
-  });
+  // First, update supplier-specific fields before status transition
+  const db = await createClient();
+  const { error: updateError } = await db
+    .from('purchase_orders')
+    .update({
+      supplier_confirmed_at: new Date().toISOString(),
+      supplier_confirmed_by: userId,
+      expected_completion_date: input.expectedCompletionDate || null,
+      supplier_notes: input.supplierNotes || null,
+      // Note: supplier_reference_number is stored in shipments table, not purchase_orders
+      production_status: 'not_started',
+      updated_at: new Date().toISOString(),
+      updated_by: userId,
+    })
+    .eq('id', input.poId);
+
+  if (updateError) {
+    console.error('[confirmPO] Error updating supplier fields:', updateError);
+    return { success: false, error: 'Failed to update purchase order details' };
+  }
+
+  // Now use the purchase order service to confirm
+  // This will:
+  // 1. Transition status to 'confirmed'
+  // 2. Auto-create shipment via createSupplierShipment()
+  const result = await purchaseOrderService.confirm(input.poId, userId);
+
+  if (!result.success) {
+    return { success: false, error: result.error || 'Failed to confirm purchase order' };
+  }
+
+  // Get the created shipment ID from shipments table
+  const { data: shipment } = await db
+    .from('shipments')
+    .select('id')
+    .eq('purchase_order_id', input.poId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single();
+
+  // Update shipment with supplier reference number if provided
+  if (shipment && input.supplierReferenceNumber) {
+    await db
+      .from('shipments')
+      .update({
+        supplier_reference_number: input.supplierReferenceNumber,
+        updated_at: new Date().toISOString(),
+        updated_by: userId,
+      })
+      .eq('id', shipment.id);
+  }
+
+  return {
+    success: true,
+    shipmentId: shipment?.id,
+    error: shipment ? undefined : 'PO confirmed but shipment not found'
+  };
 }
 
 export async function rejectPO(
@@ -134,6 +188,26 @@ export async function updateProduction(
 
   if (!po.supplierConfirmedAt) {
     return { success: false, error: 'Purchase order must be confirmed before updating production' };
+  }
+
+  // SAFETY CHECK: Ensure shipment exists for this PO
+  // If not, auto-create it (in case it wasn't created during PO confirmation)
+  const db = await createClient();
+  const { data: existingShipment } = await db
+    .from('shipments')
+    .select('id')
+    .eq('purchase_order_id', input.poId)
+    .maybeSingle();
+
+  if (!existingShipment) {
+    console.log(`[updateProduction] No shipment found for PO ${input.poId}, auto-creating...`);
+    try {
+      await purchaseOrderService.createSupplierShipment(input.poId, userId);
+      console.log(`[updateProduction] ✅ Shipment auto-created for PO ${input.poId}`);
+    } catch (error) {
+      console.error('[updateProduction] Failed to auto-create shipment:', error);
+      // Continue anyway - production status update shouldn't fail if shipment creation fails
+    }
   }
 
   return repo.updateProductionStatus(input.poId, userId, {

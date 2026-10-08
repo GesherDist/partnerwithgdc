@@ -319,15 +319,40 @@ class PurchaseOrderRepositoryImpl {
 
   /**
    * Get the next PO number
+   * Format: PO-YYNNNNN (e.g., PO-2600073)
+   * - PO: prefix
+   * - Hyphen separator
+   * - YY: last 2 digits of current year (e.g., 26 for 2026)
+   * - NNNNN: 5-digit sequence number (padded with zeros)
    */
   async getNextPONumber(): Promise<string> {
-    const { data, error } = await db.rpc('generate_po_number');
+    // Get current year (last 2 digits)
+    const currentYear = new Date().getFullYear();
+    const yearSuffix = String(currentYear).slice(-2); // e.g., "26" for 2026
 
-    if (error) {
-      throw new Error(`Failed to generate PO number: ${error.message}`);
+    // Find the last PO number with the new format (PO-YYNNNNN)
+    const { data: lastPO } = await db
+      .from('purchase_orders')
+      .select('po_number')
+      .ilike('po_number', `PO-${yearSuffix}%`)
+      .order('po_number', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    let nextSequence = 1; // Default to 1 if no POs exist for this year
+
+    if (lastPO?.po_number) {
+      // Extract sequence number from format PO-YYNNNNN
+      const match = lastPO.po_number.match(/^PO-\d{2}(\d{5})$/);
+      if (match) {
+        nextSequence = parseInt(match[1], 10) + 1;
+      }
     }
 
-    return data as string;
+    // Generate new PO number: PO-YYNNNNN (with hyphen)
+    const poNumber = `PO-${yearSuffix}${String(nextSequence).padStart(5, '0')}`;
+
+    return poNumber;
   }
 
   /**

@@ -25,45 +25,14 @@ import {
   TableHeader,
   TableRow,
 } from '@/shared/components/ui/table';
-import { Badge } from '@/shared/components/ui/badge';
 import { Button } from '@/shared/components/ui/button';
 import { cn, formatCurrency, formatDate } from '@/shared/lib/utils';
-import type { SupplierPurchaseOrder, POStatus, ProductionStatus } from '../types';
+import type { SupplierPurchaseOrder, ProductionStatus } from '../types';
 import { SupplierPODrawer } from './SupplierPODrawer';
 
 // ============================================
 // HELPERS
 // ============================================
-
-function getStatusBadge(status: POStatus | undefined | null) {
-  const configs: Record<POStatus, { label: string; variant: 'default' | 'secondary' | 'outline' | 'destructive'; className?: string }> = {
-    draft: { label: 'Draft', variant: 'secondary' },
-    sent: { label: 'Sent', variant: 'outline', className: 'bg-blue-50 text-blue-700 border-blue-200' },
-    confirmed: { label: 'Confirmed', variant: 'outline', className: 'bg-green-50 text-green-700 border-green-200' },
-    in_production: { label: 'In Production', variant: 'outline', className: 'bg-violet-50 text-violet-700 border-violet-200' },
-    ready_to_ship: { label: 'Ready to Ship', variant: 'outline', className: 'bg-cyan-50 text-cyan-700 border-cyan-200' },
-    in_transit: { label: 'In Transit', variant: 'outline', className: 'bg-blue-50 text-blue-700 border-blue-200' },
-    partial: { label: 'Partial', variant: 'outline', className: 'bg-amber-50 text-amber-700 border-amber-200' },
-    received: { label: 'Received', variant: 'outline', className: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-    cancelled: { label: 'Cancelled', variant: 'destructive' },
-  };
-
-  // Default fallback for undefined/null/unknown status
-  const config = status ? configs[status] : null;
-  if (!config) {
-    return (
-      <Badge variant="secondary" className="bg-gray-50 text-gray-700 border-gray-200">
-        Unknown
-      </Badge>
-    );
-  }
-
-  return (
-    <Badge variant={config.variant} className={config.className}>
-      {config.label}
-    </Badge>
-  );
-}
 
 function getProductionStatusBadge(status: ProductionStatus | undefined | null) {
   const configs: Record<ProductionStatus, { label: string; icon: React.ElementType; className: string }> = {
@@ -162,9 +131,8 @@ export function SupplierPOTable({
             <TableRow>
               <TableHead>PO Number</TableHead>
               <TableHead>Date</TableHead>
-              <TableHead>Status</TableHead>
               <TableHead>Confirmation</TableHead>
-              <TableHead>Production</TableHead>
+              <TableHead>Load Status</TableHead>
               <TableHead className="text-right">Total</TableHead>
               <TableHead className="w-[80px]"></TableHead>
             </TableRow>
@@ -178,7 +146,6 @@ export function SupplierPOTable({
               >
                 <TableCell className="font-medium">{po.poNumber}</TableCell>
                 <TableCell>{formatDate(po.poDate)}</TableCell>
-                <TableCell>{getStatusBadge(po.status)}</TableCell>
                 <TableCell>{getConfirmationStatus(po)}</TableCell>
                 <TableCell>{getProductionStatusBadge(po.productionStatus)}</TableCell>
                 <TableCell className="text-right font-medium">

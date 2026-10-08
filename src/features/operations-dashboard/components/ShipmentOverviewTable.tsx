@@ -108,35 +108,113 @@ export function ShipmentOverviewTable({
 
   // Calculate KPI stats
   const stats = useMemo(() => {
-    const inTransitNext7Days = filteredItems.filter(item => item.isThisWeek || item.status === 'IN_TRANSIT').length;
-    const openLoads = filteredItems.filter(item => item.status === 'OPEN').length;
-    const outstandingQty = filteredItems.reduce((sum, item) => sum + item.qty, 0);
+    // "In transit / next 7 days" calculation:
+    // 1. Include every load whose Status is exactly "IN TRANSIT"
+    // 2. Also include loads NOT in (IN_TRANSIT, INVOICED, SOLD, AVAILABLE)
+    //    AND Outstanding Qty > 0 AND Customer ETA/Due <= Today + 7 days
+    // 3. Apply across GDC 0, GDC 1, GDC 2 (unique loads only)
 
-    // Invoice Amount = SUM(GDC 0 Invoice Amount) + SUM(GDC 1 Invoice Amount) + SUM(GDC 2 Invoice Amount)
-    // FILTER by specific statuses: AVAILABLE, OPEN, IN TRANSIT, INVOICED, SOLD
-    const allowedStatuses = [
-      'AVAILABLE',
-      'OPEN',
-      'IN TRANSIT',
-      'IN_TRANSIT',
-      'INVOICED',
-      'SOLD'
-    ];
+    const excludedStatuses = ['IN_TRANSIT', 'IN TRANSIT', 'INVOICED', 'SOLD', 'AVAILABLE'];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const next7Days = new Date(today);
+    next7Days.setDate(next7Days.getDate() + 7);
 
-    const invoiceAmount = gdcInventories.reduce((total, gdcData) => {
-      return total + gdcData.items.reduce((sum, item) => {
-        const status = String(item.status || '')
-          .trim()
-          .toUpperCase();
+    const inTransitNext7DaysSet = new Set<string>();
 
-        if (
-          allowedStatuses.includes(status) &&
-          Number(item.invoiceAmount) > 0
-        ) {
-          return sum + Number(item.invoiceAmount);
+    // Check all GDC inventories (GDC 0, 1, 2)
+    gdcInventories.forEach(gdcData => {
+      // Only include GDC 0, GDC 1, GDC 2
+      if (!['GDC 0', 'GDC 1', 'GDC 2'].includes(gdcData.orderSeries)) return;
+
+      gdcData.items.forEach(item => {
+        if (!item.shipmentNumber) return;
+
+        const status = String(item.status || '').trim().toUpperCase();
+
+        // Condition 1: Status is exactly IN_TRANSIT
+        if (status === 'IN_TRANSIT' || status === 'IN TRANSIT') {
+          inTransitNext7DaysSet.add(item.shipmentNumber);
+          return;
         }
 
-        return sum;
+        // Condition 2: NOT in excluded statuses AND Outstanding Qty > 0 AND ETA within 7 days
+        if (!excludedStatuses.includes(status)) {
+          const outstandingQty = Number(item.outstandingQty) || 0;
+          const etaDate = item.expectedDelivery ? new Date(item.expectedDelivery) : null;
+
+          if (outstandingQty > 0 && etaDate && etaDate >= today && etaDate <= next7Days) {
+            inTransitNext7DaysSet.add(item.shipmentNumber);
+          }
+        }
+      });
+    });
+
+    const inTransitNext7Days = inTransitNext7DaysSet.size;
+
+    // Open loads = unique SO numbers with OPEN status (from dropship + GDC inventory)
+    // Use Set to avoid double-counting same SO appearing in both places
+    const openSoNumbers = new Set<string>();
+
+    // Add dropship OPEN items
+    filteredItems.forEach(item => {
+      if (item.status === 'OPEN' && item.loadNumber) {
+        openSoNumbers.add(item.loadNumber);
+      }
+    });
+
+    // Add GDC inventory OPEN items
+    // NOTE: In GDC inventory, SO number is stored in 'shipmentNumber' field, not 'soNumber'
+    gdcInventories.forEach(gdcData => {
+      gdcData.items.forEach(item => {
+        const status = String(item.status || '').trim().toUpperCase();
+        if (status === 'OPEN' && item.shipmentNumber) {
+          openSoNumbers.add(item.shipmentNumber);
+        }
+      });
+    });
+
+    const openLoads = openSoNumbers.size;
+
+    // Outstanding Qty = SUM of MAX(Total Qty - Qty Delivered, 0) from GDC 0+1+2
+    // EXCLUDE: AVAILABLE, INVOICED, SOLD statuses
+    const excludedStatusesForOutstanding = ['AVAILABLE', 'INVOICED', 'SOLD'];
+    const outstandingQty = gdcInventories.reduce((total, gdcData) => {
+      // Only include GDC 0, GDC 1, GDC 2
+      if (!['GDC 0', 'GDC 1', 'GDC 2'].includes(gdcData.orderSeries)) return total;
+
+      return total + gdcData.items.reduce((sum, item) => {
+        const status = String(item.status || '').trim().toUpperCase();
+
+        // Skip AVAILABLE, INVOICED, SOLD
+        if (excludedStatusesForOutstanding.includes(status)) return sum;
+
+        // Outstanding Qty = MAX(Total Qty - Qty Delivered, 0)
+        const totalQty = Number(item.totalQty) || 0;
+        const qtyDelivered = Number(item.qtyDelivered) || 0;
+        const itemOutstanding = Math.max(totalQty - qtyDelivered, 0);
+
+        return sum + itemOutstanding;
+      }, 0);
+    }, 0);
+
+    // Invoice Amount = SUM(GDC 0 + GDC 1 + GDC 2 Invoice Amount)
+    // INCLUDE ONLY: AVAILABLE, OPEN, IN TRANSIT, INVOICED, SOLD
+    const allowedStatusesForInvoice = ['AVAILABLE', 'OPEN', 'IN_TRANSIT', 'IN TRANSIT', 'INVOICED', 'SOLD'];
+
+    const invoiceAmount = gdcInventories.reduce((total, gdcData) => {
+      // Only include GDC 0, GDC 1, GDC 2
+      if (!['GDC 0', 'GDC 1', 'GDC 2'].includes(gdcData.orderSeries)) return total;
+
+      return total + gdcData.items.reduce((sum, item) => {
+        const status = String(item.status || '').trim().toUpperCase();
+
+        // Only include if status is in allowed list
+        if (!allowedStatusesForInvoice.includes(status)) return sum;
+
+        // Add Invoice Amount
+        const amount = Number(item.invoiceAmount) || 0;
+        return sum + amount;
       }, 0);
     }, 0);
 
