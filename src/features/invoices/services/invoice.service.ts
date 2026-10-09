@@ -445,12 +445,14 @@ export const invoiceService = {
 
       const payment = await invoiceRepository.recordPayment(id, validation.data, userId);
 
-      // Subtract payment amount from customer's open balance
-      await creditCheckService.subtractFromBalance(
-        existing.customerId,
-        validation.data.amount,
-        userId
-      );
+      // Subtract payment amount from customer's open balance (only for customer invoices)
+      if (existing.customerId) {
+        await creditCheckService.subtractFromBalance(
+          existing.customerId,
+          validation.data.amount,
+          userId
+        );
+      }
 
       // Log audit event for payment (fire and forget)
       auditService.log({
@@ -509,12 +511,14 @@ export const invoiceService = {
       const result = await this.transitionStatus(id, 'sent', userId);
 
       if (result.success && result.data) {
-        // Add invoice amount to customer's open balance
-        await creditCheckService.addToBalance(
-          existing.customerId,
-          existing.grandTotal,
-          userId
-        );
+        // Add invoice amount to customer's open balance (only for customer invoices)
+        if (existing.customerId) {
+          await creditCheckService.addToBalance(
+            existing.customerId,
+            existing.grandTotal,
+            userId
+          );
+        }
       }
 
       return result;
@@ -554,15 +558,17 @@ export const invoiceService = {
       const result = await this.transitionStatus(id, 'cancelled', userId);
 
       if (result.success && result.data && wasAddedToBalance) {
-        // Subtract the remaining balance from customer's open balance
+        // Subtract the remaining balance from customer's open balance (only for customer invoices)
         // (grandTotal - amountPaid = what was never paid and should be removed)
-        const amountToReverse = existing.grandTotal - existing.amountPaid;
-        if (amountToReverse > 0) {
-          await creditCheckService.subtractFromBalance(
-            existing.customerId,
-            amountToReverse,
-            userId
-          );
+        if (existing.customerId) {
+          const amountToReverse = existing.grandTotal - existing.amountPaid;
+          if (amountToReverse > 0) {
+            await creditCheckService.subtractFromBalance(
+              existing.customerId,
+              amountToReverse,
+              userId
+            );
+          }
         }
       }
 

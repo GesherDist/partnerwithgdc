@@ -17,12 +17,13 @@ export async function GET(
   try {
     const { id } = await params;
 
-    // Fetch the invoice with items
+    // Fetch the invoice with items and sales order
     const { data: invoice, error } = await db
       .from('invoices')
       .select(`
         *,
         customer:customers(id, name, customer_code, email, phone),
+        sales_order:sales_orders(id, order_number, customer_po_number),
         items:invoice_items(
           *,
           product:products(sku, name, description)
@@ -49,13 +50,13 @@ export async function GET(
       return labels[source] || source;
     };
 
-    // Fetch allocations for all items
+    // Fetch allocations for all items (database uses snake_case)
     const itemsWithAllocations = await Promise.all(
       (invoice.items || []).map(async (item: any, index: number) => {
-        // Try to fetch allocations if salesOrderItemId exists
+        // Try to fetch allocations if sales_order_item_id exists
         let allocations: any[] = [];
-        if (item.salesOrderItemId) {
-          const { data: allocationData } = await getAllocationsByItemId(item.salesOrderItemId);
+        if (item.sales_order_item_id) {
+          const { data: allocationData } = await getAllocationsByItemId(item.sales_order_item_id);
           allocations = allocationData?.map(allocation => ({
             source: getFulfillmentSourceLabel(allocation.fulfillmentSource),
             locationName: allocation.location?.name ||
@@ -71,56 +72,59 @@ export async function GET(
           sku: item.product?.sku || item.sku,
           description: item.description || item.product?.description || item.product?.name || item.sku,
           quantity: item.quantity,
-          unitCode: item.unitCode || 'EA',
-          unitPrice: item.unitPrice,
-          discountPercent: item.discountPercent || 0,
-          lineTotal: item.lineTotal,
+          unitCode: item.unit_code || 'EA',
+          unitPrice: item.unit_price,
+          discountPercent: item.discount_percent || 0,
+          lineTotal: item.line_total,
           allocations,
         };
       })
     );
 
-    // Map to PDF data format
+    // Extract sales order info (handle Supabase join result)
+    const salesOrder = invoice.sales_order as { id: string; order_number: string; customer_po_number: string | null } | null;
+
+    // Map to PDF data format (database uses snake_case)
     const pdfData: InvoicePdfData = {
-      invoiceNumber: invoice.invoiceNumber,
-      invoiceDate: invoice.invoiceDate,
-      dueDate: invoice.dueDate,
-      salesOrderNumber: invoice.salesOrderNumber || null,
-      customerPoNumber: invoice.customerPoNumber || null,
+      invoiceNumber: invoice.invoice_number,
+      invoiceDate: invoice.invoice_date,
+      dueDate: invoice.due_date,
+      salesOrderNumber: salesOrder?.order_number || null,
+      customerPoNumber: salesOrder?.customer_po_number || null,
       status: invoice.status,
 
       customerName: invoice.customer?.name || 'Unknown Customer',
-      customerCode: invoice.customer?.customerCode || '-',
+      customerCode: invoice.customer?.customer_code || '-',
       customerEmail: invoice.customer?.email,
       customerPhone: invoice.customer?.phone,
 
       billingAddress: {
-        street: invoice.billingAddressStreet,
-        city: invoice.billingAddressCity,
-        state: invoice.billingAddressState,
-        postalCode: invoice.billingAddressPostalCode,
-        country: invoice.billingAddressCountry,
+        street: invoice.billing_address_street,
+        city: invoice.billing_address_city,
+        state: invoice.billing_address_state,
+        postalCode: invoice.billing_address_postal_code,
+        country: invoice.billing_address_country,
       },
       shippingAddress: {
-        street: invoice.shippingAddressStreet,
-        city: invoice.shippingAddressCity,
-        state: invoice.shippingAddressState,
-        postalCode: invoice.shippingAddressPostalCode,
-        country: invoice.shippingAddressCountry,
+        street: invoice.shipping_address_street || invoice.billing_address_street,
+        city: invoice.shipping_address_city || invoice.billing_address_city,
+        state: invoice.shipping_address_state || invoice.billing_address_state,
+        postalCode: invoice.shipping_address_postal_code || invoice.billing_address_postal_code,
+        country: invoice.shipping_address_country || invoice.billing_address_country,
       },
 
       items: itemsWithAllocations,
 
       subtotal: invoice.subtotal,
-      discountTotal: invoice.discountTotal,
-      taxTotal: invoice.taxTotal,
-      shippingCost: invoice.shippingCost || 0,
-      grandTotal: invoice.grandTotal,
-      amountPaid: invoice.amountPaid || 0,
-      amountDue: invoice.amountDue,
+      discountTotal: invoice.discount_total,
+      taxTotal: invoice.tax_total,
+      shippingCost: invoice.shipping_cost || 0,
+      grandTotal: invoice.grand_total,
+      amountPaid: invoice.amount_paid || 0,
+      amountDue: invoice.balance_due,
 
-      customerNotes: invoice.customerNotes,
-      paymentTerms: invoice.paymentTerms || 'Net 30',
+      customerNotes: invoice.customer_notes,
+      paymentTerms: invoice.payment_terms || 'Net 30',
     };
 
     // Generate PDF
@@ -129,11 +133,14 @@ export async function GET(
     // Return PDF as binary
     const pdfBuffer = Buffer.from(pdfBase64, 'base64');
 
+    // Filename format: INV-XXXXX.pdf (just the invoice number)
+    const filename = `${invoice.invoice_number}.pdf`;
+
     return new NextResponse(pdfBuffer, {
       status: 200,
       headers: {
         'Content-Type': 'application/pdf',
-        'Content-Disposition': `inline; filename="Invoice-${invoice.invoiceNumber}.pdf"`,
+        'Content-Disposition': `inline; filename="${filename}"`,
         'Content-Length': pdfBuffer.length.toString(),
       },
     });

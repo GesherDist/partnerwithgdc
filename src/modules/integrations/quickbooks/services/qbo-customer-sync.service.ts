@@ -164,7 +164,7 @@ export const qboCustomerSyncService = {
   },
 
   /**
-   * Create a new customer in QuickBooks
+   * Create a new customer in QuickBooks (or find existing by name)
    */
   async createCustomerInQbo(
     customer: Customer,
@@ -173,28 +173,46 @@ export const qboCustomerSyncService = {
     customerRepository: { updateQboSync: (id: string, qboId: string, realmId: string) => Promise<void>; updateQboSyncError: (id: string, error: string) => Promise<void> }
   ): Promise<SyncCustomerResult> {
     try {
-      // Map customer to QBO format
-      const qboCustomer = mapCustomerToQboFormat(customer);
-
-      // Create in QBO
-      const result = await quickBooksProvider.createCustomer(
+      // First, check if customer already exists in QBO by name
+      console.log(`Searching for existing customer in QBO: ${customer.name}`);
+      const existingCustomer = await quickBooksProvider.findCustomerByName(
         connectionId,
-        qboCustomer
+        customer.name
       );
 
-      if (!result.externalId) {
-        throw new Error('QBO did not return a customer ID');
+      let qboCustomerId: string;
+
+      if (existingCustomer && existingCustomer.externalId) {
+        // Customer already exists in QBO - use existing ID
+        qboCustomerId = existingCustomer.externalId;
+        console.log(`Found existing customer in QBO: ${customer.name} (ID: ${qboCustomerId})`);
+      } else {
+        // Customer not found - create new in QBO
+        console.log(`Customer not found in QBO, creating new: ${customer.name}`);
+        const qboCustomer = mapCustomerToQboFormat(customer);
+
+        const result = await quickBooksProvider.createCustomer(
+          connectionId,
+          qboCustomer
+        );
+
+        if (!result.externalId) {
+          throw new Error('QBO did not return a customer ID');
+        }
+
+        qboCustomerId = result.externalId;
+        console.log(`Created new customer in QBO: ${customer.name} (ID: ${qboCustomerId})`);
       }
 
       // Update customer with QBO sync info
       await customerRepository.updateQboSync(
         customer.id,
-        result.externalId,
+        qboCustomerId,
         realmId
       );
 
       console.log(
-        `Customer ${customer.customerCode} synced to QBO with ID ${result.externalId}`
+        `Customer ${customer.customerCode} synced to QBO with ID ${qboCustomerId}`
       );
 
       // Log audit event for QBO sync (fire and forget)
@@ -203,10 +221,10 @@ export const qboCustomerSyncService = {
         module: 'integrations',
         entityType: 'Customer',
         entityId: customer.id,
-        description: `Customer synced to QuickBooks: ${customer.customerCode} (QBO ID: ${result.externalId})`,
+        description: `Customer synced to QuickBooks: ${customer.customerCode} (QBO ID: ${qboCustomerId})`,
         metadata: {
-          syncType: 'create',
-          qboCustomerId: result.externalId,
+          syncType: existingCustomer ? 'link_existing' : 'create',
+          qboCustomerId: qboCustomerId,
           qboRealmId: realmId,
           integration: 'quickbooks',
         },
@@ -216,7 +234,7 @@ export const qboCustomerSyncService = {
 
       return {
         success: true,
-        qboCustomerId: result.externalId,
+        qboCustomerId: qboCustomerId,
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';

@@ -16,6 +16,7 @@ import type {
   UpdateInvoiceDTO,
   RecordPaymentDTO,
   InvoiceStatus,
+  InvoiceType,
   PaginatedResult,
   CustomerSummary,
   SalesOrderSummary,
@@ -32,12 +33,17 @@ interface DbInvoice {
   invoice_number: string;
   invoice_date: string;
   due_date: string | null;
-  customer_id: string;
+  customer_id: string | null;
+  supplier_id: string | null;
   sales_order_id: string | null;
   shipment_id: string | null;
   currency_code: string;
   status: InvoiceStatus;
+  invoice_type: 'customer' | 'commission';
   payment_terms: string | null;
+  sales_rep_id: string | null;
+  sales_rep_name: string | null;
+  delivery_date: string | null;
   billing_address_street: string | null;
   billing_address_city: string | null;
   billing_address_state: string | null;
@@ -132,15 +138,23 @@ class InvoiceRepositoryImpl {
         id,
         invoice_number,
         customer_id,
+        supplier_id,
         invoice_date,
         due_date,
+        delivery_date,
         status,
+        invoice_type,
+        sales_rep_name,
         grand_total,
         amount_paid,
         balance_due,
         currency_code,
+        quickbooks_invoice_id,
         created_at,
-        customers!inner (
+        customers (
+          name
+        ),
+        suppliers (
           name
         )
       `,
@@ -235,10 +249,15 @@ class InvoiceRepositoryImpl {
 
     if (!invoice) {return null;}
 
+    // For commission invoices, fetch supplier info; for customer invoices, fetch customer info
+    const isCommissionInvoice = invoice.invoice_type === 'commission';
+
     const [items, payments, customer, salesOrder, shipment] = await Promise.all([
       this.findItemsByInvoiceId(id),
       this.findPaymentsByInvoiceId(id),
-      this.getCustomerSummary(invoice.customer_id),
+      isCommissionInvoice
+        ? (invoice.supplier_id ? this.getSupplierSummary(invoice.supplier_id) : null)
+        : (invoice.customer_id ? this.getCustomerSummary(invoice.customer_id) : null),
       invoice.sales_order_id ? this.getSalesOrderSummary(invoice.sales_order_id) : null,
       invoice.shipment_id ? this.getShipmentSummary(invoice.shipment_id) : null,
     ]);
@@ -330,18 +349,26 @@ class InvoiceRepositoryImpl {
     const invoiceNumber = await this.getNextInvoiceNumber();
     const totals = calculateInvoiceTotals(data.items);
 
+    // For commission invoices, use supplier_id; for customer invoices, use customer_id
+    const isCommissionInvoice = data.invoiceType === 'commission';
+
     const { data: invoice, error: invoiceError } = await db
       .from('invoices')
       .insert({
         invoice_number: invoiceNumber,
         invoice_date: data.invoiceDate.toISOString().split('T')[0],
         due_date: data.dueDate?.toISOString().split('T')[0] || null,
-        customer_id: data.customerId,
+        customer_id: isCommissionInvoice ? null : data.customerId,
+        supplier_id: isCommissionInvoice ? data.customerId : null, // customerId contains supplier ID for commission invoices
         sales_order_id: data.salesOrderId || null,
         shipment_id: data.shipmentId || null,
         currency_code: data.currencyCode || 'USD',
         status: data.status || 'draft',
+        invoice_type: data.invoiceType || 'customer',
         payment_terms: data.paymentTerms || null,
+        sales_rep_id: data.salesRepId || null,
+        sales_rep_name: data.salesRepName || null,
+        delivery_date: data.deliveryDate?.toISOString().split('T')[0] || null,
         billing_address_street: data.billingAddress.street,
         billing_address_city: data.billingAddress.city,
         billing_address_state: data.billingAddress.state,
@@ -412,7 +439,14 @@ class InvoiceRepositoryImpl {
     }
     if (data.customerId !== undefined) {updateData.customer_id = data.customerId;}
     if (data.currencyCode !== undefined) {updateData.currency_code = data.currencyCode;}
+    if (data.status !== undefined) {updateData.status = data.status;}
+    if (data.invoiceType !== undefined) {updateData.invoice_type = data.invoiceType;}
     if (data.paymentTerms !== undefined) {updateData.payment_terms = data.paymentTerms;}
+    if (data.salesRepId !== undefined) {updateData.sales_rep_id = data.salesRepId;}
+    if (data.salesRepName !== undefined) {updateData.sales_rep_name = data.salesRepName;}
+    if (data.deliveryDate !== undefined) {
+      updateData.delivery_date = data.deliveryDate?.toISOString().split('T')[0] || null;
+    }
     if (data.billingAddress !== undefined) {
       updateData.billing_address_street = data.billingAddress.street;
       updateData.billing_address_city = data.billingAddress.city;
@@ -548,7 +582,7 @@ class InvoiceRepositoryImpl {
   private async getCustomerSummary(customerId: string): Promise<CustomerSummary | null> {
     const { data, error } = await db
       .from('customers')
-      .select('id, customer_code, name, email, phone')
+      .select('id, customer_code, name, email, phone, address_1, address_2, city, state, zip, country')
       .eq('id', customerId)
       .single();
 
@@ -560,6 +594,37 @@ class InvoiceRepositoryImpl {
       name: data.name,
       email: data.email,
       phone: data.phone,
+      address1: data.address_1,
+      address2: data.address_2,
+      city: data.city,
+      state: data.state,
+      zip: data.zip,
+      country: data.country,
+    };
+  }
+
+  private async getSupplierSummary(supplierId: string): Promise<CustomerSummary | null> {
+    const { data, error } = await db
+      .from('suppliers')
+      .select('id, supplier_code, name, primary_contact_email, primary_contact_phone, address_street, address_city, address_state, address_postal_code, address_country')
+      .eq('id', supplierId)
+      .single();
+
+    if (error || !data) {return null;}
+
+    // Return as CustomerSummary format for consistency
+    return {
+      id: data.id,
+      customerCode: data.supplier_code,
+      name: data.name,
+      email: data.primary_contact_email,
+      phone: data.primary_contact_phone,
+      address1: data.address_street,
+      address2: null,
+      city: data.address_city,
+      state: data.address_state,
+      zip: data.address_postal_code,
+      country: data.address_country,
     };
   }
 
@@ -607,11 +672,16 @@ class InvoiceRepositoryImpl {
       invoiceDate: new Date(data.invoice_date),
       dueDate: data.due_date ? new Date(data.due_date) : null,
       customerId: data.customer_id,
+      supplierId: data.supplier_id,
       salesOrderId: data.sales_order_id,
       shipmentId: data.shipment_id,
       currencyCode: data.currency_code,
       status: data.status,
+      invoiceType: data.invoice_type || 'customer',
       paymentTerms: data.payment_terms,
+      salesRepId: data.sales_rep_id,
+      salesRepName: data.sales_rep_name,
+      deliveryDate: data.delivery_date ? new Date(data.delivery_date) : null,
       billingAddressStreet: data.billing_address_street,
       billingAddressCity: data.billing_address_city,
       billingAddressState: data.billing_address_state,
@@ -682,32 +752,46 @@ class InvoiceRepositoryImpl {
     data: {
       id: string;
       invoice_number: string;
-      customer_id: string;
+      customer_id: string | null;
+      supplier_id: string | null;
       invoice_date: string;
       due_date: string | null;
+      delivery_date: string | null;
       status: InvoiceStatus;
+      invoice_type: InvoiceType;
+      sales_rep_name: string | null;
       grand_total: number;
       amount_paid: number;
       balance_due: number;
       currency_code: string;
+      quickbooks_invoice_id: string | null;
       created_at: string;
-      customers: { name: string } | { name: string }[];
+      customers: { name: string } | { name: string }[] | null;
+      suppliers: { name: string } | { name: string }[] | null;
     },
     itemCounts: Record<string, number>
   ): InvoiceListItem {
-    const customer = Array.isArray(data.customers) ? data.customers[0] : data.customers;
+    // For customer invoices, use customer name; for commission invoices, use supplier name
+    const customer = data.customers ? (Array.isArray(data.customers) ? data.customers[0] : data.customers) : null;
+    const supplier = data.suppliers ? (Array.isArray(data.suppliers) ? data.suppliers[0] : data.suppliers) : null;
+    const entityName = data.invoice_type === 'commission' ? supplier?.name : customer?.name;
+
     return {
       id: data.id,
       invoiceNumber: data.invoice_number,
-      customerId: data.customer_id,
-      customerName: customer?.name || 'Unknown',
+      customerId: data.customer_id || data.supplier_id || '',
+      customerName: entityName || 'Unknown',
       invoiceDate: data.invoice_date,
       dueDate: data.due_date,
+      deliveryDate: data.delivery_date,
       status: data.status,
+      invoiceType: data.invoice_type || 'customer',
+      salesRepName: data.sales_rep_name,
       grandTotal: data.grand_total,
       amountPaid: data.amount_paid,
       balanceDue: data.balance_due,
       currencyCode: data.currency_code,
+      quickbooksInvoiceId: data.quickbooks_invoice_id,
       itemCount: itemCounts[data.id] || 0,
       createdAt: new Date(data.created_at),
     };

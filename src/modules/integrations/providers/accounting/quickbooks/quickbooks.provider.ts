@@ -518,6 +518,62 @@ export class QuickBooksProvider implements IAccountingProvider {
     return this.mapQuickBooksCustomer(data.Customer);
   }
 
+  /**
+   * Find customer by name in QuickBooks
+   * Searches by DisplayName first, then CompanyName if not found
+   */
+  async findCustomerByName(
+    connectionId: string,
+    name: string
+  ): Promise<AccountingCustomer | null> {
+    const tokenInfo = await this.getAccessToken(connectionId);
+    if (!tokenInfo) {
+      throw new Error(QBO_ERRORS.NOT_CONNECTED);
+    }
+
+    // Escape single quotes in name for SQL query
+    const escapedName = name.replace(/'/g, "\\'");
+
+    try {
+      // First search by DisplayName
+      const displayNameQuery = `SELECT * FROM Customer WHERE DisplayName = '${escapedName}' MAXRESULTS 1`;
+
+      const response1 = await this.executeQuery<QuickBooksCustomer>(
+        tokenInfo.accessToken,
+        tokenInfo.externalAccountId,
+        tokenInfo.environment,
+        displayNameQuery
+      );
+
+      const customers1 = (response1.QueryResponse.Customer || []) as QuickBooksCustomer[];
+
+      if (customers1.length > 0 && customers1[0]) {
+        return this.mapQuickBooksCustomer(customers1[0]);
+      }
+
+      // If not found by DisplayName, search by CompanyName
+      const companyNameQuery = `SELECT * FROM Customer WHERE CompanyName = '${escapedName}' MAXRESULTS 1`;
+
+      const response2 = await this.executeQuery<QuickBooksCustomer>(
+        tokenInfo.accessToken,
+        tokenInfo.externalAccountId,
+        tokenInfo.environment,
+        companyNameQuery
+      );
+
+      const customers2 = (response2.QueryResponse.Customer || []) as QuickBooksCustomer[];
+
+      if (customers2.length > 0 && customers2[0]) {
+        return this.mapQuickBooksCustomer(customers2[0]);
+      }
+
+      return null;
+    } catch (error) {
+      console.error('Error finding customer by name in QBO:', error);
+      return null;
+    }
+  }
+
   async createCustomer(
     connectionId: string,
     customer: AccountingCustomer
@@ -1104,6 +1160,62 @@ export class QuickBooksProvider implements IAccountingProvider {
     return this.mapQuickBooksProduct(data.Item);
   }
 
+  /**
+   * Find product/item by name or SKU in QuickBooks
+   * Searches by Name first, then SKU if not found
+   */
+  async findProductByName(
+    connectionId: string,
+    nameOrSku: string
+  ): Promise<AccountingProduct | null> {
+    const tokenInfo = await this.getAccessToken(connectionId);
+    if (!tokenInfo) {
+      throw new Error(QBO_ERRORS.NOT_CONNECTED);
+    }
+
+    // Escape single quotes in name for SQL query
+    const escapedName = nameOrSku.replace(/'/g, "\\'");
+
+    try {
+      // First search by Name
+      const nameQuery = `SELECT * FROM Item WHERE Name = '${escapedName}' MAXRESULTS 1`;
+
+      const response1 = await this.executeQuery<QuickBooksItem>(
+        tokenInfo.accessToken,
+        tokenInfo.externalAccountId,
+        tokenInfo.environment,
+        nameQuery
+      );
+
+      const items1 = (response1.QueryResponse.Item || []) as QuickBooksItem[];
+
+      if (items1.length > 0 && items1[0]) {
+        return this.mapQuickBooksProduct(items1[0]);
+      }
+
+      // If not found by Name, search by SKU
+      const skuQuery = `SELECT * FROM Item WHERE Sku = '${escapedName}' MAXRESULTS 1`;
+
+      const response2 = await this.executeQuery<QuickBooksItem>(
+        tokenInfo.accessToken,
+        tokenInfo.externalAccountId,
+        tokenInfo.environment,
+        skuQuery
+      );
+
+      const items2 = (response2.QueryResponse.Item || []) as QuickBooksItem[];
+
+      if (items2.length > 0 && items2[0]) {
+        return this.mapQuickBooksProduct(items2[0]);
+      }
+
+      return null;
+    } catch (error) {
+      console.error('Error finding product by name in QBO:', error);
+      return null;
+    }
+  }
+
   async createProduct(
     connectionId: string,
     product: AccountingProduct
@@ -1467,7 +1579,7 @@ export class QuickBooksProvider implements IAccountingProvider {
     const data = await response.json();
     const items = data.QueryResponse?.Item || [];
 
-    if (items.length > 0) {
+    if (items.length > 0 && items[0]) {
       return this.mapQuickBooksProduct(items[0]);
     }
 

@@ -3,8 +3,10 @@
 /**
  * Cascade Delete Admin Tool
  *
- * Single-page admin interface for safely deleting Customers, Quotes, and Sales Orders
- * with all their related data.
+ * Single-page admin interface for safely deleting Customers, Quotes, Sales Orders,
+ * Purchase Orders, and Shipments with all their related data.
+ *
+ * Accepts entity numbers (e.g., PO-2600064, CUST-GALILEO) instead of UUIDs.
  */
 
 import { useState } from 'react';
@@ -41,12 +43,13 @@ import {
   DialogTitle,
 } from '@/shared/components/ui/dialog';
 
-type EntityType = 'customer' | 'quote' | 'sales_order';
+type EntityType = 'customer' | 'quote' | 'sales_order' | 'purchase_order' | 'shipment';
 
 interface PreviewData {
   counts: Record<string, number>;
   totalRecords: number;
-  entityData: any;
+  entityData: Record<string, unknown>;
+  entityId: string; // UUID returned from preview
 }
 
 interface DeleteResult {
@@ -59,6 +62,8 @@ const ENTITY_LABELS: Record<EntityType, string> = {
   customer: 'Customer',
   quote: 'Quote',
   sales_order: 'Sales Order',
+  purchase_order: 'Purchase Order',
+  shipment: 'Shipment',
 };
 
 const ENTITY_DESCRIPTIONS: Record<EntityType, string> = {
@@ -68,11 +73,31 @@ const ENTITY_DESCRIPTIONS: Record<EntityType, string> = {
     'Delete a quote and all sales orders created from it, including related data.',
   sales_order:
     'Delete a sales order and all related pick tickets, packing lists, and shipments.',
+  purchase_order:
+    'Delete a purchase order and all related items. Shipments linked to this PO will be unlinked, not deleted.',
+  shipment:
+    'Delete a shipment and all related items and status history. Emails, packing lists, and invoices will be unlinked, not deleted.',
+};
+
+const ENTITY_PLACEHOLDERS: Record<EntityType, string> = {
+  customer: 'CUST-GALILEO',
+  quote: 'QT-2600064',
+  sales_order: 'C-SO-2600064',
+  purchase_order: 'PO-2600064',
+  shipment: 'SO2600023',
+};
+
+const ENTITY_INPUT_LABELS: Record<EntityType, string> = {
+  customer: 'Customer Code',
+  quote: 'Quote Number',
+  sales_order: 'Sales Order Number',
+  purchase_order: 'PO Number',
+  shipment: 'Shipment Number',
 };
 
 export default function CascadeDeletePage() {
   const [entityType, setEntityType] = useState<EntityType>('customer');
-  const [entityId, setEntityId] = useState('');
+  const [entityNumber, setEntityNumber] = useState('');
   const [deleteAuditLogs, setDeleteAuditLogs] = useState(true);
 
   const [loading, setLoading] = useState(false);
@@ -85,7 +110,7 @@ export default function CascadeDeletePage() {
   // Reset state when entity type changes
   const handleEntityTypeChange = (value: EntityType) => {
     setEntityType(value);
-    setEntityId('');
+    setEntityNumber('');
     setPreviewData(null);
     setError(null);
     setDeleteResult(null);
@@ -93,8 +118,8 @@ export default function CascadeDeletePage() {
 
   // Preview what will be deleted
   const handlePreview = async () => {
-    if (!entityId.trim()) {
-      setError('Please enter an entity ID');
+    if (!entityNumber.trim()) {
+      setError(`Please enter a ${ENTITY_INPUT_LABELS[entityType].toLowerCase()}`);
       return;
     }
 
@@ -108,7 +133,7 @@ export default function CascadeDeletePage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           entityType,
-          entityId: entityId.trim(),
+          entityNumber: entityNumber.trim(),
         }),
       });
 
@@ -123,6 +148,7 @@ export default function CascadeDeletePage() {
         counts: data.counts,
         totalRecords: data.totalRecords,
         entityData: data.entityData,
+        entityId: data.entityId, // Store UUID for delete
       });
     } catch (err) {
       setError(
@@ -130,6 +156,24 @@ export default function CascadeDeletePage() {
       );
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Get the API endpoint for delete based on entity type
+  const getDeleteEndpoint = (type: EntityType, id: string): string => {
+    switch (type) {
+      case 'customer':
+        return `/api/customers/${id}/cascade-delete`;
+      case 'quote':
+        return `/api/quotes/${id}/cascade-delete`;
+      case 'sales_order':
+        return `/api/sales-orders/${id}/cascade-delete`;
+      case 'purchase_order':
+        return `/api/purchase-orders/${id}/cascade-delete`;
+      case 'shipment':
+        return `/api/shipments/${id}/cascade-delete`;
+      default:
+        return '';
     }
   };
 
@@ -142,9 +186,7 @@ export default function CascadeDeletePage() {
     setShowConfirmDialog(false);
 
     try {
-      const endpoint = `/api/${
-        entityType === 'sales_order' ? 'sales-orders' : `${entityType}s`
-      }/${entityId}/cascade-delete`;
+      const endpoint = getDeleteEndpoint(entityType, previewData.entityId);
 
       const response = await fetch(endpoint, {
         method: 'DELETE',
@@ -165,11 +207,15 @@ export default function CascadeDeletePage() {
         deletedCounts: data.deletedCounts,
         totalDeleted: data.totalDeleted,
         entityName:
-          data.customerName || data.quoteNumber || data.orderNumber,
+          data.customerName ||
+          data.quoteNumber ||
+          data.orderNumber ||
+          data.poNumber ||
+          data.shipmentNumber,
       });
 
       // Clear form
-      setEntityId('');
+      setEntityNumber('');
       setPreviewData(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete');
@@ -184,6 +230,22 @@ export default function CascadeDeletePage() {
       .split('_')
       .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
       .join(' ');
+  };
+
+  // Get entity display name from preview data
+  const getEntityDisplayName = (): string => {
+    if (!previewData?.entityData) return 'Unknown';
+
+    const data = previewData.entityData;
+    return (
+      (data.name as string) ||
+      (data.customer_code as string) ||
+      (data.quote_number as string) ||
+      (data.order_number as string) ||
+      (data.po_number as string) ||
+      (data.shipment_number as string) ||
+      'Unknown'
+    );
   };
 
   return (
@@ -212,7 +274,7 @@ export default function CascadeDeletePage() {
         <CardHeader>
           <CardTitle>Select Entity to Delete</CardTitle>
           <CardDescription>
-            Choose the type of entity you want to delete and enter its ID.
+            Choose the type of entity you want to delete and enter its number/code.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -227,6 +289,8 @@ export default function CascadeDeletePage() {
                 <SelectItem value="customer">Customer</SelectItem>
                 <SelectItem value="quote">Quote</SelectItem>
                 <SelectItem value="sales_order">Sales Order</SelectItem>
+                <SelectItem value="purchase_order">Purchase Order</SelectItem>
+                <SelectItem value="shipment">Shipment</SelectItem>
               </SelectContent>
             </Select>
             <p className="text-sm text-muted-foreground">
@@ -234,19 +298,19 @@ export default function CascadeDeletePage() {
             </p>
           </div>
 
-          {/* Entity ID Input */}
+          {/* Entity Number Input */}
           <div className="space-y-2">
-            <Label htmlFor="entity-id">
-              {ENTITY_LABELS[entityType]} ID (UUID)
+            <Label htmlFor="entity-number">
+              {ENTITY_INPUT_LABELS[entityType]}
             </Label>
             <div className="flex gap-2">
               <Input
-                id="entity-id"
+                id="entity-number"
                 type="text"
-                placeholder="00000000-0000-0000-0000-000000000000"
-                value={entityId}
+                placeholder={ENTITY_PLACEHOLDERS[entityType]}
+                value={entityNumber}
                 onChange={(e) => {
-                  setEntityId(e.target.value);
+                  setEntityNumber(e.target.value);
                   setPreviewData(null);
                   setError(null);
                   setDeleteResult(null);
@@ -255,13 +319,16 @@ export default function CascadeDeletePage() {
               />
               <Button
                 onClick={handlePreview}
-                disabled={loading || !entityId.trim()}
+                disabled={loading || !entityNumber.trim()}
                 variant="outline"
               >
                 <Search className="h-4 w-4 mr-2" />
                 Preview
               </Button>
             </div>
+            <p className="text-xs text-muted-foreground">
+              Example: {ENTITY_PLACEHOLDERS[entityType]}
+            </p>
           </div>
 
           {/* Options */}
@@ -300,15 +367,11 @@ export default function CascadeDeletePage() {
               <AlertDescription>
                 <div className="mt-3 space-y-2">
                   <p className="font-semibold text-orange-900">
-                    {ENTITY_LABELS[entityType]}:{' '}
-                    {previewData.entityData?.name ||
-                      previewData.entityData?.quote_number ||
-                      previewData.entityData?.order_number ||
-                      'Unknown'}
+                    {ENTITY_LABELS[entityType]}: {getEntityDisplayName()}
                   </p>
                   <div className="grid grid-cols-2 gap-2 mt-3">
                     {Object.entries(previewData.counts)
-                      .filter(([_, count]) => count > 0)
+                      .filter(([, count]) => count > 0)
                       .map(([key, count]) => (
                         <div
                           key={key}
@@ -339,7 +402,7 @@ export default function CascadeDeletePage() {
             <Button
               variant="outline"
               onClick={() => {
-                setEntityId('');
+                setEntityNumber('');
                 setPreviewData(null);
                 setError(null);
                 setDeleteResult(null);
@@ -376,16 +439,12 @@ export default function CascadeDeletePage() {
           <div className="py-4">
             <p className="font-semibold mb-2">Are you absolutely sure?</p>
             <p className="text-sm text-muted-foreground">
-              Type the {ENTITY_LABELS[entityType].toLowerCase()} name or number
-              to confirm, or click Cancel to abort.
+              You are about to delete this {ENTITY_LABELS[entityType].toLowerCase()} and all its related data.
             </p>
             {previewData && (
               <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded">
                 <p className="text-sm font-mono text-red-900">
-                  {previewData.entityData?.name ||
-                    previewData.entityData?.quote_number ||
-                    previewData.entityData?.order_number ||
-                    'Unknown'}
+                  {getEntityDisplayName()}
                 </p>
               </div>
             )}

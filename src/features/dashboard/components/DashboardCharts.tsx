@@ -24,8 +24,16 @@ import {
   Pie,
   Cell,
 } from 'recharts';
+import { useState } from 'react';
+import { Eye, X } from 'lucide-react';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/shared/components/ui/card';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/shared/components/ui/popover';
+import { Button } from '@/shared/components/ui/button';
 
 import type {
   RevenueDataPoint,
@@ -57,6 +65,8 @@ interface RevenueChartProps {
 }
 
 export function RevenueChart({ data }: RevenueChartProps) {
+  const [isOpen, setIsOpen] = useState(false);
+
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
@@ -68,8 +78,56 @@ export function RevenueChart({ data }: RevenueChartProps) {
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Revenue Trend</CardTitle>
+      <CardHeader className="pb-2">
+        <div className="flex items-center gap-2">
+          <CardTitle className="text-base">Revenue Trend</CardTitle>
+          <Popover open={isOpen} onOpenChange={setIsOpen}>
+            <PopoverTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-5 w-5 rounded-full hover:bg-accent">
+                <Eye className="h-3.5 w-3.5 text-muted-foreground hover:text-primary transition-colors" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent side="bottom" align="start" className="w-[420px] p-0" sideOffset={8}>
+              <div className="relative">
+                <div className="flex items-start justify-between border-b bg-muted/30 px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <div className="rounded-md bg-primary/10 p-1.5">
+                      <Eye className="h-4 w-4 text-primary" />
+                    </div>
+                    <h4 className="font-semibold text-sm leading-tight">Revenue Trend Calculation</h4>
+                  </div>
+                  <Button variant="ghost" size="icon" className="h-6 w-6 rounded-md" onClick={() => setIsOpen(false)}>
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+                <div className="space-y-3 px-4 py-3">
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Calculation Formula</p>
+                    <div className="rounded-md bg-muted/50 px-3 py-2.5 text-xs leading-relaxed whitespace-pre-line border">
+                      {`Revenue = Sum of sales_orders.grand_total
+(Ankur's Definition 3.1: Recognized Revenue Only)
+
+Database Sources:
+• Sales Orders: grand_total WHERE status IN (delivered)
+
+Filtered by: order_date (Order Date)
+Status: delivered (recognized revenue only)
+Target: $220,000/month (hardcoded)
+Last Year: Same period previous year`}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Notes</p>
+                    <div className="flex gap-2">
+                      <div className="mt-0.5 h-4 w-0.5 rounded-full bg-primary/40 flex-shrink-0" />
+                      <p className="text-xs text-muted-foreground leading-relaxed">Monthly recognized revenue (delivered/invoiced orders only) vs target. Data grouped by month based on order date.</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
+        </div>
         <CardDescription>Monthly revenue vs target</CardDescription>
       </CardHeader>
       <CardContent>
@@ -134,6 +192,8 @@ interface UnitsBySKUChartProps {
 }
 
 export function UnitsBySKUChart({ data, products }: UnitsBySKUChartProps) {
+  const [isOpen, setIsOpen] = useState(false);
+
   // Default products for backward compatibility
   const defaultProducts: ProductLegendItem[] = [
     { key: 'units38', label: '38" Tire', color: COLORS.primary },
@@ -144,9 +204,56 @@ export function UnitsBySKUChart({ data, products }: UnitsBySKUChartProps) {
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Units by SKU</CardTitle>
-        <CardDescription>Product sales by month</CardDescription>
+      <CardHeader className="pb-2">
+        <div className="flex items-center gap-2">
+          <CardTitle className="text-base">Units by SKU</CardTitle>
+          <Popover open={isOpen} onOpenChange={setIsOpen}>
+            <PopoverTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-5 w-5 rounded-full hover:bg-accent">
+                <Eye className="h-3.5 w-3.5 text-muted-foreground hover:text-primary transition-colors" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent side="bottom" align="start" className="w-[420px] p-0" sideOffset={8}>
+              <div className="relative">
+                <div className="flex items-start justify-between border-b bg-muted/30 px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <div className="rounded-md bg-primary/10 p-1.5">
+                      <Eye className="h-4 w-4 text-primary" />
+                    </div>
+                    <h4 className="font-semibold text-sm leading-tight">Units by SKU Calculation</h4>
+                  </div>
+                  <Button variant="ghost" size="icon" className="h-6 w-6 rounded-md" onClick={() => setIsOpen(false)}>
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+                <div className="space-y-3 px-4 py-3">
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Calculation Formula</p>
+                    <div className="rounded-md bg-muted/50 px-3 py-2.5 text-xs leading-relaxed whitespace-pre-line border">
+                      {`Units = Sum of shipment_items.quantity_shipped
+
+Database Sources:
+• Items: shipment_items.quantity_shipped
+• Shipments: shipments.eta_to_port
+• Grouped by: products.name, month
+
+Filtered by: eta_to_port (ETA to US Port)
+Product Type: item_type = 'inventory' only`}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Notes</p>
+                    <div className="flex gap-2">
+                      <div className="mt-0.5 h-4 w-0.5 rounded-full bg-primary/40 flex-shrink-0" />
+                      <p className="text-xs text-muted-foreground leading-relaxed">Shows units arriving (inventory coming IN) by SKU per month based on shipment ETA to US port. Excludes service items.</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
+        </div>
+        <CardDescription>Shipment units by ETA to port</CardDescription>
       </CardHeader>
       <CardContent>
         <ResponsiveContainer width="100%" height={300}>
@@ -187,6 +294,8 @@ interface ChannelPerformanceChartProps {
 }
 
 export function ChannelPerformanceChart({ data }: ChannelPerformanceChartProps) {
+  const [isOpen, setIsOpen] = useState(false);
+
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
@@ -201,8 +310,56 @@ export function ChannelPerformanceChart({ data }: ChannelPerformanceChartProps) 
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Channel Performance</CardTitle>
+      <CardHeader className="pb-2">
+        <div className="flex items-center gap-2">
+          <CardTitle className="text-base">Channel Performance</CardTitle>
+          <Popover open={isOpen} onOpenChange={setIsOpen}>
+            <PopoverTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-5 w-5 rounded-full hover:bg-accent">
+                <Eye className="h-3.5 w-3.5 text-muted-foreground hover:text-primary transition-colors" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent side="bottom" align="start" className="w-[420px] p-0" sideOffset={8}>
+              <div className="relative">
+                <div className="flex items-start justify-between border-b bg-muted/30 px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <div className="rounded-md bg-primary/10 p-1.5">
+                      <Eye className="h-4 w-4 text-primary" />
+                    </div>
+                    <h4 className="font-semibold text-sm leading-tight">Channel Performance Calculation</h4>
+                  </div>
+                  <Button variant="ghost" size="icon" className="h-6 w-6 rounded-md" onClick={() => setIsOpen(false)}>
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+                <div className="space-y-3 px-4 py-3">
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Calculation Formula</p>
+                    <div className="rounded-md bg-muted/50 px-3 py-2.5 text-xs leading-relaxed whitespace-pre-line border">
+                      {`Revenue by Channel = Sum of sales_orders.grand_total grouped by channel
+(Ankur's Definition: Recognized Revenue Only)
+
+Database Sources:
+• Revenue: sales_orders.grand_total
+• Units: sales_order_items.quantity
+• Channel: customers.channel (OEM or Dealer)
+
+Filtered by: order_date (Order Date)
+Status: delivered (recognized revenue only)`}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Notes</p>
+                    <div className="flex gap-2">
+                      <div className="mt-0.5 h-4 w-0.5 rounded-full bg-primary/40 flex-shrink-0" />
+                      <p className="text-xs text-muted-foreground leading-relaxed">Recognized revenue (delivered/invoiced only) by channel. OEM = Original Equipment Manufacturers, Dealer = Independent dealers.</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
+        </div>
         <CardDescription>OEM vs Dealer breakdown</CardDescription>
       </CardHeader>
       <CardContent>
@@ -279,10 +436,64 @@ interface MarginChartProps {
 }
 
 export function MarginChart({ data }: MarginChartProps) {
+  const [isOpen, setIsOpen] = useState(false);
+
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Margin Analysis</CardTitle>
+      <CardHeader className="pb-2">
+        <div className="flex items-center gap-2">
+          <CardTitle className="text-base">Margin Analysis</CardTitle>
+          <Popover open={isOpen} onOpenChange={setIsOpen}>
+            <PopoverTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-5 w-5 rounded-full hover:bg-accent">
+                <Eye className="h-3.5 w-3.5 text-muted-foreground hover:text-primary transition-colors" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent side="bottom" align="start" className="w-[420px] p-0" sideOffset={8}>
+              <div className="relative">
+                <div className="flex items-start justify-between border-b bg-muted/30 px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <div className="rounded-md bg-primary/10 p-1.5">
+                      <Eye className="h-4 w-4 text-primary" />
+                    </div>
+                    <h4 className="font-semibold text-sm leading-tight">Margin Analysis Calculation</h4>
+                  </div>
+                  <Button variant="ghost" size="icon" className="h-6 w-6 rounded-md" onClick={() => setIsOpen(false)}>
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+                <div className="space-y-3 px-4 py-3">
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Calculation Formula</p>
+                    <div className="rounded-md bg-muted/50 px-3 py-2.5 text-xs leading-relaxed whitespace-pre-line border">
+                      {`Gross Margin % = (Revenue - COGS) / Revenue × 100
+(Ankur's Definition 3.2: Gross Profit)
+
+Where:
+• Revenue = sales_order_items.unit_price × quantity
+• COGS = products.base_cost × quantity
+
+Database Sources:
+• Sales: sales_order_items (unit_price, quantity)
+• Cost: products.base_cost
+
+Filtered by: order_date (Order Date)
+Status: delivered (recognized revenue only)
+Target: 30% (hardcoded benchmark)`}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Notes</p>
+                    <div className="flex gap-2">
+                      <div className="mt-0.5 h-4 w-0.5 rounded-full bg-primary/40 flex-shrink-0" />
+                      <p className="text-xs text-muted-foreground leading-relaxed">Gross profit margin on recognized revenue (delivered/invoiced orders). Target is 30% margin. Excludes service items and commissions.</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
+        </div>
         <CardDescription>Blended margin % trend</CardDescription>
       </CardHeader>
       <CardContent>

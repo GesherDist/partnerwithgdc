@@ -157,7 +157,7 @@ export const qboProductSyncService = {
   },
 
   /**
-   * Create a new product/item in QuickBooks
+   * Create a new product/item in QuickBooks (or find existing by name/SKU)
    */
   async createProductInQbo(
     product: Product,
@@ -166,28 +166,56 @@ export const qboProductSyncService = {
     productRepository: { updateQboSync: (id: string, qboId: string, realmId: string) => Promise<void>; updateQboSyncError: (id: string, error: string) => Promise<void> }
   ): Promise<SyncProductResult> {
     try {
-      // Map product to QBO format
-      const qboProduct = mapProductToQboFormat(product);
+      // First, check if product already exists in QBO by name or SKU
+      console.log(`Searching for existing product in QBO: ${product.name} (SKU: ${product.sku})`);
 
-      // Create in QBO
-      const result = await quickBooksProvider.createProduct(
+      // Try searching by name first, then by SKU
+      let existingProduct = await quickBooksProvider.findProductByName(
         connectionId,
-        qboProduct
+        product.name
       );
 
-      if (!result.externalId) {
-        throw new Error('QBO did not return an item ID');
+      if (!existingProduct) {
+        // Try searching by SKU
+        existingProduct = await quickBooksProvider.findProductByName(
+          connectionId,
+          product.sku
+        );
+      }
+
+      let qboItemId: string;
+
+      if (existingProduct && existingProduct.externalId) {
+        // Product already exists in QBO - use existing ID
+        qboItemId = existingProduct.externalId;
+        console.log(`Found existing product in QBO: ${product.name} (ID: ${qboItemId})`);
+      } else {
+        // Product not found - create new in QBO
+        console.log(`Product not found in QBO, creating new: ${product.name}`);
+        const qboProduct = mapProductToQboFormat(product);
+
+        const result = await quickBooksProvider.createProduct(
+          connectionId,
+          qboProduct
+        );
+
+        if (!result.externalId) {
+          throw new Error('QBO did not return an item ID');
+        }
+
+        qboItemId = result.externalId;
+        console.log(`Created new product in QBO: ${product.name} (ID: ${qboItemId})`);
       }
 
       // Update product with QBO sync info
       await productRepository.updateQboSync(
         product.id,
-        result.externalId,
+        qboItemId,
         realmId
       );
 
       console.log(
-        `Product ${product.sku} synced to QBO with ID ${result.externalId}`
+        `Product ${product.sku} synced to QBO with ID ${qboItemId}`
       );
 
       // Log audit event for QBO sync (fire and forget)
@@ -196,10 +224,10 @@ export const qboProductSyncService = {
         module: 'products',
         entityType: 'Product',
         entityId: product.id,
-        description: `Product synced to QuickBooks: ${product.sku} (QBO ID: ${result.externalId})`,
+        description: `Product synced to QuickBooks: ${product.sku} (QBO ID: ${qboItemId})`,
         metadata: {
-          syncType: 'create',
-          qboItemId: result.externalId,
+          syncType: existingProduct ? 'link_existing' : 'create',
+          qboItemId: qboItemId,
           qboRealmId: realmId,
           integration: 'quickbooks',
         },
@@ -209,7 +237,7 @@ export const qboProductSyncService = {
 
       return {
         success: true,
-        qboItemId: result.externalId,
+        qboItemId: qboItemId,
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';

@@ -10,10 +10,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/shared/components/ui/dropdown-menu';
-import { MoreHorizontal, Eye, Pencil, Trash2, CreditCard } from 'lucide-react';
+import { MoreHorizontal, Eye, Pencil, Trash2, CreditCard, CheckCircle2 } from 'lucide-react';
 import { cn } from '@/shared/lib/utils';
 import type { InvoiceListItem } from '../types';
-import { INVOICE_STATUS_COLORS, INVOICE_STATUS_LABELS } from '../types';
+import { INVOICE_STATUS_COLORS, INVOICE_STATUS_LABELS, INVOICE_TYPE_LABELS } from '../types';
 
 interface ColumnsOptions {
   onView?: (invoice: InvoiceListItem) => void;
@@ -37,10 +37,31 @@ export function InvoicesTableColumns(options: ColumnsOptions = {}): ColumnDef<In
     },
     {
       accessorKey: 'customerName',
-      header: 'Customer',
+      header: 'Customer/Supplier',
       cell: ({ row }) => (
         <span className="font-medium">{row.original.customerName}</span>
       ),
+    },
+    {
+      accessorKey: 'invoiceType',
+      header: 'Type',
+      cell: ({ row }) => {
+        const type = row.original.invoiceType;
+        const isCommission = type === 'commission';
+        return (
+          <Badge
+            variant="outline"
+            className={cn(
+              'text-xs font-medium',
+              isCommission
+                ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                : 'bg-blue-100 text-blue-800 border border-blue-200'
+            )}
+          >
+            {INVOICE_TYPE_LABELS[type] || 'Customer Invoice'}
+          </Badge>
+        );
+      },
     },
     {
       accessorKey: 'invoiceDate',
@@ -86,6 +107,22 @@ export function InvoicesTableColumns(options: ColumnsOptions = {}): ColumnDef<In
               maximumFractionDigits: 2,
             })}
           </span>
+        );
+      },
+    },
+    {
+      accessorKey: 'quickbooksInvoiceId',
+      header: 'QB',
+      cell: ({ row }) => {
+        const qbId = row.original.quickbooksInvoiceId;
+        return qbId ? (
+          <div className="flex justify-center" title={`QuickBooks ID: ${qbId}`}>
+            <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+          </div>
+        ) : (
+          <div className="flex justify-center text-muted-foreground">
+            <span className="text-xs">-</span>
+          </div>
         );
       },
     },
