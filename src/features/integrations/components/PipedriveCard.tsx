@@ -20,13 +20,6 @@ import { toast } from 'sonner';
 import { Button } from '@/shared/components/ui/button';
 import { Separator } from '@/shared/components/ui/separator';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/shared/components/ui/select';
-import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -39,8 +32,8 @@ import {
 import {
   IntegrationCard,
   IntegrationDetails,
-  IntegrationToggle,
 } from './IntegrationCard';
+import { GdcSetupPanel } from '@/features/pipedrive/components/GdcSetupPanel';
 
 // ============================================
 // TYPES
@@ -56,26 +49,14 @@ interface PipedriveStatus {
   lastSyncAt?: string | null;
   expiresAt?: string;
   error?: string;
-}
-
-interface PipedriveSettings {
-  pipelineId: string;
-  pushQuotes: boolean;
-  pullWonDeals: boolean;
+  // Connection state from /api/pipedrive/status ('error' = reauthorization needed)
+  status?: string;
+  errorMessage?: string;
 }
 
 // ============================================
 // CONSTANTS
 // ============================================
-
-/** Placeholder — replace once the client confirms their pipeline structure. */
-const PIPELINE_OPTIONS = [
-  { id: 'sales', label: 'Sales Pipeline' },
-  { id: 'oem', label: 'OEM Pipeline' },
-  { id: 'dealer', label: 'Dealer Pipeline' },
-] as const;
-
-const DEFAULT_PIPELINE_ID = PIPELINE_OPTIONS[0].id;
 
 const formatStamp = (iso: string | null | undefined) =>
   iso ? format(new Date(iso), 'd MMM yyyy, HH:mm') : 'Never';
@@ -88,11 +69,6 @@ function PipedriveCardComponent() {
   const searchParams = useSearchParams();
 
   const [status, setStatus] = useState<PipedriveStatus | null>(null);
-  const [settings, setSettings] = useState<PipedriveSettings>({
-    pipelineId: DEFAULT_PIPELINE_ID,
-    pushQuotes: true,
-    pullWonDeals: true,
-  });
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -124,6 +100,9 @@ function PipedriveCardComponent() {
           break;
         case 'network_error':
           toast.error('Connection failed: Network error. Please try again.');
+          break;
+        case 'unauthorized':
+          toast.error('You do not have permission to connect Pipedrive.');
           break;
       }
       // Clear the URL param
@@ -214,18 +193,6 @@ function PipedriveCardComponent() {
     }
   }, []);
 
-  const handlePipelineChange = useCallback((value: string) => {
-    setSettings((prev) => ({ ...prev, pipelineId: value }));
-  }, []);
-
-  const handlePushQuotesChange = useCallback((checked: boolean) => {
-    setSettings((prev) => ({ ...prev, pushQuotes: checked }));
-  }, []);
-
-  const handlePullWonDealsChange = useCallback((checked: boolean) => {
-    setSettings((prev) => ({ ...prev, pullWonDeals: checked }));
-  }, []);
-
   // ============================================
   // LOADING STATE
   // ============================================
@@ -234,7 +201,7 @@ function PipedriveCardComponent() {
     return (
       <IntegrationCard
         name="Pipedrive"
-        description="Two-way CRM sync. A sent quote creates or updates a deal; a won deal reflects back onto the quote."
+        description="GDC Sales pipeline, customers and purchase history in Pipedrive; won deals create ERP quotes for approval."
         icon={Handshake}
         iconClassName="bg-sky-50 text-sky-700"
         status="disconnected"
@@ -254,7 +221,7 @@ function PipedriveCardComponent() {
     return (
       <IntegrationCard
         name="Pipedrive"
-        description="Two-way CRM sync. A sent quote creates or updates a deal; a won deal reflects back onto the quote."
+        description="GDC Sales pipeline, customers and purchase history in Pipedrive; won deals create ERP quotes for approval."
         icon={Handshake}
         iconClassName="bg-sky-50 text-sky-700"
         status="disconnected"
@@ -269,6 +236,13 @@ function PipedriveCardComponent() {
           </Button>
         }
       >
+        {status?.status === 'error' && (
+          <div className="mb-3 rounded-lg border border-destructive/40 bg-destructive/5 p-4">
+            <p className="text-sm text-destructive">
+              {status.errorMessage || 'The Pipedrive connection stopped working. Please reconnect.'}
+            </p>
+          </div>
+        )}
         <div className="rounded-lg border bg-muted/40 p-4">
           <p className="text-sm text-muted-foreground">
             Click the button below to connect your Pipedrive account using secure OAuth authentication.
@@ -287,7 +261,7 @@ function PipedriveCardComponent() {
     <>
       <IntegrationCard
         name="Pipedrive"
-        description="Two-way CRM sync. A sent quote creates or updates a deal; a won deal reflects back onto the quote."
+        description="GDC Sales pipeline, customers and purchase history in Pipedrive; won deals create ERP quotes for approval."
         icon={Handshake}
         iconClassName="bg-sky-50 text-sky-700"
         status="connected"
@@ -328,51 +302,7 @@ function PipedriveCardComponent() {
 
         <Separator />
 
-        <div className="max-w-xs space-y-2">
-          <label htmlFor="pipedrive-pipeline" className="text-sm font-medium">
-            Target pipeline
-          </label>
-          <Select
-            value={settings.pipelineId}
-            onValueChange={handlePipelineChange}
-          >
-            <SelectTrigger id="pipedrive-pipeline">
-              <SelectValue placeholder="Select pipeline" />
-            </SelectTrigger>
-            <SelectContent>
-              {PIPELINE_OPTIONS.map((option) => (
-                <SelectItem key={option.id} value={option.id}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <p className="text-xs text-muted-foreground">
-            Where deals created from quotes land.
-          </p>
-        </div>
-
-        <Separator />
-
-        <div className="space-y-4">
-          <p className="text-sm font-medium text-foreground">What syncs</p>
-
-          <IntegrationToggle
-            label="Quote sent creates or updates a deal"
-            description="Sending a quote pushes it to Pipedrive as a deal on the pipeline above."
-            checked={settings.pushQuotes}
-            onCheckedChange={handlePushQuotesChange}
-          />
-
-          <Separator />
-
-          <IntegrationToggle
-            label="Deal won updates the quote"
-            description="Marking a deal won in Pipedrive reflects onto the linked quote and sales order."
-            checked={settings.pullWonDeals}
-            onCheckedChange={handlePullWonDealsChange}
-          />
-        </div>
+        <GdcSetupPanel />
       </IntegrationCard>
 
       <AlertDialog open={disconnectOpen} onOpenChange={setDisconnectOpen}>
@@ -380,9 +310,9 @@ function PipedriveCardComponent() {
           <AlertDialogHeader>
             <AlertDialogTitle>Disconnect Pipedrive?</AlertDialogTitle>
             <AlertDialogDescription>
-              Quotes will stop creating deals and won deals will stop updating quotes.
-              You&apos;ll need to reconnect via OAuth to restore sync. Deals already
-              in Pipedrive are not affected.
+              Syncing stops: won deals will no longer create ERP quotes and purchase history
+              will not update. You&apos;ll need to reconnect via OAuth to restore sync. Data
+              already in Pipedrive is not affected.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

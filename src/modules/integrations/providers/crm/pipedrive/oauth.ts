@@ -13,6 +13,7 @@ import {
   PIPEDRIVE_ERRORS,
 } from './constants';
 import type { PipedriveConfig, PipedriveTokenResponse, PipedriveUser } from './types';
+import { PipedriveApiError } from './errors';
 
 // ============================================
 // CONFIGURATION
@@ -145,8 +146,9 @@ export async function refreshAccessToken(refreshToken: string): Promise<Pipedriv
 
   if (!response.ok) {
     const errorBody = await response.text();
-    console.error('Token refresh failed:', response.status, errorBody);
-    throw new Error(PIPEDRIVE_ERRORS.TOKEN_REFRESH_FAILED);
+    console.error('Token refresh failed:', response.status, errorBody.slice(0, 300));
+    // Typed so callers can tell a rejected refresh token (400/401) from an outage
+    throw new PipedriveApiError(response.status, 'POST oauth/token');
   }
 
   return response.json() as Promise<PipedriveTokenResponse>;

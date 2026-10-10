@@ -6,6 +6,19 @@
 
 // Provider Class & Instance
 export { PipedriveProvider, pipedriveProvider } from './pipedrive.provider';
+export type {
+  PageRequestRunner,
+  PipedriveListResult,
+  PipedriveTokenInfo,
+  PipedriveApiVersion,
+} from './pipedrive.provider';
+
+// Errors
+export {
+  PipedriveApiError,
+  isPipedriveApiError,
+  isPipedriveNotFound,
+} from './errors';
 
 // Types
 export type {
@@ -42,6 +55,7 @@ export {
   PIPEDRIVE_DEFAULT_PAGE_SIZE,
   PIPEDRIVE_MAX_PAGE_SIZE,
   PIPEDRIVE_ACCESS_TOKEN_LIFETIME_SECONDS,
+  PIPEDRIVE_MANAGE_PERMISSION,
 } from './constants';
 
 // OAuth Utilities

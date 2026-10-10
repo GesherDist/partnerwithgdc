@@ -11,7 +11,8 @@ import { getConnectionByIntegrationId, getIntegrationByProvider } from '@/module
 import { leadsRepository } from '@/features/leads/repositories/leads.repository';
 import { dealsRepository } from '@/features/deals/repositories/deals.repository';
 import { db } from '@/shared/lib/supabase/database';
-import { pipedriveRateLimiter, retryWithBackoff, isRetryableError } from '../lib/rate-limiter';
+import { pipedriveRateLimiter, runPipedriveRequest } from '../lib/rate-limiter';
+import { toEntityUuid, toPipedriveId } from '../lib/sync-log';
 import type {
   PipedriveSyncResult,
   CreateLeadDTO,
@@ -26,6 +27,15 @@ import type { SyncLogEntry } from '../types';
 // ============================================
 // TYPES
 // ============================================
+
+/**
+ * Since Jul 15, 2025 Pipedrive's deal list endpoints no longer return archived
+ * deals, and the temporary GET /v1/deals/archived endpoint was retired at the
+ * end of 2025. Archived deals are only listable via GET /api/v2/deals/archived.
+ * Until that call is added (v2 migration), a deal missing from the list may just
+ * be archived, so deal deletions must not be reconciled.
+ */
+const ARCHIVED_DEALS_LISTABLE = false;
 
 interface SyncOptions {
   fullSync?: boolean; // If true, sync all records, not just recent
@@ -76,16 +86,13 @@ function stripHtmlAndDecode(html: string): string {
 // ============================================
 
 class PipedriveSyncService {
-  private connectionId: string | null = null;
-
   /**
    * Get the current Pipedrive connection ID
+   *
+   * Looked up on every call (not cached on the singleton) so a disconnect,
+   * reconnect or token failure is reflected immediately.
    */
   private async getConnectionId(): Promise<string | null> {
-    if (this.connectionId) {
-      return this.connectionId;
-    }
-
     const integration = await getIntegrationByProvider('pipedrive');
     if (!integration) {
       return null;
@@ -96,8 +103,43 @@ class PipedriveSyncService {
       return null;
     }
 
-    this.connectionId = connection.id;
-    return this.connectionId;
+    return connection.id;
+  }
+
+  /**
+   * Decide whether local records missing from a Pipedrive fetch may be soft-deleted.
+   *
+   * Refuses when:
+   * - Pipedrive did not positively confirm the end of the collection (complete=false)
+   * - the sync was incremental (sinceDate), so absence does not mean deletion
+   * - Pipedrive returned nothing while local records exist, which is far more
+   *   likely an access/scope problem than every record being deleted
+   */
+  private canReconcileDeletions(
+    entity: string,
+    options: SyncOptions,
+    fetchComplete: boolean,
+    fetchedCount: number,
+    localCount: number
+  ): boolean {
+    if (!fetchComplete) {
+      console.warn(`[PipedriveSync] Skipping ${entity} deletion cleanup: Pipedrive list completeness not confirmed`);
+      return false;
+    }
+
+    if (options.sinceDate) {
+      console.warn(`[PipedriveSync] Skipping ${entity} deletion cleanup: incremental sync`);
+      return false;
+    }
+
+    if (fetchedCount === 0 && localCount > 0) {
+      console.warn(
+        `[PipedriveSync] Skipping ${entity} deletion cleanup: Pipedrive returned 0 records but ${localCount} are linked locally`
+      );
+      return false;
+    }
+
+    return true;
   }
 
   /**
@@ -151,6 +193,19 @@ class PipedriveSyncService {
   }
 
   /**
+   * Fetch the lead label map, or null when Pipedrive labels cannot be read.
+   * Callers must treat null as "unknown" and not overwrite stored labels.
+   */
+  private async fetchLeadLabels(connectionId: string): Promise<Map<string, string> | null> {
+    try {
+      return await runPipedriveRequest(() => pipedriveProvider.getLeadLabels(connectionId));
+    } catch (error) {
+      console.warn('[PipedriveSync] Lead labels unavailable; existing labels will be kept:', error);
+      return null;
+    }
+  }
+
+  /**
    * Sync persons from Pipedrive to Leads
    */
   async syncPersonsToLeads(options: SyncOptions = {}): Promise<PipedriveSyncResult> {
@@ -168,36 +223,21 @@ class PipedriveSyncService {
     }
 
     try {
-      // Fetch all persons with rate limiting
-      const persons = await pipedriveRateLimiter.execute(() =>
-        retryWithBackoff(
-          () => pipedriveProvider.getContacts(connectionId, {
-            sinceDate: options.sinceDate,
-            limit: 500,
-          }),
-          { shouldRetry: isRetryableError }
-        )
-      );
+      // Fetch every page - a partial list would mark valid leads as deleted
+      const personsResult = await pipedriveProvider.getAllContacts(connectionId, runPipedriveRequest);
+      const persons = personsResult.items;
 
       // Fetch all deals for enrichment
-      const deals = await pipedriveRateLimiter.execute(() =>
-        retryWithBackoff(
-          () => pipedriveProvider.getDeals(connectionId, {
-            sinceDate: options.sinceDate,
-            limit: 500,
-          }),
-          { shouldRetry: isRetryableError }
-        )
+      const { items: deals } = await pipedriveProvider.getAllDeals(
+        connectionId,
+        undefined,
+        runPipedriveRequest
       );
 
       // Fetch all organizations for enrichment
-      const organizations = await pipedriveRateLimiter.execute(() =>
-        retryWithBackoff(
-          () => pipedriveProvider.getOrganizations(connectionId, {
-            limit: 500,
-          }),
-          { shouldRetry: isRetryableError }
-        )
+      const { items: organizations } = await pipedriveProvider.getAllOrganizations(
+        connectionId,
+        runPipedriveRequest
       );
 
       // Create lookup maps
@@ -290,9 +330,9 @@ class PipedriveSyncService {
           const localPipedriveIds = await leadsRepository.getAllPipedrivePersonIds();
 
           // Find IDs that exist locally but not in Pipedrive (deleted from Pipedrive)
-          const deletedIds = localPipedriveIds.filter(
-            (id) => !pipedrivePersonIds.has(id)
-          );
+          const deletedIds = this.canReconcileDeletions('person', options, personsResult.complete, pipedrivePersonIds.size, localPipedriveIds.length)
+            ? localPipedriveIds.filter((id) => !pipedrivePersonIds.has(id))
+            : [];
 
           if (deletedIds.length > 0) {
             const deletedCount = await leadsRepository.softDeleteByPipedrivePersonIds(deletedIds);
@@ -346,20 +386,15 @@ class PipedriveSyncService {
     }
 
     try {
-      // Fetch lead labels first (to convert label IDs to names)
-      const labelMap = await pipedriveRateLimiter.execute(() =>
-        pipedriveProvider.getLeadLabels(connectionId)
-      );
+      // Fetch lead labels first (to convert label IDs to names). Preview only
+      // displays them, so a failure just shows no labels.
+      const labelMap = await this.fetchLeadLabels(connectionId) ?? new Map<string, string>();
 
       // Fetch all leads from Leads Inbox
-      const pipedriveLeads = await pipedriveRateLimiter.execute(() =>
-        retryWithBackoff(
-          () => pipedriveProvider.getLeads(connectionId, {
-            limit: 500,
-            archivedStatus: 'not_archived',
-          }),
-          { shouldRetry: isRetryableError }
-        )
+      const { items: pipedriveLeads } = await pipedriveProvider.getAllLeads(
+        connectionId,
+        { archived: false },
+        runPipedriveRequest
       );
 
       const items: Array<{
@@ -390,7 +425,7 @@ class PipedriveSyncService {
         // If person_id exists but no email/phone, fetch full person details
         if (lead.person_id && (!primaryEmail || !primaryPhone)) {
           try {
-            const person = await pipedriveRateLimiter.execute(() =>
+            const person = await runPipedriveRequest(() =>
               pipedriveProvider.getContact(connectionId, String(lead.person_id))
             );
             if (person) {
@@ -462,24 +497,32 @@ class PipedriveSyncService {
     }
 
     try {
-      // Fetch lead labels first (to convert label IDs to names)
-      const labelMap = await pipedriveRateLimiter.execute(() =>
-        pipedriveProvider.getLeadLabels(connectionId)
-      );
+      // Fetch lead labels first (to convert label IDs to names). If they cannot
+      // be read, labels are left unchanged on existing leads instead of wiped (M2).
+      const labelMap = await this.fetchLeadLabels(connectionId);
 
       // Fetch all leads from Leads Inbox with rate limiting
-      const pipedriveLeads = await pipedriveRateLimiter.execute(() =>
-        retryWithBackoff(
-          () => pipedriveProvider.getLeads(connectionId, {
-            limit: 500,
-            archivedStatus: 'not_archived',
-          }),
-          { shouldRetry: isRetryableError }
-        )
+      const activeLeads = await pipedriveProvider.getAllLeads(
+        connectionId,
+        { archived: false },
+        runPipedriveRequest
       );
+      const pipedriveLeads = activeLeads.items;
 
-      // Collect all Pipedrive Lead IDs for deletion detection
-      const pipedriveLeadIds = new Set<string>();
+      // Archived leads still exist in Pipedrive but GET /v1/leads omits them (since
+      // Jul 15, 2025). Fetch them from GET /v1/leads/archived: they are not imported
+      // or updated, but must not be treated as deleted by the cleanup below.
+      const archivedLeads = await pipedriveProvider.getAllLeads(
+        connectionId,
+        { archived: true },
+        runPipedriveRequest
+      );
+      const leadsComplete = activeLeads.complete && archivedLeads.complete;
+
+      // Collect all Pipedrive Lead IDs (active + archived) for deletion detection
+      const pipedriveLeadIds = new Set<string>(
+        archivedLeads.items.map((lead) => lead.id).filter((id): id is string => !!id)
+      );
 
       // Process each lead
       for (const pipedriveLead of pipedriveLeads) {
@@ -488,16 +531,18 @@ class PipedriveSyncService {
         pipedriveLeadIds.add(pipedriveLead.id);
 
         try {
-          // Convert label IDs to names
-          const labels = (pipedriveLead.label_ids || [])
-            .map(id => labelMap.get(id))
-            .filter((name): name is string => !!name);
+          // Convert label IDs to names (undefined = labels unavailable, keep existing)
+          const labels = labelMap
+            ? (pipedriveLead.label_ids || [])
+                .map(id => labelMap.get(id))
+                .filter((name): name is string => !!name)
+            : undefined;
 
           // Fetch full person details if person_id exists (to get email, phone)
           let personDetails: { email?: string; phone?: string } = {};
           if (pipedriveLead.person_id) {
             try {
-              const person = await pipedriveRateLimiter.execute(() =>
+              const person = await runPipedriveRequest(() =>
                 pipedriveProvider.getContact(connectionId, String(pipedriveLead.person_id))
               );
               if (person) {
@@ -515,7 +560,7 @@ class PipedriveSyncService {
           let organizationDetails: CrmOrganization | null = null;
           if (pipedriveLead.organization_id) {
             try {
-              organizationDetails = await pipedriveRateLimiter.execute(() =>
+              organizationDetails = await runPipedriveRequest(() =>
                 pipedriveProvider.getOrganization(connectionId, String(pipedriveLead.organization_id))
               );
             } catch (e) {
@@ -535,12 +580,24 @@ class PipedriveSyncService {
           }
 
           // Upsert using the Leads Inbox method
-          const { lead, isNew } = await leadsRepository.upsertFromPipedriveLeadsInbox(leadDto);
+          const upsert = await leadsRepository.upsertFromPipedriveLeadsInbox(leadDto);
+
+          if (upsert.skippedDeleted) {
+            // Deleted in Gesher by a user - do not re-create it from Pipedrive
+            result.skipped++;
+            continue;
+          }
+
+          const { lead, isNew } = upsert;
 
           if (isNew) {
             result.created++;
           } else {
             result.updated++;
+          }
+
+          if (upsert.restored) {
+            console.warn(`[PipedriveSync] Restored lead ${lead.id} previously removed by sync (Pipedrive lead ${pipedriveLead.id})`);
           }
 
           // Sync notes from Pipedrive for this lead (using lead_id for Leads Inbox)
@@ -588,9 +645,9 @@ class PipedriveSyncService {
           const localLeadIds = await leadsRepository.getAllPipedriveLeadIds();
 
           // Find IDs that exist locally but not in Pipedrive
-          const deletedIds = localLeadIds.filter(
-            (localLead) => !pipedriveLeadIds.has(localLead.pipedriveLeadId)
-          );
+          const deletedIds = this.canReconcileDeletions('lead', options, leadsComplete, pipedriveLeadIds.size, localLeadIds.length)
+            ? localLeadIds.filter((localLead) => !pipedriveLeadIds.has(localLead.pipedriveLeadId))
+            : [];
 
           if (deletedIds.length > 0) {
             // Soft delete by pipedrive_lead_id
@@ -655,17 +712,14 @@ class PipedriveSyncService {
 
     try {
       // Fetch all deals from Pipedrive
-      const pipedriveDeals = await pipedriveRateLimiter.execute(() =>
-        retryWithBackoff(
-          () => pipedriveProvider.getDeals(connectionId, {
-            limit: 500,
-          }),
-          { shouldRetry: isRetryableError }
-        )
+      const { items: pipedriveDeals } = await pipedriveProvider.getAllDeals(
+        connectionId,
+        undefined,
+        runPipedriveRequest
       );
 
       // Fetch pipelines for names
-      const pipelines = await pipedriveRateLimiter.execute(() =>
+      const pipelines = await runPipedriveRequest(() =>
         pipedriveProvider.getPipelines(connectionId)
       );
 
@@ -760,38 +814,23 @@ class PipedriveSyncService {
 
     try {
       // Fetch all deals from Pipedrive with rate limiting
-      const pipedriveDeals = await pipedriveRateLimiter.execute(() =>
-        retryWithBackoff(
-          () => pipedriveProvider.getDeals(connectionId, {
-            sinceDate: options.sinceDate,
-            limit: 500,
-          }),
-          { shouldRetry: isRetryableError }
-        )
+      const { items: pipedriveDeals, complete: dealsComplete } = await pipedriveProvider.getAllDeals(
+        connectionId,
+        undefined,
+        runPipedriveRequest
       );
 
       // Fetch contacts (persons) for enrichment
-      const contacts = await pipedriveRateLimiter.execute(() =>
-        retryWithBackoff(
-          () => pipedriveProvider.getContacts(connectionId, {
-            limit: 500,
-          }),
-          { shouldRetry: isRetryableError }
-        )
-      );
+      const { items: contacts } = await pipedriveProvider.getAllContacts(connectionId, runPipedriveRequest);
 
       // Fetch organizations for enrichment
-      const organizations = await pipedriveRateLimiter.execute(() =>
-        retryWithBackoff(
-          () => pipedriveProvider.getOrganizations(connectionId, {
-            limit: 500,
-          }),
-          { shouldRetry: isRetryableError }
-        )
+      const { items: organizations } = await pipedriveProvider.getAllOrganizations(
+        connectionId,
+        runPipedriveRequest
       );
 
       // Fetch pipelines and stages for names
-      const pipelines = await pipedriveRateLimiter.execute(() =>
+      const pipelines = await runPipedriveRequest(() =>
         pipedriveProvider.getPipelines(connectionId)
       );
 
@@ -862,12 +901,16 @@ class PipedriveSyncService {
           );
 
           // Upsert deal
-          const { deal: savedDeal, isNew } = await dealsRepository.upsertFromPipedrive(dealDto);
+          const { deal: savedDeal, isNew, restored } = await dealsRepository.upsertFromPipedrive(dealDto);
 
           if (isNew) {
             result.created++;
           } else {
             result.updated++;
+          }
+
+          if (restored) {
+            console.warn(`[PipedriveSync] Restored soft-deleted deal ${savedDeal.id} (Pipedrive deal ${pipedriveDealId} still exists)`);
           }
 
           // Sync notes from Pipedrive for this deal
@@ -906,16 +949,22 @@ class PipedriveSyncService {
         }
       }
 
-      // Clean up deleted deals (deals in our DB but not in Pipedrive anymore)
-      if (options.cleanupDeleted !== false) {
+      // Clean up deleted deals (deals in our DB but not in Pipedrive anymore).
+      // Disabled until archived deals can be listed: see ARCHIVED_DEALS_LISTABLE.
+      if (options.cleanupDeleted !== false && !ARCHIVED_DEALS_LISTABLE) {
+        console.warn(
+          '[PipedriveSync] Skipping deal deletion cleanup: archived deals cannot be listed yet, ' +
+            'so a deal missing from GET /v1/deals may only be archived (enable after the v2 migration)'
+        );
+      } else if (options.cleanupDeleted !== false) {
         try {
           // Get all local deals with pipedrive_deal_id
           const localPipedriveDealIds = await dealsRepository.getAllPipedriveDealIds();
 
           // Find IDs that exist locally but not in Pipedrive (deleted from Pipedrive)
-          const deletedIds = localPipedriveDealIds.filter(
-            id => !pipedriveDealIds.has(id)
-          );
+          const deletedIds = this.canReconcileDeletions('deal', options, dealsComplete, pipedriveDealIds.size, localPipedriveDealIds.length)
+            ? localPipedriveDealIds.filter((id) => !pipedriveDealIds.has(id))
+            : [];
 
           if (deletedIds.length > 0) {
             const deletedCount = await dealsRepository.softDeleteByPipedriveDealIds(deletedIds);
@@ -956,7 +1005,7 @@ class PipedriveSyncService {
 
     try {
       // Fetch the deal
-      const deal = await pipedriveRateLimiter.execute(() =>
+      const deal = await runPipedriveRequest(() =>
         pipedriveProvider.getDeal(connectionId, pipedriveDealId.toString())
       );
 
@@ -967,7 +1016,7 @@ class PipedriveSyncService {
       // Fetch contact if linked
       let contact: CrmContact | null = null;
       if (deal.contactExternalId) {
-        contact = await pipedriveRateLimiter.execute(() =>
+        contact = await runPipedriveRequest(() =>
           pipedriveProvider.getContact(connectionId, deal.contactExternalId!)
         );
       }
@@ -975,13 +1024,13 @@ class PipedriveSyncService {
       // Fetch organization if linked
       let organization: CrmOrganization | null = null;
       if (deal.organizationExternalId) {
-        organization = await pipedriveRateLimiter.execute(() =>
+        organization = await runPipedriveRequest(() =>
           pipedriveProvider.getOrganization(connectionId, deal.organizationExternalId!)
         );
       }
 
       // Fetch pipelines for stage info
-      const pipelines = await pipedriveRateLimiter.execute(() =>
+      const pipelines = await runPipedriveRequest(() =>
         pipedriveProvider.getPipelines(connectionId)
       );
 
@@ -1110,11 +1159,11 @@ class PipedriveSyncService {
 
     try {
       // Fetch notes from Pipedrive for this lead (using lead_id for Leads Inbox)
-      const pipedriveNotes = await pipedriveRateLimiter.execute(() =>
-        pipedriveProvider.getNotes(connectionId, {
-          leadId: pipedriveLeadId, // Use lead_id instead of person_id
-          limit: 100,
-        })
+      // All pages: notes missing from this list are deleted locally below
+      const { items: pipedriveNotes, complete: notesComplete } = await pipedriveProvider.getAllNotes(
+        connectionId,
+        { leadId: pipedriveLeadId }, // Use lead_id instead of person_id
+        runPipedriveRequest
       );
 
       // Get existing notes for this lead
@@ -1160,10 +1209,11 @@ class PipedriveSyncService {
         }
       }
 
-      // Delete notes that no longer exist in Pipedrive
+      // Delete notes that no longer exist in Pipedrive - only when the note list is
+      // confirmed complete, otherwise a truncated list would delete valid notes
       const notesToDelete: number[] = [];
       for (const [pipedriveNoteId] of existingNotesMap) {
-        if (!pipedriveNoteIds.has(pipedriveNoteId)) {
+        if (notesComplete && !pipedriveNoteIds.has(pipedriveNoteId)) {
           notesToDelete.push(pipedriveNoteId);
         }
       }
@@ -1204,11 +1254,11 @@ class PipedriveSyncService {
 
     try {
       // Fetch notes from Pipedrive for this deal
-      const pipedriveNotes = await pipedriveRateLimiter.execute(() =>
-        pipedriveProvider.getNotes(connectionId, {
-          dealId: pipedriveDealId.toString(),
-          limit: 100,
-        })
+      // All pages: notes missing from this list are deleted locally below
+      const { items: pipedriveNotes, complete: notesComplete } = await pipedriveProvider.getAllNotes(
+        connectionId,
+        { dealId: pipedriveDealId.toString() },
+        runPipedriveRequest
       );
 
       // Get existing notes for this deal
@@ -1254,10 +1304,11 @@ class PipedriveSyncService {
         }
       }
 
-      // Delete notes that no longer exist in Pipedrive
+      // Delete notes that no longer exist in Pipedrive - only when the note list is
+      // confirmed complete, otherwise a truncated list would delete valid notes
       const notesToDelete: number[] = [];
       for (const [pipedriveNoteId] of existingNotesMap) {
-        if (!pipedriveNoteIds.has(pipedriveNoteId)) {
+        if (notesComplete && !pipedriveNoteIds.has(pipedriveNoteId)) {
           notesToDelete.push(pipedriveNoteId);
         }
       }
@@ -1305,7 +1356,8 @@ class PipedriveSyncService {
       addressCountry: organizationDetails?.address?.country || null,
       // Pipedrive Leads have UUID id - store it in pipedriveLeadId
       pipedriveLeadId: lead.id, // UUID from Leads Inbox
-      pipedriveLabels: labels || null, // Labels like "HOT", "WARM", etc.
+      // Labels like "HOT", "WARM". undefined (labels unavailable) leaves stored labels untouched
+      pipedriveLabels: labels,
       pipedrivePersonId: lead.person_id || null,
       pipedriveOrgId: lead.organization_id || null,
       dealTitle: lead.title,
@@ -1330,7 +1382,7 @@ class PipedriveSyncService {
 
     try {
       // Fetch the deal
-      const deal = await pipedriveRateLimiter.execute(() =>
+      const deal = await runPipedriveRequest(() =>
         pipedriveProvider.getDeal(connectionId, pipedriveDealId.toString())
       );
 
@@ -1341,7 +1393,7 @@ class PipedriveSyncService {
       // Fetch the person if linked
       let person: CrmContact | null = null;
       if (deal.contactExternalId) {
-        person = await pipedriveRateLimiter.execute(() =>
+        person = await runPipedriveRequest(() =>
           pipedriveProvider.getContact(connectionId, deal.contactExternalId!)
         );
       }
@@ -1349,7 +1401,7 @@ class PipedriveSyncService {
       // Fetch the organization if linked
       let organization: CrmOrganization | null = null;
       if (deal.organizationExternalId) {
-        organization = await pipedriveRateLimiter.execute(() =>
+        organization = await runPipedriveRequest(() =>
           pipedriveProvider.getOrganization(connectionId, deal.organizationExternalId!)
         );
       }
@@ -1515,7 +1567,7 @@ class PipedriveSyncService {
       throw new Error('Pipedrive is not connected');
     }
 
-    const pipelines = await pipedriveRateLimiter.execute(() =>
+    const pipelines = await runPipedriveRequest(() =>
       pipedriveProvider.getPipelines(connectionId)
     );
 
@@ -1650,16 +1702,21 @@ class PipedriveSyncService {
    */
   private async logSync(entry: SyncLogEntry): Promise<void> {
     try {
-      await db.from('pipedrive_sync_log').insert({
+      // Supabase returns insert errors instead of throwing - check explicitly
+      const { error } = await db.from('pipedrive_sync_log').insert({
         event_type: entry.eventType,
         direction: entry.direction,
         entity_type: entry.entityType,
-        entity_id: entry.entityId || null,
-        pipedrive_id: entry.pipedriveId || null,
+        entity_id: toEntityUuid(entry.entityId),
+        pipedrive_id: toPipedriveId(entry.pipedriveId),
         payload: entry.payload ? JSON.stringify(entry.payload) : null,
         status: entry.status,
         error_message: entry.errorMessage || null,
       });
+
+      if (error) {
+        console.error('[PipedriveSync] Failed to write sync log:', error.message);
+      }
     } catch (error) {
       console.error('Failed to log sync:', error);
     }

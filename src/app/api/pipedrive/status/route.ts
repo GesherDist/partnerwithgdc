@@ -4,12 +4,23 @@
  * GET /api/pipedrive/status
  *
  * Returns the current Pipedrive connection status for the UI.
+ * Requires a signed-in user allowed to manage the integration.
  */
 
 import { NextResponse } from 'next/server';
-import { pipedriveProvider } from '@/modules/integrations/providers/crm/pipedrive';
+import { requirePermission } from '@/shared/lib/auth/check-permission';
+import {
+  pipedriveProvider,
+  PIPEDRIVE_MANAGE_PERMISSION,
+} from '@/modules/integrations/providers/crm/pipedrive';
 
 export async function GET() {
+  // /api routes bypass the auth middleware, so check here
+  const guard = await requirePermission(PIPEDRIVE_MANAGE_PERMISSION);
+  if (guard.response) {
+    return guard.response;
+  }
+
   try {
     const status = await pipedriveProvider.getConnectionStatus();
 

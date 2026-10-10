@@ -45,7 +45,16 @@ import {
   PIPEDRIVE_SCOPES,
   PIPEDRIVE_ERRORS,
   PIPEDRIVE_DEFAULT_PAGE_SIZE,
+  PIPEDRIVE_MAX_PAGE_SIZE,
+  PIPEDRIVE_MAX_PAGES,
+  PIPEDRIVE_TOKEN_REFRESH_BUFFER_MS,
 } from './constants';
+import {
+  PipedriveApiError,
+  isPipedriveApiError,
+  isPipedriveNotFound,
+  parseRetryAfter,
+} from './errors';
 import type {
   PipedriveConnectionMetadata,
   PipedrivePerson,
@@ -58,6 +67,47 @@ import type {
   PipedriveStage,
   PipedriveApiResponse,
 } from './types';
+
+// ============================================
+// PAGINATION TYPES
+// ============================================
+
+interface PipedrivePagination {
+  start?: number;
+  limit?: number;
+  more_items_in_collection?: boolean;
+  next_start?: number;
+}
+
+/**
+ * Result of a full-collection read. `complete` is true only when Pipedrive
+ * explicitly reported the end of the collection; only then may callers treat
+ * records missing from `items` as deleted.
+ */
+export interface PipedriveListResult<T> {
+  items: T[];
+  complete: boolean;
+}
+
+/**
+ * Wraps each page request, letting callers apply rate limiting and retries
+ * per request rather than around a whole multi-page read.
+ */
+export type PageRequestRunner = <R>(request: () => Promise<R>) => Promise<R>;
+
+/**
+ * Access token plus the connection it belongs to, so a request that gets a 401
+ * can refresh that connection's token and retry.
+ */
+/** Pipedrive REST API generation used for a request */
+export type PipedriveApiVersion = 'v1' | 'v2';
+
+export interface PipedriveTokenInfo {
+  connectionId: string;
+  accessToken: string;
+  externalAccountId: string;
+  environment: string;
+}
 
 // ============================================
 // PROVIDER METADATA
@@ -82,6 +132,9 @@ export class PipedriveProvider implements ICrmProvider {
   readonly metadata: ProviderMetadata = PIPEDRIVE_METADATA;
 
   private integrationId: string | null = null;
+
+  /** In-flight token refreshes, so concurrent requests share one refresh */
+  private refreshInFlight = new Map<string, Promise<void>>();
 
   // ============================================
   // INITIALIZATION
@@ -145,6 +198,8 @@ export class PipedriveProvider implements ICrmProvider {
       companyDomain: userInfo.company_domain,
       userId: userInfo.id,
       userName: userInfo.name,
+      // Granted scopes come from the app's Developer Hub settings, not the auth URL
+      grantedScopes: (tokenResponse.scope ?? '').split(/[\s,]+/).filter(Boolean),
     };
 
     // Store connection
@@ -217,18 +272,37 @@ export class PipedriveProvider implements ICrmProvider {
     return status.connected;
   }
 
-  async refreshTokenIfNeeded(connectionId: string): Promise<void> {
+  /**
+   * Refresh the access token when it is close to expiry, or always with `force`
+   * (used after Pipedrive answers 401 for a token we still considered valid).
+   */
+  async refreshTokenIfNeeded(connectionId: string, options: { force?: boolean } = {}): Promise<void> {
+    // Share one refresh between concurrent callers in this instance to avoid
+    // redundant token requests. (Pipedrive reissues the same refresh token, so
+    // refreshes from other instances do not invalidate each other.)
+    const inFlight = this.refreshInFlight.get(connectionId);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const refresh = this.performTokenRefresh(connectionId, options.force ?? false).finally(() => {
+      this.refreshInFlight.delete(connectionId);
+    });
+    this.refreshInFlight.set(connectionId, refresh);
+    return refresh;
+  }
+
+  private async performTokenRefresh(connectionId: string, force: boolean): Promise<void> {
     const connection = await this.getConnection(connectionId);
 
-    if (!connection || !connection.token_expires_at || !connection.refresh_token) {
+    if (!connection || !connection.refresh_token) {
       return;
     }
 
-    const expiresAt = new Date(connection.token_expires_at);
-    const buffer = 5 * 60 * 1000;
+    const expiresAt = new Date(connection.token_expires_at ?? 0);
     const now = new Date();
 
-    if (expiresAt.getTime() - now.getTime() > buffer) {
+    if (!force && expiresAt.getTime() - now.getTime() > PIPEDRIVE_TOKEN_REFRESH_BUFFER_MS) {
       return;
     }
 
@@ -247,15 +321,31 @@ export class PipedriveProvider implements ICrmProvider {
         tokenExpiresAt
       );
     } catch (error) {
-      console.error('Token refresh failed:', error);
-      await updateConnectionStatus(connectionId, 'error', 'Token refresh failed');
+      // Pipedrive rejected the refresh token: access was revoked or the token
+      // expired (unused for 60 days). Only a new OAuth connection can fix this.
+      const rejected =
+        isPipedriveApiError(error) && (error.status === 400 || error.status === 401);
+      if (rejected) {
+        console.error('[Pipedrive] Refresh token rejected; reauthorization required:', error);
+        await updateConnectionStatus(connectionId, 'error', PIPEDRIVE_ERRORS.REAUTHORIZATION_REQUIRED);
+        throw error;
+      }
+
+      if (!force && expiresAt.getTime() > Date.now()) {
+        // Early refresh failed transiently but the current token is still valid -
+        // keep using it and retry on the next request.
+        console.warn('[Pipedrive] Early token refresh failed; current token still valid:', error);
+        return;
+      }
+
+      // Transient failure (network, Pipedrive 5xx): surface it to the caller but
+      // do not mark the connection broken - the next request retries the refresh.
+      console.error('[Pipedrive] Token refresh failed (transient):', error);
       throw error;
     }
   }
 
-  async getAccessToken(
-    connectionId: string
-  ): Promise<{ accessToken: string; externalAccountId: string; environment: string } | null> {
+  async getAccessToken(connectionId: string): Promise<PipedriveTokenInfo | null> {
     const connection = await this.getConnection(connectionId);
 
     if (!connection || connection.status !== 'connected' || !connection.access_token) {
@@ -264,7 +354,8 @@ export class PipedriveProvider implements ICrmProvider {
 
     if (connection.token_expires_at) {
       const expiresAt = new Date(connection.token_expires_at);
-      if (expiresAt <= new Date()) {
+      // Refresh ahead of expiry so a token never lapses mid-request or mid-sync
+      if (expiresAt.getTime() - Date.now() <= PIPEDRIVE_TOKEN_REFRESH_BUFFER_MS) {
         await this.refreshTokenIfNeeded(connectionId);
         const updatedConnection = await this.getConnection(connectionId);
         if (!updatedConnection?.access_token) {
@@ -273,6 +364,7 @@ export class PipedriveProvider implements ICrmProvider {
 
         const metadata = updatedConnection.metadata as PipedriveConnectionMetadata;
         return {
+          connectionId,
           accessToken: decrypt(updatedConnection.access_token),
           externalAccountId: updatedConnection.external_account_id ?? '',
           environment: metadata?.apiDomain ?? '',
@@ -282,6 +374,7 @@ export class PipedriveProvider implements ICrmProvider {
 
     const metadata = connection.metadata as PipedriveConnectionMetadata;
     return {
+      connectionId,
       accessToken: decrypt(connection.access_token),
       externalAccountId: connection.external_account_id ?? '',
       environment: metadata?.apiDomain ?? '',
@@ -387,8 +480,7 @@ export class PipedriveProvider implements ICrmProvider {
     }
 
     const response = await this.apiRequest<PipedrivePerson[]>(
-      tokenInfo.environment,
-      tokenInfo.accessToken,
+      tokenInfo,
       `persons?${params.toString()}`
     );
 
@@ -403,15 +495,18 @@ export class PipedriveProvider implements ICrmProvider {
 
     try {
       const response = await this.apiRequest<PipedrivePerson>(
-        tokenInfo.environment,
-        tokenInfo.accessToken,
+        tokenInfo,
         `persons/${externalId}`
       );
 
       if (!response.data) {return null;}
       return this.mapPipedriveContact(response.data);
-    } catch {
-      return null;
+    } catch (error) {
+      // Only a missing record maps to null; auth, rate-limit and server errors must surface
+      if (isPipedriveNotFound(error)) {
+        return null;
+      }
+      throw error;
     }
   }
 
@@ -431,8 +526,7 @@ export class PipedriveProvider implements ICrmProvider {
     };
 
     const response = await this.apiRequest<PipedrivePerson>(
-      tokenInfo.environment,
-      tokenInfo.accessToken,
+      tokenInfo,
       'persons',
       'POST',
       pipedriveContact
@@ -463,8 +557,7 @@ export class PipedriveProvider implements ICrmProvider {
     }
 
     const response = await this.apiRequest<PipedrivePerson>(
-      tokenInfo.environment,
-      tokenInfo.accessToken,
+      tokenInfo,
       `persons/${externalId}`,
       'PUT',
       pipedriveContact
@@ -480,8 +573,7 @@ export class PipedriveProvider implements ICrmProvider {
     }
 
     await this.apiRequest(
-      tokenInfo.environment,
-      tokenInfo.accessToken,
+      tokenInfo,
       `persons/${externalId}`,
       'DELETE'
     );
@@ -529,8 +621,7 @@ export class PipedriveProvider implements ICrmProvider {
     });
 
     const response = await this.apiRequest<PipedriveOrganization[]>(
-      tokenInfo.environment,
-      tokenInfo.accessToken,
+      tokenInfo,
       `organizations?${params.toString()}`
     );
 
@@ -545,15 +636,18 @@ export class PipedriveProvider implements ICrmProvider {
 
     try {
       const response = await this.apiRequest<PipedriveOrganization>(
-        tokenInfo.environment,
-        tokenInfo.accessToken,
+        tokenInfo,
         `organizations/${externalId}`
       );
 
       if (!response.data) {return null;}
       return this.mapPipedriveOrganization(response.data);
-    } catch {
-      return null;
+    } catch (error) {
+      // Only a missing record maps to null; auth, rate-limit and server errors must surface
+      if (isPipedriveNotFound(error)) {
+        return null;
+      }
+      throw error;
     }
   }
 
@@ -599,8 +693,7 @@ export class PipedriveProvider implements ICrmProvider {
     }
 
     const response = await this.apiRequest<PipedriveOrganization>(
-      tokenInfo.environment,
-      tokenInfo.accessToken,
+      tokenInfo,
       'organizations',
       'POST',
       pipedriveOrg
@@ -654,8 +747,7 @@ export class PipedriveProvider implements ICrmProvider {
     }
 
     const response = await this.apiRequest<PipedriveOrganization>(
-      tokenInfo.environment,
-      tokenInfo.accessToken,
+      tokenInfo,
       `organizations/${externalId}`,
       'PUT',
       pipedriveOrg
@@ -671,8 +763,7 @@ export class PipedriveProvider implements ICrmProvider {
     }
 
     await this.apiRequest(
-      tokenInfo.environment,
-      tokenInfo.accessToken,
+      tokenInfo,
       `organizations/${externalId}`,
       'DELETE'
     );
@@ -727,8 +818,7 @@ export class PipedriveProvider implements ICrmProvider {
     }
 
     const response = await this.apiRequest<PipedriveDeal[]>(
-      tokenInfo.environment,
-      tokenInfo.accessToken,
+      tokenInfo,
       `deals?${params.toString()}`
     );
 
@@ -743,15 +833,18 @@ export class PipedriveProvider implements ICrmProvider {
 
     try {
       const response = await this.apiRequest<PipedriveDeal>(
-        tokenInfo.environment,
-        tokenInfo.accessToken,
+        tokenInfo,
         `deals/${externalId}`
       );
 
       if (!response.data) {return null;}
       return this.mapPipedriveDeal(response.data);
-    } catch {
-      return null;
+    } catch (error) {
+      // Only a missing record maps to null; auth, rate-limit and server errors must surface
+      if (isPipedriveNotFound(error)) {
+        return null;
+      }
+      throw error;
     }
   }
 
@@ -775,8 +868,7 @@ export class PipedriveProvider implements ICrmProvider {
     };
 
     const response = await this.apiRequest<PipedriveDeal>(
-      tokenInfo.environment,
-      tokenInfo.accessToken,
+      tokenInfo,
       'deals',
       'POST',
       pipedriveDeal
@@ -800,8 +892,7 @@ export class PipedriveProvider implements ICrmProvider {
     if (deal.expectedCloseDate) {pipedriveDeal.expected_close_date = deal.expectedCloseDate;}
 
     const response = await this.apiRequest<PipedriveDeal>(
-      tokenInfo.environment,
-      tokenInfo.accessToken,
+      tokenInfo,
       `deals/${externalId}`,
       'PUT',
       pipedriveDeal
@@ -817,8 +908,7 @@ export class PipedriveProvider implements ICrmProvider {
     }
 
     await this.apiRequest(
-      tokenInfo.environment,
-      tokenInfo.accessToken,
+      tokenInfo,
       `deals/${externalId}`,
       'DELETE'
     );
@@ -870,8 +960,7 @@ export class PipedriveProvider implements ICrmProvider {
     }
 
     const response = await this.apiRequest<PipedriveActivity[]>(
-      tokenInfo.environment,
-      tokenInfo.accessToken,
+      tokenInfo,
       `activities?${params.toString()}`
     );
 
@@ -896,8 +985,7 @@ export class PipedriveProvider implements ICrmProvider {
     };
 
     const response = await this.apiRequest<PipedriveActivity>(
-      tokenInfo.environment,
-      tokenInfo.accessToken,
+      tokenInfo,
       'activities',
       'POST',
       pipedriveActivity
@@ -922,8 +1010,7 @@ export class PipedriveProvider implements ICrmProvider {
     if (activity.done !== undefined) {pipedriveActivity.done = activity.done;}
 
     const response = await this.apiRequest<PipedriveActivity>(
-      tokenInfo.environment,
-      tokenInfo.accessToken,
+      tokenInfo,
       `activities/${externalId}`,
       'PUT',
       pipedriveActivity
@@ -939,8 +1026,7 @@ export class PipedriveProvider implements ICrmProvider {
     }
 
     await this.apiRequest(
-      tokenInfo.environment,
-      tokenInfo.accessToken,
+      tokenInfo,
       `activities/${externalId}`,
       'DELETE'
     );
@@ -977,8 +1063,7 @@ export class PipedriveProvider implements ICrmProvider {
     }
 
     const response = await this.apiRequest<PipedriveNote[]>(
-      tokenInfo.environment,
-      tokenInfo.accessToken,
+      tokenInfo,
       `notes?${params.toString()}`
     );
 
@@ -1001,8 +1086,7 @@ export class PipedriveProvider implements ICrmProvider {
     };
 
     const response = await this.apiRequest<PipedriveNote>(
-      tokenInfo.environment,
-      tokenInfo.accessToken,
+      tokenInfo,
       'notes',
       'POST',
       pipedriveNote
@@ -1022,8 +1106,7 @@ export class PipedriveProvider implements ICrmProvider {
     if (note.pinnedToTop !== undefined) {pipedriveNote.pinned_to_deal_flag = note.pinnedToTop;}
 
     const response = await this.apiRequest<PipedriveNote>(
-      tokenInfo.environment,
-      tokenInfo.accessToken,
+      tokenInfo,
       `notes/${externalId}`,
       'PUT',
       pipedriveNote
@@ -1039,8 +1122,7 @@ export class PipedriveProvider implements ICrmProvider {
     }
 
     await this.apiRequest(
-      tokenInfo.environment,
-      tokenInfo.accessToken,
+      tokenInfo,
       `notes/${externalId}`,
       'DELETE'
     );
@@ -1058,13 +1140,11 @@ export class PipedriveProvider implements ICrmProvider {
 
     const [pipelinesResponse, stagesResponse] = await Promise.all([
       this.apiRequest<PipedrivePipeline[]>(
-        tokenInfo.environment,
-        tokenInfo.accessToken,
+        tokenInfo,
         'pipelines'
       ),
       this.apiRequest<PipedriveStage[]>(
-        tokenInfo.environment,
-        tokenInfo.accessToken,
+        tokenInfo,
         'stages'
       ),
     ]);
@@ -1096,6 +1176,185 @@ export class PipedriveProvider implements ICrmProvider {
   }
 
   // ============================================
+  // GENERIC REQUESTS (used by the GDC CRM services)
+  // ============================================
+  // Same auth, refresh and error handling as the typed methods. Use v2 for
+  // entities whose v1 endpoints are deprecated (deals, persons, organizations,
+  // pipelines, stages, activities, products, fields, search).
+
+  async request<T>(
+    connectionId: string,
+    method: string,
+    endpoint: string,
+    body?: unknown,
+    version: PipedriveApiVersion = 'v2'
+  ): Promise<PipedriveApiResponse<T>> {
+    const tokenInfo = await this.getAccessToken(connectionId);
+    if (!tokenInfo) {
+      throw new Error(PIPEDRIVE_ERRORS.NOT_CONNECTED);
+    }
+    return this.apiRequest<T>(tokenInfo, endpoint, method, body, version);
+  }
+
+  /**
+   * Read every page of a v2 list endpoint (cursor pagination).
+   * `complete` is true only when Pipedrive returned `next_cursor: null`.
+   */
+  async fetchAllV2<T>(
+    connectionId: string,
+    endpoint: string,
+    params: URLSearchParams = new URLSearchParams(),
+    runRequest: PageRequestRunner = (fn) => fn()
+  ): Promise<PipedriveListResult<T>> {
+    const items: T[] = [];
+    let cursor: string | null = null;
+
+    for (let page = 0; page < PIPEDRIVE_MAX_PAGES; page++) {
+      const pageParams = new URLSearchParams(params);
+      pageParams.set('limit', String(PIPEDRIVE_MAX_PAGE_SIZE));
+      if (cursor) {
+        pageParams.set('cursor', cursor);
+      }
+
+      const response = await runRequest(() =>
+        this.request<T[] | null>(connectionId, 'GET', `${endpoint}?${pageParams.toString()}`)
+      );
+      const pageItems = response.data || [];
+      items.push(...pageItems);
+
+      const additional = response.additional_data as { next_cursor?: string | null } | undefined;
+      if (additional && 'next_cursor' in additional) {
+        if (additional.next_cursor === null) {
+          return { items, complete: true };
+        }
+        if (!additional.next_cursor) {
+          throw new Error(`Pipedrive v2 pagination returned an empty cursor on ${endpoint}`);
+        }
+        cursor = additional.next_cursor;
+        continue;
+      }
+
+      // No cursor metadata: usable items, but never proof of completeness
+      return { items, complete: false };
+    }
+
+    throw new Error(`Pipedrive v2 pagination for ${endpoint} exceeded ${PIPEDRIVE_MAX_PAGES} pages`);
+  }
+
+  /**
+   * Read every page of a v1 list endpoint (offset pagination).
+   */
+  async fetchAllV1<T>(
+    connectionId: string,
+    endpoint: string,
+    params: URLSearchParams = new URLSearchParams(),
+    runRequest?: PageRequestRunner
+  ): Promise<PipedriveListResult<T>> {
+    return this.fetchAllPages<T>(connectionId, endpoint, params, runRequest);
+  }
+
+  // ============================================
+  // FULL COLLECTION READS (all pages)
+  // ============================================
+  // Use these whenever the result is used to detect deletions. They throw
+  // instead of returning a partial list.
+
+  async getAllContacts(
+    connectionId: string,
+    runRequest?: PageRequestRunner
+  ): Promise<PipedriveListResult<CrmContact>> {
+    const persons = await this.fetchAllPages<PipedrivePerson>(
+      connectionId,
+      'persons',
+      new URLSearchParams(),
+      runRequest
+    );
+    return { items: persons.items.map(this.mapPipedriveContact), complete: persons.complete };
+  }
+
+  async getAllOrganizations(
+    connectionId: string,
+    runRequest?: PageRequestRunner
+  ): Promise<PipedriveListResult<CrmOrganization>> {
+    const organizations = await this.fetchAllPages<PipedriveOrganization>(
+      connectionId,
+      'organizations',
+      new URLSearchParams(),
+      runRequest
+    );
+    return {
+      items: organizations.items.map(this.mapPipedriveOrganization),
+      complete: organizations.complete,
+    };
+  }
+
+  async getAllDeals(
+    connectionId: string,
+    options?: { status?: string },
+    runRequest?: PageRequestRunner
+  ): Promise<PipedriveListResult<CrmDeal>> {
+    const params = new URLSearchParams();
+    if (options?.status) {
+      params.set('status', options.status);
+    }
+
+    const deals = await this.fetchAllPages<PipedriveDeal>(connectionId, 'deals', params, runRequest);
+    return { items: deals.items.map(this.mapPipedriveDeal), complete: deals.complete };
+  }
+
+  /**
+   * Since Jul 15, 2025 GET /v1/leads ignores `archived_status` and returns only
+   * not-archived leads; archived leads are listed by GET /v1/leads/archived.
+   */
+  async getAllLeads(
+    connectionId: string,
+    options?: { archived?: boolean },
+    runRequest?: PageRequestRunner
+  ): Promise<PipedriveListResult<PipedriveLead>> {
+    if (options?.archived) {
+      return this.fetchAllPages<PipedriveLead>(
+        connectionId,
+        'leads/archived',
+        new URLSearchParams(),
+        runRequest
+      );
+    }
+
+    const params = new URLSearchParams({
+      include: 'person,organization',
+    });
+
+    return this.fetchAllPages<PipedriveLead>(connectionId, 'leads', params, runRequest);
+  }
+
+  async getAllNotes(
+    connectionId: string,
+    options: { contactId?: string; dealId?: string; organizationId?: string; leadId?: string },
+    runRequest?: PageRequestRunner
+  ): Promise<PipedriveListResult<CrmNote>> {
+    const params = new URLSearchParams();
+    if (options.dealId) {
+      params.set('deal_id', options.dealId);
+    }
+    if (options.contactId) {
+      params.set('person_id', options.contactId);
+    }
+    if (options.organizationId) {
+      params.set('org_id', options.organizationId);
+    }
+    if (options.leadId) {
+      params.set('lead_id', options.leadId);
+    }
+
+    if ([...params.keys()].length === 0) {
+      throw new Error('getAllNotes requires a deal, person, organization or lead filter');
+    }
+
+    const notes = await this.fetchAllPages<PipedriveNote>(connectionId, 'notes', params, runRequest);
+    return { items: notes.items.map(this.mapPipedriveNote), complete: notes.complete };
+  }
+
+  // ============================================
   // LEADS (Leads Inbox - different from Persons)
   // ============================================
 
@@ -1121,8 +1380,7 @@ export class PipedriveProvider implements ICrmProvider {
     });
 
     const response = await this.apiRequest<PipedriveLead[]>(
-      tokenInfo.environment,
-      tokenInfo.accessToken,
+      tokenInfo,
       `leads?${params.toString()}`
     );
 
@@ -1140,14 +1398,17 @@ export class PipedriveProvider implements ICrmProvider {
 
     try {
       const response = await this.apiRequest<PipedriveLead>(
-        tokenInfo.environment,
-        tokenInfo.accessToken,
+        tokenInfo,
         `leads/${leadId}`
       );
 
       return response.data || null;
-    } catch {
-      return null;
+    } catch (error) {
+      // Only a missing record maps to null; auth, rate-limit and server errors must surface
+      if (isPipedriveNotFound(error)) {
+        return null;
+      }
+      throw error;
     }
   }
 
@@ -1208,8 +1469,7 @@ export class PipedriveProvider implements ICrmProvider {
         }
 
         const orgResponse = await this.apiRequest<PipedriveOrganization>(
-          tokenInfo.environment,
-          tokenInfo.accessToken,
+          tokenInfo,
           'organizations',
           'POST',
           orgData
@@ -1237,8 +1497,7 @@ export class PipedriveProvider implements ICrmProvider {
         }
 
         const personResponse = await this.apiRequest<PipedrivePerson>(
-          tokenInfo.environment,
-          tokenInfo.accessToken,
+          tokenInfo,
           'persons',
           'POST',
           personData
@@ -1274,8 +1533,7 @@ export class PipedriveProvider implements ICrmProvider {
     }
 
     const response = await this.apiRequest<PipedriveLead>(
-      tokenInfo.environment,
-      tokenInfo.accessToken,
+      tokenInfo,
       'leads',
       'POST',
       leadPayload
@@ -1291,8 +1549,7 @@ export class PipedriveProvider implements ICrmProvider {
     if (leadData.notes && personId) {
       try {
         await this.apiRequest<PipedriveNote>(
-          tokenInfo.environment,
-          tokenInfo.accessToken,
+          tokenInfo,
           'notes',
           'POST',
           {
@@ -1365,8 +1622,7 @@ export class PipedriveProvider implements ICrmProvider {
 
         if (Object.keys(personData).length > 0) {
           await this.apiRequest<PipedrivePerson>(
-            tokenInfo.environment,
-            tokenInfo.accessToken,
+            tokenInfo,
             `persons/${leadData.personId}`,
             'PUT',
             personData
@@ -1399,8 +1655,7 @@ export class PipedriveProvider implements ICrmProvider {
 
         if (Object.keys(orgData).length > 0) {
           await this.apiRequest<PipedriveOrganization>(
-            tokenInfo.environment,
-            tokenInfo.accessToken,
+            tokenInfo,
             `organizations/${leadData.orgId}`,
             'PUT',
             orgData
@@ -1433,8 +1688,7 @@ export class PipedriveProvider implements ICrmProvider {
 
       if (Object.keys(leadPayload).length > 0) {
         await this.apiRequest<PipedriveLead>(
-          tokenInfo.environment,
-          tokenInfo.accessToken,
+          tokenInfo,
           `leads/${leadId}`,
           'PATCH',
           leadPayload
@@ -1463,8 +1717,7 @@ export class PipedriveProvider implements ICrmProvider {
 
     try {
       await this.apiRequest(
-        tokenInfo.environment,
-        tokenInfo.accessToken,
+        tokenInfo,
         `leads/${leadId}`,
         'DELETE'
       );
@@ -1489,23 +1742,19 @@ export class PipedriveProvider implements ICrmProvider {
       throw new Error(PIPEDRIVE_ERRORS.NOT_CONNECTED);
     }
 
-    try {
-      const response = await this.apiRequest<Array<{ id: string; name: string; color: string }>>(
-        tokenInfo.environment,
-        tokenInfo.accessToken,
-        'leadLabels'
-      );
+    // Errors propagate: an empty map would be indistinguishable from "no labels"
+    // and callers would wipe the labels stored on leads.
+    const response = await this.apiRequest<Array<{ id: string; name: string; color: string }>>(
+      tokenInfo,
+      'leadLabels'
+    );
 
-      const labelMap = new Map<string, string>();
-      (response.data || []).forEach(label => {
-        labelMap.set(label.id, label.name);
-      });
+    const labelMap = new Map<string, string>();
+    (response.data || []).forEach(label => {
+      labelMap.set(label.id, label.name);
+    });
 
-      return labelMap;
-    } catch (error) {
-      console.error('Error fetching lead labels:', error);
-      return new Map();
-    }
+    return labelMap;
   }
 
   // ============================================
@@ -1523,31 +1772,152 @@ export class PipedriveProvider implements ICrmProvider {
   }
 
   private async apiRequest<T>(
-    apiDomain: string,
-    accessToken: string,
+    tokenInfo: PipedriveTokenInfo,
     endpoint: string,
     method: string = 'GET',
-    body?: unknown
+    body?: unknown,
+    version: PipedriveApiVersion = 'v1'
   ): Promise<PipedriveApiResponse<T>> {
-    const url = `${apiDomain}/v1/${endpoint}`;
+    const base = version === 'v2' ? `${tokenInfo.environment}/api/v2` : `${tokenInfo.environment}/v1`;
+    const send = (accessToken: string) =>
+      fetch(`${base}/${endpoint}`, {
+        method,
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
 
-    const response = await fetch(url, {
-      method,
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    });
+    let response = await send(tokenInfo.accessToken);
+
+    if (response.status === 401) {
+      // The token may have been invalidated before its recorded expiry. Force one
+      // refresh and retry; if that still fails, the access was revoked.
+      response = await this.retryAfterUnauthorized(tokenInfo, send);
+    }
 
     if (!response.ok) {
+      // Log status and path only - query strings and bodies can contain customer data
+      const path = `${version}/${endpoint.split('?')[0] ?? endpoint}`;
       const errorBody = await response.text();
-      console.error('Pipedrive API error:', errorBody);
-      throw new Error(PIPEDRIVE_ERRORS.API_ERROR);
+      console.error(
+        `[Pipedrive API] ${method} ${path} failed with HTTP ${response.status}:`,
+        errorBody.slice(0, 500)
+      );
+      throw new PipedriveApiError(
+        response.status,
+        `${method} ${path}`,
+        parseRetryAfter(response.headers.get('retry-after'))
+      );
     }
 
     return response.json();
+  }
+
+  /**
+   * Handle a 401: force a token refresh and resend once. If the refresh is
+   * rejected, performTokenRefresh has already marked the connection as needing
+   * reauthorization. If the fresh token is also rejected, mark it here.
+   * Retrying is safe for writes too: a 401 means the request was not processed.
+   */
+  private async retryAfterUnauthorized(
+    tokenInfo: PipedriveTokenInfo,
+    send: (accessToken: string) => Promise<Response>
+  ): Promise<Response> {
+    await this.refreshTokenIfNeeded(tokenInfo.connectionId, { force: true });
+
+    const refreshed = await this.getConnection(tokenInfo.connectionId);
+    if (!refreshed?.access_token || refreshed.status !== 'connected') {
+      throw new PipedriveApiError(401, 'token refresh');
+    }
+
+    const response = await send(decrypt(refreshed.access_token));
+
+    if (response.status === 401) {
+      console.error('[Pipedrive API] Fresh access token rejected; marking connection for reauthorization');
+      await updateConnectionStatus(
+        tokenInfo.connectionId,
+        'error',
+        PIPEDRIVE_ERRORS.REAUTHORIZATION_REQUIRED
+      );
+    }
+
+    return response;
+  }
+
+  /**
+   * Fetch every page of a list endpoint.
+   *
+   * Pipedrive reports pagination in additional_data.pagination (persons, deals,
+   * organizations, notes) or directly in additional_data (leads). Throws if the
+   * collection cannot be read completely, so callers never reconcile deletions
+   * against a partial list.
+   */
+  private async fetchAllPages<T>(
+    connectionId: string,
+    endpoint: string,
+    params: URLSearchParams,
+    runRequest: PageRequestRunner = (fn) => fn()
+  ): Promise<PipedriveListResult<T>> {
+    const items: T[] = [];
+    const limit = PIPEDRIVE_MAX_PAGE_SIZE;
+    let start = 0;
+
+    for (let page = 0; page < PIPEDRIVE_MAX_PAGES; page++) {
+      const pageParams = new URLSearchParams(params);
+      pageParams.set('start', String(start));
+      pageParams.set('limit', String(limit));
+
+      const response = await runRequest(async () => {
+        // Re-read the token per page so long syncs survive a refresh
+        const tokenInfo = await this.getAccessToken(connectionId);
+        if (!tokenInfo) {
+          throw new Error(PIPEDRIVE_ERRORS.NOT_CONNECTED);
+        }
+
+        return this.apiRequest<T[] | null>(
+          tokenInfo,
+          `${endpoint}?${pageParams.toString()}`
+        );
+      });
+
+      const pageItems = response.data || [];
+      items.push(...pageItems);
+
+      const additional = response.additional_data as
+        | (PipedrivePagination & { pagination?: PipedrivePagination })
+        | undefined;
+      const pagination = additional?.pagination ?? additional;
+      const moreItems = pagination?.more_items_in_collection;
+
+      if (moreItems === false) {
+        // Pipedrive positively confirmed the end of the collection
+        return { items, complete: true };
+      }
+
+      if (moreItems === undefined && pageItems.length < limit) {
+        // No pagination metadata: a short page probably means the end, but the
+        // API may have capped the page size. Return the items for upserts, but
+        // never let callers treat this list as proof that other records were deleted.
+        console.warn(
+          `[Pipedrive] ${endpoint}: no pagination metadata; list marked incomplete (deletion cleanup will be skipped)`
+        );
+        return { items, complete: false };
+      }
+
+      if (pageItems.length === 0) {
+        // Pipedrive claims more items but returned none - refuse to guess
+        throw new Error(`Pipedrive pagination stalled on ${endpoint} at start=${start}`);
+      }
+
+      start = pagination?.next_start ?? start + pageItems.length;
+    }
+
+    throw new Error(
+      `Pipedrive pagination for ${endpoint} exceeded ${PIPEDRIVE_MAX_PAGES} pages; aborting to avoid a partial sync`
+    );
   }
 
   private mapPipedriveContact(person: PipedrivePerson): CrmContact {

@@ -4,18 +4,29 @@
  * POST /api/pipedrive/disconnect
  *
  * Disconnects the Pipedrive integration:
+ * - Requires a signed-in user allowed to manage the integration
  * - Revokes token at Pipedrive (best effort)
  * - Removes connection from database
  */
 
 import { NextResponse } from 'next/server';
-import { pipedriveProvider } from '@/modules/integrations/providers/crm/pipedrive';
+import { requirePermission } from '@/shared/lib/auth/check-permission';
+import {
+  pipedriveProvider,
+  PIPEDRIVE_MANAGE_PERMISSION,
+} from '@/modules/integrations/providers/crm/pipedrive';
 import {
   getIntegrationByProvider,
   getConnectionByIntegrationId,
 } from '@/modules/integrations/core/repositories';
 
 export async function POST() {
+  // /api routes bypass the auth middleware, so check here
+  const guard = await requirePermission(PIPEDRIVE_MANAGE_PERMISSION);
+  if (guard.response) {
+    return guard.response;
+  }
+
   try {
     // Get the current Pipedrive connection
     const integration = await getIntegrationByProvider('pipedrive');

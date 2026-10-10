@@ -32,6 +32,7 @@ import { getCustomer } from '../actions';
 import { formatCreditLimit } from '../lib/schemas';
 import { CustomerContactsList } from './CustomerContactsList';
 import { pushCustomerLTVToPipedrive } from '@/features/pipedrive/actions';
+import { syncCustomerToPipedriveAction, publishPurchaseHistoryAction } from '@/features/pipedrive/gdc/actions';
 import type { Customer } from '../types';
 import { toast } from 'sonner';
 import {
@@ -127,6 +128,8 @@ function AddressCard({ label, address, icon }: {
 
 function CustomerDetailsTab({ customer }: { customer: Customer }) {
   const [isPushingLTV, startPushLTV] = useTransition();
+  const [isSyncingOrg, startSyncOrg] = useTransition();
+  const [isPublishingHistory, startPublishHistory] = useTransition();
 
   const isPipedriveLinked = Boolean(
     customer.pipedrivePersonId || customer.pipedriveDealId || customer.pipedriveOrgId
@@ -143,6 +146,45 @@ function CustomerDetailsTab({ customer }: { customer: Customer }) {
         toast.error('Failed to sync LTV', {
           description: result.error || 'Unknown error',
         });
+      }
+    });
+  };
+
+  const handleSyncOrganization = () => {
+    startSyncOrg(async () => {
+      const result = await syncCustomerToPipedriveAction(customer.id);
+      if (result.success && result.data) {
+        const { organization, people, warnings } = result.data;
+        const review = [organization, ...people.map((p) => p.result)].filter((r) => r.status === 'needs_review');
+        if (review.length > 0) {
+          toast.warning('Pipedrive needs review', {
+            description: review.map((r) => r.reason).filter(Boolean).join('; '),
+          });
+        } else {
+          toast.success(`Organization ${organization.status}; ${people.length} contact(s) synced`, {
+            description: warnings.join('; ') || undefined,
+          });
+        }
+      } else {
+        toast.error('Failed to sync to Pipedrive', { description: result.error || 'Unknown error' });
+      }
+    });
+  };
+
+  const handlePublishHistory = () => {
+    startPublishHistory(async () => {
+      const result = await publishPurchaseHistoryAction(customer.id);
+      if (result.success && result.data) {
+        const messages: Record<string, string> = {
+          created: 'Purchase history added to the Pipedrive organization',
+          updated: 'Purchase history updated in Pipedrive',
+          unchanged: 'Purchase history is already up to date',
+          not_linked: 'Sync the customer to Pipedrive first',
+          not_connected: 'Pipedrive is not connected',
+        };
+        toast.info(messages[result.data.status] ?? result.data.status);
+      } else {
+        toast.error('Failed to publish purchase history', { description: result.error || 'Unknown error' });
       }
     });
   };
@@ -339,10 +381,23 @@ function CustomerDetailsTab({ customer }: { customer: Customer }) {
                 <div className="flex-1">
                   <p className="text-sm font-medium text-muted-foreground">Not linked to Pipedrive</p>
                   <p className="text-xs text-muted-foreground">
-                    Sync from Pipedrive to link this customer
+                    Sync to Pipedrive to create or link its organization
                   </p>
                 </div>
               </>
+            )}
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" onClick={handleSyncOrganization} disabled={isSyncingOrg}>
+              {isSyncingOrg ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Link2 className="h-4 w-4 mr-2" />}
+              Sync to Pipedrive
+            </Button>
+            {customer.pipedriveOrgId && (
+              <Button variant="outline" size="sm" onClick={handlePublishHistory} disabled={isPublishingHistory}>
+                {isPublishingHistory ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+                Publish purchase history
+              </Button>
             )}
           </div>
 

@@ -10,6 +10,8 @@ import { revalidatePath } from 'next/cache';
 import { pipedriveSyncService } from '../services/pipedrive-sync.service';
 import { pipedrivePushService } from '../services/pipedrive-push.service';
 import { createClient } from '@/shared/lib/supabase/server';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
+import type { AppUser } from '@/shared/stores/auth.store';
 
 // ============================================
 // TYPES
@@ -19,6 +21,38 @@ export interface ActionResult<T = unknown> {
   success: boolean;
   data?: T;
   error?: string;
+}
+
+// ============================================
+// AUTHORIZATION HELPERS
+// ============================================
+
+/**
+ * These actions are triggered from the Leads, Deals and Customers pages, all
+ * gated by this permission. Server actions are callable directly, so they must
+ * enforce it themselves.
+ */
+const PIPEDRIVE_ACTION_PERMISSION = 'customers.view_module';
+
+type AuthorizeResult =
+  | { ok: true; user: AppUser }
+  | { ok: false; result: ActionResult<never> };
+
+/**
+ * Resolve the current application user and verify a permission.
+ */
+async function authorize(permission: string): Promise<AuthorizeResult> {
+  const user = await getCurrentUser();
+
+  if (!user) {
+    return { ok: false, result: { success: false, error: 'Authentication required' } };
+  }
+
+  if (!hasPermission(user, permission)) {
+    return { ok: false, result: { success: false, error: `Permission denied: ${permission}` } };
+  }
+
+  return { ok: true, user };
 }
 
 interface SyncOptions {
@@ -56,13 +90,9 @@ interface SyncResult {
 export async function getPipedriveCompanyDomain(): Promise<
   ActionResult<{ companyDomain: string | null }>
 > {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(PIPEDRIVE_ACTION_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
@@ -89,13 +119,9 @@ export async function getPipedriveCompanyDomain(): Promise<
 export async function checkPipedriveConnection(): Promise<
   ActionResult<{ connected: boolean }>
 > {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(PIPEDRIVE_ACTION_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
@@ -119,13 +145,9 @@ export async function checkPipedriveConnection(): Promise<
 export async function getPipedriveLeadLabels(): Promise<
   ActionResult<{ labels: Array<{ id: string; name: string }> }>
 > {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(PIPEDRIVE_ACTION_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
@@ -156,13 +178,9 @@ export async function getPipedriveLeadLabels(): Promise<
 export async function syncFromPipedrive(
   options: SyncOptions
 ): Promise<ActionResult<SyncResult>> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(PIPEDRIVE_ACTION_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
@@ -248,13 +266,9 @@ export async function syncFromPipedrive(
 export async function syncDealToLead(
   dealId: number
 ): Promise<ActionResult<{ leadId: string }>> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(PIPEDRIVE_ACTION_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
@@ -283,14 +297,12 @@ export async function pushNoteToPipedrive(
   leadId: string,
   content: string
 ): Promise<ActionResult<{ pipedriveNoteId: number }>> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(PIPEDRIVE_ACTION_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
+
+  const supabase = await createClient();
 
   try {
     // Get the lead to find Pipedrive IDs
@@ -334,13 +346,9 @@ export async function updatePipedriveDealValue(
   dealId: number,
   value: number
 ): Promise<ActionResult<void>> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(PIPEDRIVE_ACTION_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
@@ -366,13 +374,9 @@ export async function updatePipedriveDealValue(
 export async function syncQuoteToPipedrive(
   quoteId: string
 ): Promise<ActionResult<void>> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(PIPEDRIVE_ACTION_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
@@ -399,13 +403,9 @@ export async function syncQuoteToPipedrive(
 export async function pushOrderToPipedrive(
   orderId: string
 ): Promise<ActionResult<void>> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(PIPEDRIVE_ACTION_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
@@ -432,13 +432,9 @@ export async function pushOrderToPipedrive(
 export async function pushCustomerLTVToPipedrive(
   customerId: string
 ): Promise<ActionResult<{ ltv: { totalRevenue: number; orderCount: number; averageOrderValue: number } }>> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(PIPEDRIVE_ACTION_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
@@ -482,13 +478,9 @@ export async function pushCustomerNoteToPipedrive(
   customerId: string,
   noteContent: string
 ): Promise<ActionResult<{ pipedriveNoteId: number }>> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(PIPEDRIVE_ACTION_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
@@ -515,13 +507,9 @@ export async function pushLeadNoteToPipedrive(
   leadId: string,
   noteContent: string
 ): Promise<ActionResult<{ pipedriveNoteId: number }>> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(PIPEDRIVE_ACTION_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
@@ -558,13 +546,9 @@ interface LeadSyncResult {
  * Similar to syncDealsFromPipedrive - direct sync
  */
 export async function syncLeadsFromPipedrive(): Promise<ActionResult<LeadSyncResult>> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(PIPEDRIVE_ACTION_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
@@ -631,13 +615,9 @@ interface DealSyncResult {
  * Preview deals sync from Pipedrive
  */
 export async function previewDealsFromPipedrive(): Promise<ActionResult<DealSyncResult>> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(PIPEDRIVE_ACTION_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
@@ -684,13 +664,9 @@ export async function previewDealsFromPipedrive(): Promise<ActionResult<DealSync
  * Sync deals from Pipedrive to local deals table
  */
 export async function syncDealsFromPipedrive(): Promise<ActionResult<DealSyncResult>> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(PIPEDRIVE_ACTION_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
@@ -735,13 +711,9 @@ export async function syncDealsFromPipedrive(): Promise<ActionResult<DealSyncRes
 export async function syncSingleDealFromPipedrive(
   pipedriveDealId: number
 ): Promise<ActionResult<{ dealId: string; isNew: boolean }>> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(PIPEDRIVE_ACTION_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {

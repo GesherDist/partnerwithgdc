@@ -8,9 +8,17 @@
  */
 
 import { db } from '@/shared/lib/supabase/database';
-import { pipedriveProvider } from '@/modules/integrations/providers/crm/pipedrive';
+import { pipedriveProvider, isPipedriveNotFound } from '@/modules/integrations/providers/crm/pipedrive';
 import { getConnectionByIntegrationId, getIntegrationByProvider } from '@/modules/integrations/core/repositories';
 import { pipedriveRateLimiter, retryWithBackoff, isRetryableError } from '../lib/rate-limiter';
+import { toEntityUuid, toPipedriveId } from '../lib/sync-log';
+import {
+  createDealV2,
+  legacyV1WritesEnabled,
+  patchDealV2,
+  patchOrganizationV2,
+  patchPersonV2,
+} from '../lib/pipedrive-v2-writes';
 
 // ============================================
 // TYPES
@@ -40,16 +48,88 @@ interface CustomerLTV {
 // ============================================
 
 class PipedrivePushService {
-  private connectionId: string | null = null;
-
   /**
    * Get the current Pipedrive connection ID
+   *
+   * Looked up on every call (not cached on the singleton) so a disconnect,
+   * reconnect or token failure is reflected immediately.
    */
-  private async getConnectionId(): Promise<string | null> {
-    if (this.connectionId) {
-      return this.connectionId;
+  /**
+   * Update deal fields: API v2 PATCH, or the v1 provider method when
+   * PIPEDRIVE_LEGACY_V1_WRITES=true (rollback).
+   */
+  private async updateDealFields(
+    connectionId: string,
+    dealId: number,
+    fields: { title?: string; value?: number; currency?: string; status?: 'open' | 'won' | 'lost'; expected_close_date?: string }
+  ): Promise<void> {
+    if (!legacyV1WritesEnabled()) {
+      await patchDealV2(connectionId, dealId, fields);
+      return;
     }
+    await pipedriveRateLimiter.execute(() =>
+      retryWithBackoff(
+        async () => {
+          await pipedriveProvider.updateDeal(connectionId, dealId.toString(), {
+            title: fields.title,
+            value: fields.value,
+            currency: fields.currency,
+            status: fields.status,
+            expectedCloseDate: fields.expected_close_date,
+          });
+        },
+        { shouldRetry: isRetryableError }
+      )
+    );
+  }
 
+  /**
+   * Create a deal: API v2 POST (retried only on 429, so a timeout can never
+   * create it twice), or the v1 provider method when PIPEDRIVE_LEGACY_V1_WRITES=true.
+   */
+  private async createDeal(
+    connectionId: string,
+    deal: {
+      title: string;
+      value: number;
+      currency: string;
+      status: 'open' | 'won';
+      person_id?: number | null;
+      org_id?: number | null;
+      pipeline_id?: number | null;
+      stage_id?: number | null;
+    }
+  ): Promise<number | undefined> {
+    if (!legacyV1WritesEnabled()) {
+      return (await createDealV2(connectionId, deal)) ?? undefined;
+    }
+    const created = await pipedriveRateLimiter.execute(() =>
+      pipedriveProvider.createDeal(connectionId, {
+        title: deal.title,
+        value: deal.value,
+        currency: deal.currency,
+        status: deal.status,
+        contactExternalId: deal.person_id?.toString(),
+        organizationExternalId: deal.org_id?.toString(),
+        pipelineId: deal.pipeline_id?.toString(),
+        stageId: deal.stage_id?.toString(),
+      })
+    );
+    return created.externalId ? parseInt(created.externalId) : undefined;
+  }
+
+  /** GDC Sales "Lead / Prospect", when GDC setup has run; otherwise Pipedrive's default pipeline */
+  private async gdcStartStage(connectionId: string): Promise<{ pipelineId: number; stageId: number } | null> {
+    try {
+      const { loadGdcConfig } = await import('../gdc/settings');
+      const config = await loadGdcConfig(connectionId);
+      return config ? { pipelineId: config.pipelineId, stageId: config.stageIds.lead_prospect } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async getConnectionId(): Promise<string | null> {
     const integration = await getIntegrationByProvider('pipedrive');
     if (!integration) {
       return null;
@@ -60,8 +140,7 @@ class PipedrivePushService {
       return null;
     }
 
-    this.connectionId = connection.id;
-    return this.connectionId;
+    return connection.id;
   }
 
   /**
@@ -234,10 +313,10 @@ class PipedrivePushService {
    */
   async deleteNoteFromPipedrive(
     pipedriveNoteId: number
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<{ success: boolean; error?: string; notConnected?: boolean }> {
     const connectionId = await this.getConnectionId();
     if (!connectionId) {
-      return { success: false, error: 'Pipedrive not connected' };
+      return { success: false, error: 'Pipedrive not connected', notConnected: true };
     }
 
     try {
@@ -253,6 +332,12 @@ class PipedrivePushService {
       await this.logSync('push', 'note', pipedriveNoteId, 'success', 'Note deleted');
       return { success: true };
     } catch (error) {
+      if (isPipedriveNotFound(error)) {
+        // Already gone in Pipedrive - the goal of the delete is met
+        await this.logSync('push', 'note', pipedriveNoteId, 'success', 'Note already deleted in Pipedrive');
+        return { success: true };
+      }
+
       console.error('[PipedrivePush] Error deleting note:', error);
       await this.logSync('push', 'note', pipedriveNoteId, 'failed', error instanceof Error ? error.message : 'Unknown error');
       return {
@@ -302,43 +387,76 @@ class PipedrivePushService {
     }
 
     try {
-      const result = await pipedriveRateLimiter.execute(() =>
-        retryWithBackoff(
-          async () => {
-            return pipedriveProvider.createLead(connectionId, {
-              title: leadData.title,
-              personName: leadData.personName,
-              email: leadData.email || undefined,
-              phone: leadData.phone || undefined,
-              company: leadData.company || undefined,
-              // Address
-              addressStreet: leadData.addressStreet || undefined,
-              addressCity: leadData.addressCity || undefined,
-              addressState: leadData.addressState || undefined,
-              addressPostalCode: leadData.addressPostalCode || undefined,
-              addressCountry: leadData.addressCountry || undefined,
-              // Deal info
-              value: leadData.value || undefined,
-              currency: leadData.currency || 'USD',
-              expectedCloseDate: leadData.expectedCloseDate
-                ? leadData.expectedCloseDate.toISOString().split('T')[0]
-                : undefined,
-              notes: leadData.notes || undefined,
-              labelIds: leadData.labelIds,
-            });
-          },
-          { shouldRetry: isRetryableError }
-        )
-      );
+      // Reuse existing organizations / people (GDC duplicate policy) instead of
+      // always creating new ones, then create the Leads Inbox lead (v1, supported).
+      const { getGdcConfig } = await import('../gdc/setup.service');
+      const { upsertOrganization, upsertPerson } = await import('../gdc/org-sync.service');
+      const { runPipedriveWrite } = await import('../lib/rate-limiter');
+      const config = await getGdcConfig(connectionId);
+      const review: string[] = [];
 
-      // Log sync
-      await this.logSync('push', 'lead', null, 'success');
+      let orgId: number | undefined;
+      if (leadData.company) {
+        const org = await upsertOrganization(connectionId, config, {
+          name: leadData.company,
+          accountType: 'Lead',
+          address: {
+            street: leadData.addressStreet,
+            city: leadData.addressCity,
+            state: leadData.addressState,
+            postalCode: leadData.addressPostalCode,
+            country: leadData.addressCountry,
+          },
+        });
+        if (org.status === 'needs_review') {review.push(`organization: ${org.reason}`);}
+        else {orgId = org.id;}
+      }
+
+      let personId: number | undefined;
+      if (leadData.personName || leadData.email || leadData.phone) {
+        const person = await upsertPerson(connectionId, config, {
+          name: leadData.personName || leadData.title,
+          email: leadData.email,
+          phone: leadData.phone,
+          orgId: orgId ?? null,
+        });
+        if (person.status === 'needs_review') {review.push(`person: ${person.reason}`);}
+        else {personId = person.id;}
+      }
+
+      if (!personId && !orgId) {
+        // Pipedrive requires a person or an organization on a lead
+        throw new Error(`Lead not created in Pipedrive; needs review (${review.join('; ') || 'no contact or company'})`);
+      }
+
+      const leadPayload: Record<string, unknown> = { title: leadData.title };
+      if (personId) {leadPayload.person_id = personId;}
+      if (orgId) {leadPayload.organization_id = orgId;}
+      if (leadData.value) {leadPayload.value = { amount: leadData.value, currency: leadData.currency || 'USD' };}
+      if (leadData.expectedCloseDate) {leadPayload.expected_close_date = leadData.expectedCloseDate.toISOString().split('T')[0];}
+      if (leadData.labelIds?.length) {leadPayload.label_ids = leadData.labelIds;}
+
+      const created = await runPipedriveWrite(() =>
+        pipedriveProvider.request<{ id?: string }>(connectionId, 'POST', 'leads', leadPayload, 'v1')
+      );
+      const leadId = created.data?.id;
+      if (!leadId) {
+        throw new Error('Pipedrive did not return the created lead');
+      }
+
+      if (leadData.notes) {
+        await runPipedriveWrite(() =>
+          pipedriveProvider.request(connectionId, 'POST', 'notes', { content: leadData.notes, lead_id: leadId }, 'v1')
+        );
+      }
+
+      await this.logSync('push', 'lead', null, 'success', review.length ? `needs review: ${review.join('; ')}` : undefined);
 
       return {
         success: true,
-        pipedriveLeadId: result.leadId,
-        pipedrivePersonId: result.personId,
-        pipedriveOrgId: result.orgId,
+        pipedriveLeadId: leadId,
+        pipedrivePersonId: personId,
+        pipedriveOrgId: orgId,
       };
     } catch (error) {
       console.error('[PipedrivePush] Error creating lead:', error);
@@ -392,13 +510,44 @@ class PipedrivePushService {
     }
 
     try {
+      // Person and organization: API v2 (v1 /persons and /organizations are deprecated)
+      const useV2 = !legacyV1WritesEnabled();
+      if (useV2 && pipedrivePersonId && (leadData.name || leadData.email !== undefined || leadData.phone !== undefined)) {
+        try {
+          await patchPersonV2(connectionId, pipedrivePersonId, {
+            name: leadData.name,
+            email: leadData.email,
+            phone: leadData.phone,
+          });
+        } catch (personError) {
+          console.warn('[PipedrivePush] Failed to update person (non-blocking):', personError);
+        }
+      }
+      if (useV2 && pipedriveOrgId && (leadData.company !== undefined || leadData.addressStreet !== undefined)) {
+        try {
+          await patchOrganizationV2(connectionId, pipedriveOrgId, {
+            name: leadData.company,
+            address: {
+              street: leadData.addressStreet,
+              city: leadData.addressCity,
+              state: leadData.addressState,
+              postalCode: leadData.addressPostalCode,
+              country: leadData.addressCountry,
+            },
+          });
+        } catch (orgError) {
+          console.warn('[PipedrivePush] Failed to update organization (non-blocking):', orgError);
+        }
+      }
+
+      // The lead itself stays on v1 (Leads have no v2 endpoint)
       const result = await pipedriveRateLimiter.execute(() =>
         retryWithBackoff(
           async () => {
             return pipedriveProvider.updateLead(connectionId, pipedriveLeadId, {
               title: leadData.dealTitle || leadData.name || undefined,
-              personId: pipedrivePersonId || undefined,
-              orgId: pipedriveOrgId || undefined,
+              personId: useV2 ? undefined : pipedrivePersonId || undefined,
+              orgId: useV2 ? undefined : pipedriveOrgId || undefined,
               // Contact info
               personName: leadData.name || undefined,
               email: leadData.email,
@@ -482,16 +631,7 @@ class PipedrivePushService {
 
       // Case 1: Lead already has a deal in Pipedrive - just update status to won
       if (pipedriveDealId) {
-        await pipedriveRateLimiter.execute(() =>
-          retryWithBackoff(
-            async () => {
-              await pipedriveProvider.updateDeal(connectionId, pipedriveDealId!.toString(), {
-                status: 'won',
-              });
-            },
-            { shouldRetry: isRetryableError }
-          )
-        );
+        await this.updateDealFields(connectionId, pipedriveDealId, { status: 'won' });
 
         // Add conversion note
         const conversionNote = `🎉 Lead converted to customer in Gesher\nCustomer: ${leadData.company || leadData.name}`;
@@ -504,23 +644,14 @@ class PipedrivePushService {
 
       // Case 2: Lead is from Leads Inbox (no deal yet) - create a won deal and delete lead
       if (leadData.pipedriveLeadId || leadData.pipedrivePersonId) {
-        const dealResult = await pipedriveRateLimiter.execute(() =>
-          retryWithBackoff(
-            async () => {
-              return pipedriveProvider.createDeal(connectionId, {
-                title: leadData.dealTitle || `Deal with ${leadData.company || leadData.name}`,
-                value: leadData.dealValue || 0,
-                currency: 'USD',
-                status: 'won',
-                contactExternalId: leadData.pipedrivePersonId?.toString(),
-                organizationExternalId: leadData.pipedriveOrgId?.toString(),
-              });
-            },
-            { shouldRetry: isRetryableError }
-          )
-        );
-
-        pipedriveDealId = dealResult.externalId ? parseInt(dealResult.externalId) : undefined;
+        pipedriveDealId = await this.createDeal(connectionId, {
+          title: leadData.dealTitle || `Deal with ${leadData.company || leadData.name}`,
+          value: leadData.dealValue || 0,
+          currency: 'USD',
+          status: 'won',
+          person_id: leadData.pipedrivePersonId,
+          org_id: leadData.pipedriveOrgId,
+        });
 
         // Delete the lead from Leads Inbox after creating the deal
         if (leadData.pipedriveLeadId) {
@@ -598,16 +729,7 @@ class PipedrivePushService {
 
       // Case 1: Lead already has a deal in Pipedrive - just ensure it's open
       if (pipedriveDealId) {
-        await pipedriveRateLimiter.execute(() =>
-          retryWithBackoff(
-            async () => {
-              await pipedriveProvider.updateDeal(connectionId, pipedriveDealId!.toString(), {
-                status: 'open', // Keep deal OPEN, not won
-              });
-            },
-            { shouldRetry: isRetryableError }
-          )
-        );
+        await this.updateDealFields(connectionId, pipedriveDealId, { status: 'open' }); // Keep deal OPEN, not won
 
         // Add conversion note
         const conversionNote = `📋 Lead converted to Deal in Gesher\nDeal: ${leadData.dealTitle || leadData.company || leadData.name}`;
@@ -618,25 +740,20 @@ class PipedrivePushService {
         return { success: true, pipedriveDealId };
       }
 
-      // Case 2: Lead is from Leads Inbox (no deal yet) - create an OPEN deal and delete lead
+      // Case 2: Lead is from Leads Inbox (no deal yet) - create an OPEN deal and delete lead.
+      // The deal starts in GDC Sales > "Lead / Prospect" once GDC setup has run.
       if (leadData.pipedriveLeadId || leadData.pipedrivePersonId) {
-        const dealResult = await pipedriveRateLimiter.execute(() =>
-          retryWithBackoff(
-            async () => {
-              return pipedriveProvider.createDeal(connectionId, {
-                title: leadData.dealTitle || `Deal with ${leadData.company || leadData.name}`,
-                value: leadData.dealValue || 0,
-                currency: 'USD',
-                status: 'open', // Create as OPEN, not won
-                contactExternalId: leadData.pipedrivePersonId?.toString(),
-                organizationExternalId: leadData.pipedriveOrgId?.toString(),
-              });
-            },
-            { shouldRetry: isRetryableError }
-          )
-        );
-
-        pipedriveDealId = dealResult.externalId ? parseInt(dealResult.externalId) : undefined;
+        const gdcStart = await this.gdcStartStage(connectionId);
+        pipedriveDealId = await this.createDeal(connectionId, {
+          title: leadData.dealTitle || `Deal with ${leadData.company || leadData.name}`,
+          value: leadData.dealValue || 0,
+          currency: 'USD',
+          status: 'open', // Create as OPEN, not won
+          person_id: leadData.pipedrivePersonId,
+          org_id: leadData.pipedriveOrgId,
+          pipeline_id: gdcStart?.pipelineId,
+          stage_id: gdcStart?.stageId,
+        });
 
         // Delete the lead from Leads Inbox after creating the deal
         if (leadData.pipedriveLeadId) {
@@ -710,24 +827,27 @@ class PipedrivePushService {
 
     try {
       // 1. Update the deal
-      await pipedriveRateLimiter.execute(() =>
-        retryWithBackoff(
-          async () => {
-            await pipedriveProvider.updateDeal(connectionId, deal.pipedrive_deal_id.toString(), {
-              title: deal.title,
-              value: deal.value || undefined,
-              currency: deal.currency || 'USD',
-              expectedCloseDate: deal.expected_close_date
-                ? new Date(deal.expected_close_date).toISOString().split('T')[0]
-                : undefined,
-            });
-          },
-          { shouldRetry: isRetryableError }
-        )
-      );
+      await this.updateDealFields(connectionId, Number(deal.pipedrive_deal_id), {
+        title: deal.title,
+        value: deal.value || undefined,
+        currency: deal.currency || 'USD',
+        expected_close_date: deal.expected_close_date
+          ? new Date(deal.expected_close_date).toISOString().split('T')[0]
+          : undefined,
+      });
 
       // 2. Update person if exists (contact info)
-      if (deal.pipedrive_person_id && (deal.contact_name || deal.contact_email || deal.contact_phone)) {
+      if (deal.pipedrive_person_id && (deal.contact_name || deal.contact_email || deal.contact_phone) && !legacyV1WritesEnabled()) {
+        try {
+          await patchPersonV2(connectionId, Number(deal.pipedrive_person_id), {
+            name: deal.contact_name || undefined,
+            email: deal.contact_email || undefined,
+            phone: deal.contact_phone || undefined,
+          });
+        } catch (personError) {
+          console.warn('[PipedrivePush] Failed to update person (non-blocking):', personError);
+        }
+      } else if (deal.pipedrive_person_id && (deal.contact_name || deal.contact_email || deal.contact_phone)) {
         try {
           await pipedriveRateLimiter.execute(() =>
             retryWithBackoff(
@@ -754,7 +874,22 @@ class PipedrivePushService {
       }
 
       // 3. Update organization if exists (company name and address)
-      if (deal.pipedrive_org_id && (deal.organization_name || deal.organization_address_street)) {
+      if (deal.pipedrive_org_id && (deal.organization_name || deal.organization_address_street) && !legacyV1WritesEnabled()) {
+        try {
+          await patchOrganizationV2(connectionId, Number(deal.pipedrive_org_id), {
+            name: deal.organization_name || undefined,
+            address: {
+              street: deal.organization_address_street,
+              city: deal.organization_address_city,
+              state: deal.organization_address_state,
+              postalCode: deal.organization_address_postal_code,
+              country: deal.organization_address_country,
+            },
+          });
+        } catch (orgError) {
+          console.warn('[PipedrivePush] Failed to update organization (non-blocking):', orgError);
+        }
+      } else if (deal.pipedrive_org_id && (deal.organization_name || deal.organization_address_street)) {
         try {
           await pipedriveRateLimiter.execute(() =>
             retryWithBackoff(
@@ -829,8 +964,10 @@ class PipedrivePushService {
       await pipedriveRateLimiter.execute(() =>
         retryWithBackoff(
           async () => {
-            await pipedriveProvider.updateDeal(connectionId, deal.pipedrive_deal_id.toString(), {
+            // v2 PATCH: sets the predefined lost reason together with the status
+            await pipedriveProvider.request(connectionId, 'PATCH', `deals/${deal.pipedrive_deal_id}`, {
               status,
+              ...(status === 'lost' && lostReason ? { lost_reason: lostReason } : {}),
             });
           },
           { shouldRetry: isRetryableError }
@@ -875,17 +1012,7 @@ class PipedrivePushService {
     }
 
     try {
-      await pipedriveRateLimiter.execute(() =>
-        retryWithBackoff(
-          async () => {
-            // updateDeal takes externalId as string
-            await pipedriveProvider.updateDeal(connectionId, dealId.toString(), {
-              value,
-            });
-          },
-          { shouldRetry: isRetryableError }
-        )
-      );
+      await this.updateDealFields(connectionId, dealId, { value });
 
       // Add activity note about the quote
       const quoteNote = `Quote #${quoteId} created with value ${currency} ${value.toLocaleString()}`;
@@ -1140,15 +1267,20 @@ Date: ${new Date().toLocaleDateString()}
     message?: string
   ): Promise<void> {
     try {
-      await db.from('pipedrive_sync_log').insert({
+      const { error } = await db.from('pipedrive_sync_log').insert({
         event_type: eventType,
         direction: 'outbound',
         entity_type: entityType,
-        entity_id: entityId ? String(entityId) : null,
-        pipedrive_id: typeof entityId === 'number' ? entityId : null,
+        // Gesher UUIDs go to entity_id, numeric Pipedrive IDs to pipedrive_id
+        entity_id: toEntityUuid(entityId),
+        pipedrive_id: toPipedriveId(entityId),
         status,
         error_message: status === 'failed' ? message : null,
       });
+
+      if (error) {
+        console.error('[PipedrivePush] Failed to write sync log:', error.message);
+      }
     } catch (error) {
       console.error('[PipedrivePush] Failed to log sync:', error);
     }

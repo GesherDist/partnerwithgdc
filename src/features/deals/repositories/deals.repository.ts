@@ -5,6 +5,7 @@
  */
 
 import { db } from '@/shared/lib/supabase/database';
+import { fetchAllRows, chunk } from '@/shared/lib/supabase/paginate';
 import type {
   Deal,
   DealNote,
@@ -15,6 +16,9 @@ import type {
   UpdateDealDTO,
   CreateDealNoteDTO,
 } from '../types';
+
+/** IDs per bulk soft-delete request (keeps .in() filters within URL limits) */
+const SOFT_DELETE_CHUNK_SIZE = 200;
 
 // ============================================
 // TYPE DEFINITIONS
@@ -519,6 +523,31 @@ class DealsRepository {
   }
 
   /**
+   * Link a customer to a deal only if the deal has no customer yet.
+   * The conditional update is atomic, so two concurrent conversions cannot
+   * both succeed. Returns false when the deal was already linked.
+   */
+  async linkCustomerIfUnlinked(dealId: string, customerId: string, userId?: string): Promise<boolean> {
+    const { data, error } = await db
+      .from('deals')
+      .update({
+        customer_id: customerId,
+        updated_by: userId || null,
+      })
+      .eq('id', dealId)
+      .is('customer_id', null)
+      .is('deleted_at', null)
+      .select('id');
+
+    if (error) {
+      console.error('Error linking customer to deal:', error);
+      throw new Error('Failed to link customer to deal');
+    }
+
+    return (data?.length ?? 0) > 0;
+  }
+
+  /**
    * Soft delete a deal
    */
   async delete(id: string, userId?: string): Promise<void> {
@@ -539,7 +568,10 @@ class DealsRepository {
   /**
    * Upsert deal from Pipedrive
    */
-  async upsertFromPipedrive(dto: CreateDealDTO, userId?: string): Promise<{ deal: Deal; isNew: boolean }> {
+  async upsertFromPipedrive(
+    dto: CreateDealDTO,
+    userId?: string
+  ): Promise<{ deal: Deal; isNew: boolean; restored?: boolean }> {
     if (!dto.pipedriveDealId) {
       throw new Error('pipedriveDealId is required for upsert');
     }
@@ -551,18 +583,55 @@ class DealsRepository {
       return { deal: updated, isNew: false };
     }
 
+    // pipedrive_deal_id is UNIQUE across soft-deleted rows too, so inserting a
+    // deal that still exists in Pipedrive would fail forever. Restore the
+    // soft-deleted row instead, keeping its lead/customer links and notes.
+    const deletedId = await this.getDeletedIdByPipedriveDealId(dto.pipedriveDealId);
+    if (deletedId) {
+      const restored = await this.updateFromPipedrive(deletedId, dto, userId, { restore: true });
+      return { deal: restored, isNew: false, restored: true };
+    }
+
     const created = await this.create(dto, userId);
     return { deal: created, isNew: true };
   }
 
   /**
+   * Find a soft-deleted deal by Pipedrive Deal ID
+   */
+  private async getDeletedIdByPipedriveDealId(pipedriveDealId: number): Promise<string | null> {
+    const { data, error } = await db
+      .from('deals')
+      .select('id')
+      .eq('pipedrive_deal_id', pipedriveDealId)
+      .not('deleted_at', 'is', null)
+      .maybeSingle();
+
+    if (error) {
+      console.error('Error fetching soft-deleted deal by Pipedrive ID:', error);
+      return null;
+    }
+
+    return data?.id ?? null;
+  }
+
+  /**
    * Update deal from Pipedrive sync
    */
-  async updateFromPipedrive(id: string, dto: CreateDealDTO, userId?: string): Promise<Deal> {
+  async updateFromPipedrive(
+    id: string,
+    dto: CreateDealDTO,
+    userId?: string,
+    options: { restore?: boolean } = {}
+  ): Promise<Deal> {
     const updateData: Record<string, unknown> = {
       updated_by: userId || null,
       pipedrive_synced_at: new Date().toISOString(),
     };
+
+    if (options.restore) {
+      updateData.deleted_at = null;
+    }
 
     // Update all fields from Pipedrive
     if (dto.title !== undefined) updateData.title = dto.title;
@@ -622,18 +691,24 @@ class DealsRepository {
    * Get all Pipedrive Deal IDs from local deals
    */
   async getAllPipedriveDealIds(): Promise<number[]> {
-    const { data, error } = await db
-      .from('deals')
-      .select('pipedrive_deal_id')
-      .not('pipedrive_deal_id', 'is', null)
-      .is('deleted_at', null);
-
-    if (error) {
+    // Paged: a single query is silently capped at Supabase max-rows (1000)
+    let data: Array<{ pipedrive_deal_id: number | null }>;
+    try {
+      data = await fetchAllRows<{ pipedrive_deal_id: number | null }>((from, to) =>
+        db
+          .from('deals')
+          .select('id, pipedrive_deal_id')
+          .not('pipedrive_deal_id', 'is', null)
+          .is('deleted_at', null)
+          .order('id', { ascending: true })
+          .range(from, to)
+      );
+    } catch (error) {
       console.error('Error fetching pipedrive deal IDs:', error);
       return [];
     }
 
-    return (data || [])
+    return data
       .map((row: { pipedrive_deal_id: number | null }) => row.pipedrive_deal_id)
       .filter((id): id is number => id !== null);
   }
@@ -644,22 +719,28 @@ class DealsRepository {
   async softDeleteByPipedriveDealIds(dealIds: number[], userId?: string): Promise<number> {
     if (dealIds.length === 0) return 0;
 
-    const { data, error } = await db
-      .from('deals')
-      .update({
-        deleted_at: new Date().toISOString(),
-        updated_by: userId || null,
-      })
-      .in('pipedrive_deal_id', dealIds)
-      .is('deleted_at', null)
-      .select('id');
+    // Chunked: one huge .in() filter can exceed URL length limits
+    let deleted = 0;
+    for (const ids of chunk(dealIds, SOFT_DELETE_CHUNK_SIZE)) {
+      const { data, error } = await db
+        .from('deals')
+        .update({
+          deleted_at: new Date().toISOString(),
+          updated_by: userId || null,
+        })
+        .in('pipedrive_deal_id', ids)
+        .is('deleted_at', null)
+        .select('id');
 
-    if (error) {
-      console.error('Error soft deleting deals:', error);
-      return 0;
+      if (error) {
+        console.error('Error soft deleting deals:', error);
+        return deleted;
+      }
+
+      deleted += data?.length || 0;
     }
 
-    return data?.length || 0;
+    return deleted;
   }
 
   // ============================================
@@ -768,6 +849,24 @@ class DealsRepository {
       console.error('Error deleting deal note:', error);
       throw new Error('Failed to delete deal note');
     }
+  }
+
+  /**
+   * Get a note by ID
+   */
+  async getNoteById(noteId: string): Promise<DealNote | null> {
+    const { data, error } = await db
+      .from('deal_notes')
+      .select('*, created_by_user:users!deal_notes_created_by_fkey(first_name, last_name)')
+      .eq('id', noteId)
+      .maybeSingle();
+
+    if (error) {
+      console.error('Error fetching deal note:', error);
+      throw new Error('Failed to fetch deal note');
+    }
+
+    return data ? mapRowToDealNote(data as DealNoteRow) : null;
   }
 
   /**

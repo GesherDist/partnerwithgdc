@@ -47,6 +47,7 @@ import { PageHeader } from '@/shared/components/layout/PageHeader';
 
 import { formatCreditLimit, formatOpenBalance } from '../lib/schemas';
 import { CustomerContactsList } from './CustomerContactsList';
+import { CustomerPipedriveSection } from './CustomerPipedriveSection';
 import { EditCustomerDrawer } from './EditCustomerDrawer';
 import { deleteCustomer } from '../actions';
 import type { Customer } from '../types';
@@ -88,7 +89,15 @@ function InfoItem({ label, value, icon }: { label: string; value: React.ReactNod
 // DETAILS TAB CONTENT
 // ============================================
 
-function CustomerDetailsTab({ customer }: { customer: Customer }) {
+function CustomerDetailsTab({
+  customer,
+  canEdit,
+  onCustomerUpdated,
+}: {
+  customer: Customer;
+  canEdit: boolean;
+  onCustomerUpdated: (customer: Customer) => void;
+}) {
   const hasAddress = customer.address1 || customer.city || customer.state;
   const hasShippingAddress = customer.shippingAddress1 || customer.shippingCity || customer.shippingState;
 
@@ -263,6 +272,10 @@ function CustomerDetailsTab({ customer }: { customer: Customer }) {
               </div>
             </>
           )}
+
+          {/* Pipedrive CRM */}
+          <div className="border-t" />
+          <CustomerPipedriveSection customer={customer} canEdit={canEdit} onCustomerUpdated={onCustomerUpdated} />
         </div>
       </CardContent>
     </Card>
@@ -403,7 +416,7 @@ export function CustomerDetailView({ customer: initialCustomer }: CustomerDetail
 
           <div className="flex-1 pt-6 overflow-auto">
             <TabsContent value="details" className="m-0 h-full">
-              <CustomerDetailsTab customer={customer} />
+              <CustomerDetailsTab customer={customer} canEdit={canEdit} onCustomerUpdated={setCustomer} />
             </TabsContent>
 
             {canViewContacts && (

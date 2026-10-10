@@ -4,6 +4,7 @@
  * GET /api/pipedrive/callback
  *
  * Handles the OAuth callback from Pipedrive:
+ * - Requires a signed-in user allowed to manage the integration
  * - Validates state parameter
  * - Exchanges code for tokens
  * - Fetches user info
@@ -12,12 +13,12 @@
  */
 
 import { cookies } from 'next/headers';
-import { getUser } from '@/shared/lib/supabase/server';
-import { getAppUserByAuthId } from '@/shared/lib/auth';
+import { checkPermission } from '@/shared/lib/auth/check-permission';
 import { pipedriveProvider } from '@/modules/integrations/providers/crm/pipedrive';
 import {
   PIPEDRIVE_STATE_COOKIE_NAME,
   PIPEDRIVE_REDIRECT_PATHS,
+  PIPEDRIVE_MANAGE_PERMISSION,
 } from '@/modules/integrations/providers/crm/pipedrive';
 
 export async function GET(request: Request) {
@@ -76,6 +77,14 @@ export async function GET(request: Request) {
     return closePopupWithError('OAuth error occurred. This window will close automatically.');
   }
 
+  // Only a signed-in user allowed to manage the integration may complete the
+  // connection; otherwise anyone could replace the company's Pipedrive account.
+  const { hasAccess, user: appUser } = await checkPermission(PIPEDRIVE_MANAGE_PERMISSION);
+  if (!hasAccess || !appUser) {
+    console.warn('Pipedrive callback rejected: user not signed in or lacks permission');
+    return closePopupWithError('You are not allowed to connect Pipedrive. This window will close automatically.');
+  }
+
   // Validate required parameters
   if (!code || !state) {
     console.error('Missing required callback parameters');
@@ -97,18 +106,8 @@ export async function GET(request: Request) {
   cookieStore.delete(PIPEDRIVE_STATE_COOKIE_NAME);
 
   try {
-    // Get current user ID from application users table (not Supabase Auth ID)
-    // The connected_by field references users(id), not auth.users(id)
-    const authUser = await getUser();
-    let appUserId: string | undefined;
-
-    if (authUser?.id) {
-      const appUser = await getAppUserByAuthId(authUser.id);
-      appUserId = appUser?.id;
-    }
-
-    // Handle the OAuth callback using the provider
-    await pipedriveProvider.handleOAuthCallback({ code }, appUserId);
+    // connected_by references users(id) (application user), not auth.users(id)
+    await pipedriveProvider.handleOAuthCallback({ code }, appUser.id);
 
     // Success - return HTML that closes the popup (like QuickBooks)
     return new Response(

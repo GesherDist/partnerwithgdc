@@ -5,7 +5,7 @@
  * Pipedrive uses HTTP Basic Auth for webhook authentication.
  */
 
-import { createHmac } from 'crypto';
+import { createHash, createHmac, timingSafeEqual } from 'crypto';
 
 // ============================================
 // TYPES
@@ -44,17 +44,37 @@ export function verifyWebhookAuth(
     // Decode Base64 credentials
     const base64Credentials = authHeader.slice(6); // Remove 'Basic '
     const credentials = Buffer.from(base64Credentials, 'base64').toString('utf-8');
-    const [username, password] = credentials.split(':');
 
-    // Compare credentials
-    if (username === expectedUsername && password === expectedPassword) {
+    // Split on the first ':' only - passwords may contain ':'
+    const separatorIndex = credentials.indexOf(':');
+    if (separatorIndex === -1) {
+      return { valid: false, error: 'Invalid credentials' };
+    }
+    const username = credentials.slice(0, separatorIndex);
+    const password = credentials.slice(separatorIndex + 1);
+
+    // Compare both parts in constant time (no short-circuit between them)
+    const usernameMatches = safeEqual(username, expectedUsername);
+    const passwordMatches = safeEqual(password, expectedPassword);
+
+    if (usernameMatches && passwordMatches) {
       return { valid: true };
     }
 
     return { valid: false, error: 'Invalid credentials' };
-  } catch (error) {
+  } catch {
     return { valid: false, error: 'Failed to decode credentials' };
   }
+}
+
+/**
+ * Constant-time string comparison. Hashing first gives equal-length buffers,
+ * so the comparison does not leak the expected value's length either.
+ */
+function safeEqual(actual: string, expected: string): boolean {
+  const actualHash = createHash('sha256').update(actual, 'utf8').digest();
+  const expectedHash = createHash('sha256').update(expected, 'utf8').digest();
+  return timingSafeEqual(actualHash, expectedHash);
 }
 
 /**
@@ -163,6 +183,8 @@ export function isSupportedEvent(event: string): event is PipedriveWebhookEvent 
     'deleted.deal',
     'added.note',
     'updated.note',
+    'added.activity',
+    'updated.activity',
   ];
   return supportedEvents.includes(event as PipedriveWebhookEvent);
 }
@@ -177,4 +199,76 @@ export function getWebhookConfig() {
     password: process.env.PIPEDRIVE_WEBHOOK_PASSWORD || '',
     secret: process.env.PIPEDRIVE_WEBHOOK_SECRET || '',
   };
+}
+
+/**
+ * Webhook auth is mandatory: without a password every request is rejected.
+ * (Pipedrive webhooks authenticate with HTTP Basic Auth; they do not sign payloads.)
+ */
+export function isWebhookAuthConfigured(config: ReturnType<typeof getWebhookConfig>): boolean {
+  return config.username.length > 0 && config.password.length > 0;
+}
+
+/**
+ * Pick the most precise timestamp Pipedrive sends, so two different changes to
+ * the same record within one second are not treated as duplicates. Redeliveries
+ * of the same event carry the same value.
+ */
+export function getEventTimestamp(meta: {
+  timestamp?: number | string;
+  timestamp_micro?: number | string;
+}): string | number {
+  return meta.timestamp_micro ?? meta.timestamp ?? 'unknown';
+}
+
+// ============================================
+// WEBHOOK VERSION NORMALIZATION
+// ============================================
+
+const V2_ACTIONS: Record<string, string> = {
+  create: 'added',
+  change: 'updated',
+  delete: 'deleted',
+};
+
+/**
+ * Convert a Pipedrive webhooks v2 payload ({ meta: { action, entity, entity_id,
+ * id }, data, previous }) into the v1 shape the handlers use ({ event: 'updated.deal',
+ * meta: { action, object, id }, current, previous }). v1 payloads pass through.
+ *
+ * The v2 event id (meta.id, stable across redeliveries) becomes timestamp_micro
+ * so deduplication keys stay unique per event.
+ */
+export function normalizeWebhookPayload<T>(raw: T): T {
+  const payload = raw as unknown as {
+    event?: string;
+    meta?: Record<string, unknown>;
+    data?: unknown;
+    previous?: unknown;
+  };
+  const meta = payload.meta ?? {};
+  const isV2 = meta.version === '2.0' || (typeof meta.entity === 'string' && 'data' in payload);
+  if (!isV2) {
+    return raw;
+  }
+
+  const action = V2_ACTIONS[String(meta.action)] ?? String(meta.action ?? '');
+  const object = String(meta.entity ?? '');
+  const entityId = Number(meta.entity_id);
+
+  return {
+    v: 2,
+    event: `${action}.${object}`,
+    meta: {
+      ...meta,
+      action,
+      object,
+      id: Number.isFinite(entityId) ? entityId : meta.entity_id,
+      timestamp: meta.timestamp,
+      timestamp_micro: meta.id ?? meta.timestamp,
+    },
+    // Deletes carry the removed record in `previous`
+    current: payload.data ?? (action === 'deleted' ? payload.previous : undefined),
+    previous: payload.previous ?? undefined,
+  } as unknown as T;
 }

@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { toast } from 'sonner';
 import { Loader2, MapPin, FileText, Calendar, User, Building2, ArrowRight, ExternalLink, Warehouse, AlertTriangle, CheckCircle2 } from 'lucide-react';
 
 import { Button } from '@/shared/components/ui/button';
@@ -32,6 +33,7 @@ import {
 } from '@/shared/components/ui/table';
 
 import { getQuote, getPODocumentSignedUrl } from '../actions';
+import { resendSalesOrderToPipedrive } from '@/features/pipedrive/gdc/actions';
 import { getInventoryByProductIds } from '@/features/inventory/actions';
 import type { InventoryListItem } from '@/features/inventory/types';
 import type { QuoteWithItems } from '../types';
@@ -187,6 +189,7 @@ export function ViewQuoteDrawer({
   const [quote, setQuote] = useState<QuoteWithItems | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isResendingToPipedrive, setIsResendingToPipedrive] = useState(false);
   const [poDocumentUrl, setPoDocumentUrl] = useState<string | null>(null);
 
   // Inventory status
@@ -704,6 +707,29 @@ export function ViewQuoteDrawer({
                         <p className="text-xs text-muted-foreground mt-2">
                           Converted on {formatDate(quote.convertedAt)}
                         </p>
+                      )}
+                      {quote.pipedriveDealId && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="mt-3"
+                          disabled={isResendingToPipedrive}
+                          onClick={async () => {
+                            setIsResendingToPipedrive(true);
+                            try {
+                              const result = await resendSalesOrderToPipedrive(quote.id);
+                              if (result.success) {
+                                toast.success(result.data?.message || 'Sales order number sent to Pipedrive');
+                              } else {
+                                toast.error(result.error || 'Could not update the Pipedrive deal');
+                              }
+                            } finally {
+                              setIsResendingToPipedrive(false);
+                            }
+                          }}
+                        >
+                          Re-send SO # to Pipedrive deal {quote.pipedriveDealId}
+                        </Button>
                       )}
                     </div>
                   </Section>

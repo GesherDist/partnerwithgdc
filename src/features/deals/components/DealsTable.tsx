@@ -46,6 +46,8 @@ import { deleteDeal, markDealAsWon, markDealAsLost, reopenDeal, getDeal } from '
 import { getPipedriveCompanyDomain } from '@/features/pipedrive/actions';
 import type { DealListItem, DealStatus, Deal, DealsTableProps } from '../types';
 import { ConvertDealToCustomerDialog } from './ConvertDealToCustomerDialog';
+import { LostReasonDialog } from './LostReasonDialog';
+import type { GdcLostReason } from '@/features/pipedrive/gdc/config';
 
 // ============================================
 // HELPERS
@@ -103,6 +105,7 @@ export function DealsTable({
   const [dealToDelete, setDealToDelete] = useState<DealListItem | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [lostDeal, setLostDeal] = useState<DealListItem | null>(null);
   const [pipedriveCompanyDomain, setPipedriveCompanyDomain] = useState<string | null>(null);
   const [dealToConvert, setDealToConvert] = useState<Deal | null>(null);
   const [isConvertDialogOpen, setIsConvertDialogOpen] = useState(false);
@@ -158,11 +161,12 @@ export function DealsTable({
     }
   };
 
-  const handleMarkAsLost = async (deal: DealListItem) => {
+  const handleMarkAsLost = async (deal: DealListItem, reason: GdcLostReason) => {
     setIsUpdating(true);
     try {
-      const result = await markDealAsLost(deal.id);
+      const result = await markDealAsLost(deal.id, reason);
       if (result.success) {
+        setLostDeal(null);
         toast.success(`Deal "${deal.title}" marked as lost`);
         onRefresh?.();
       } else {
@@ -367,7 +371,7 @@ export function DealsTable({
                       Mark as Won
                     </DropdownMenuItem>
                     <DropdownMenuItem
-                      onClick={(e) => { e.stopPropagation(); handleMarkAsLost(deal); }}
+                      onClick={(e) => { e.stopPropagation(); setLostDeal(deal); }}
                       disabled={isUpdating}
                     >
                       <XCircle className="mr-2 h-4 w-4 text-red-600" />
@@ -498,6 +502,15 @@ export function DealsTable({
       </AlertDialog>
 
       {/* Convert to Customer Dialog */}
+      {/* Lost reason (required) */}
+      <LostReasonDialog
+        open={lostDeal !== null}
+        dealTitle={lostDeal?.title}
+        submitting={isUpdating}
+        onConfirm={(reason) => lostDeal && handleMarkAsLost(lostDeal, reason)}
+        onClose={() => setLostDeal(null)}
+      />
+
       <ConvertDealToCustomerDialog
         open={isConvertDialogOpen}
         onClose={handleConvertCancel}

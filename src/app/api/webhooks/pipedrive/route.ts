@@ -5,6 +5,10 @@
  * Supports person, deal, and note events.
  *
  * Endpoint: POST /api/webhooks/pipedrive
+ *
+ * Authentication: HTTP Basic Auth configured on the Pipedrive webhook
+ * (PIPEDRIVE_WEBHOOK_USERNAME / PIPEDRIVE_WEBHOOK_PASSWORD). Requests are
+ * rejected when the password is not configured.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -14,8 +18,17 @@ import {
   parseWebhookPayload,
   isSupportedEvent,
   getWebhookConfig,
+  isWebhookAuthConfigured,
   generateEventKey,
+  getEventTimestamp,
+  normalizeWebhookPayload,
 } from '@/features/pipedrive/lib/webhook-verify';
+import {
+  claimWebhookEvent,
+  completeWebhookEvent,
+  releaseWebhookEvent,
+} from '@/features/pipedrive/lib/webhook-dedup';
+import { toPipedriveId } from '@/features/pipedrive/lib/sync-log';
 import { db } from '@/shared/lib/supabase/database';
 
 // ============================================
@@ -39,25 +52,12 @@ interface WebhookPayload {
     is_bulk_update: boolean;
     matches_filters?: { current: unknown[] };
     webhook_id: string;
+    version?: string;
   };
   current?: unknown;
   previous?: unknown;
   event: string;
 }
-
-// In-memory dedup cache (5 minute window)
-const processedEvents = new Map<string, number>();
-const DEDUP_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
-
-// Clean up old entries periodically
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, timestamp] of processedEvents.entries()) {
-    if (now - timestamp > DEDUP_WINDOW_MS) {
-      processedEvents.delete(key);
-    }
-  }
-}, 60 * 1000); // Clean every minute
 
 // ============================================
 // POST HANDLER
@@ -65,96 +65,108 @@ setInterval(() => {
 
 export async function POST(request: NextRequest) {
   const startTime = Date.now();
+  let claimedEventKey: string | null = null;
 
   try {
     // Get config
     const config = getWebhookConfig();
 
-    // Verify authentication (if configured)
-    if (config.username && config.password) {
-      const authHeader = request.headers.get('Authorization');
-      const authResult = verifyWebhookAuth(
-        authHeader,
-        config.username,
-        config.password
+    // Fail closed: an unconfigured secret must not mean "accept everything"
+    if (!isWebhookAuthConfigured(config)) {
+      console.error('[Pipedrive Webhook] Rejected: PIPEDRIVE_WEBHOOK_PASSWORD is not configured');
+      return NextResponse.json(
+        { error: 'Service Unavailable', message: 'Webhook authentication is not configured' },
+        { status: 503 }
       );
+    }
 
-      if (!authResult.valid) {
-        console.warn('[Pipedrive Webhook] Auth failed:', authResult.error);
-        return NextResponse.json(
-          { error: 'Unauthorized', message: authResult.error },
-          { status: 401 }
-        );
-      }
+    const authResult = verifyWebhookAuth(
+      request.headers.get('Authorization'),
+      config.username,
+      config.password
+    );
+
+    if (!authResult.valid) {
+      console.warn('[Pipedrive Webhook] Auth failed:', authResult.error);
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     // Parse body
     const body = await request.text();
     const parseResult = parseWebhookPayload<WebhookPayload>(body);
 
-    if (!parseResult.success) {
-      console.error('[Pipedrive Webhook] Parse error:', parseResult.error);
-      return NextResponse.json(
-        { error: 'Bad Request', message: parseResult.error },
-        { status: 400 }
-      );
+    if (!parseResult.success || !parseResult.data?.meta) {
+      const message = parseResult.success ? 'Missing meta in payload' : parseResult.error;
+      console.error('[Pipedrive Webhook] Parse error:', message);
+      return NextResponse.json({ error: 'Bad Request', message }, { status: 400 });
     }
 
-    const payload = parseResult.data;
-
-    // Log incoming webhook
-    console.log(`[Pipedrive Webhook] Received: ${payload.event} (${payload.meta.object}:${payload.meta.id})`);
+    // Webhooks v2 (Pipedrive's default since Mar 17, 2025) are normalized to the v1 shape
+    const payload = normalizeWebhookPayload(parseResult.data);
 
     // Check if event is supported
     if (!isSupportedEvent(payload.event)) {
-      console.log(`[Pipedrive Webhook] Skipping unsupported event: ${payload.event}`);
       return NextResponse.json({
         success: true,
         action: 'skipped',
-        message: `Unsupported event: ${payload.event}`,
+        message: `Unsupported event: ${payload.event ?? 'unknown'}`,
       });
     }
 
-    // Deduplication check
+    // Deduplication: claim the event key before processing
     const eventKey = generateEventKey(
       payload.event,
       payload.meta.id,
-      payload.meta.timestamp
+      getEventTimestamp(payload.meta)
     );
 
-    if (processedEvents.has(eventKey)) {
-      console.log(`[Pipedrive Webhook] Duplicate event skipped: ${eventKey}`);
+    const claim = await claimWebhookEvent(eventKey, payload.event, toPipedriveId(payload.meta.id));
+    if (claim === 'duplicate') {
       return NextResponse.json({
         success: true,
         action: 'skipped',
         message: 'Duplicate event',
       });
     }
-
-    // Mark as processing
-    processedEvents.set(eventKey, Date.now());
+    if (claim === 'in_progress') {
+      // Another delivery is processing this event right now. A non-2xx makes
+      // Pipedrive retry later, by which time it is either done or released.
+      return NextResponse.json(
+        { error: 'Conflict', message: 'Event is already being processed' },
+        { status: 409 }
+      );
+    }
+    claimedEventKey = eventKey;
 
     // Process the event
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const result = await pipedriveWebhookService.processEvent(payload as any);
 
     const duration = Date.now() - startTime;
-    console.log(
-      `[Pipedrive Webhook] Processed ${payload.event} in ${duration}ms: ${result.action}`
-    );
 
-    // Update sync log with result
-    if (!result.success) {
-      await db.from('pipedrive_sync_log').insert({
+    if (result.success) {
+      await completeWebhookEvent(eventKey);
+    } else {
+      // Allow a later redelivery of this event to be processed again
+      await releaseWebhookEvent(eventKey);
+
+      console.error(
+        `[Pipedrive Webhook] ${payload.event} (${payload.meta.object}:${payload.meta.id}) failed in ${duration}ms: ${result.message}`
+      );
+
+      const { error: logError } = await db.from('pipedrive_sync_log').insert({
         event_type: 'webhook',
         direction: 'inbound',
         entity_type: payload.meta.object,
-        entity_id: String(payload.meta.id),
-        pipedrive_id: payload.meta.id,
+        entity_id: null,
+        pipedrive_id: toPipedriveId(payload.meta.id),
         payload: payload as unknown as Record<string, unknown>,
         status: 'failed',
         error_message: result.message,
       });
+      if (logError) {
+        console.error('[Pipedrive Webhook] Failed to write sync log:', logError.message);
+      }
     }
 
     return NextResponse.json({
@@ -167,6 +179,11 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error('[Pipedrive Webhook] Error:', error);
+
+    // Pipedrive retries on 5xx - release the key so the retry is processed
+    if (claimedEventKey) {
+      await releaseWebhookEvent(claimedEventKey);
+    }
 
     // Log error
     try {
@@ -182,10 +199,7 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json(
-      {
-        error: 'Internal Server Error',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      },
+      { error: 'Internal Server Error' },
       { status: 500 }
     );
   }

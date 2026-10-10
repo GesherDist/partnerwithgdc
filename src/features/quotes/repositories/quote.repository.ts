@@ -471,12 +471,18 @@ class QuoteRepositoryImpl {
         customer_po_number: data.customerPoNumber || null,
         created_by: userId || null,
         updated_by: userId || null,
+        // Linked at insert time so a retry or concurrent run cannot leave an
+        // unlinked duplicate (unique among live quotes, migration 155). Only
+        // sent when set, so quotes not from Pipedrive never touch the column.
+        ...(data.pipedriveDealId ? { pipedrive_deal_id: data.pipedriveDealId } : {}),
       })
       .select()
       .single();
 
     if (quoteError) {
-      throw new Error(`Failed to create quote: ${quoteError.message}`);
+      const failure = new Error(`Failed to create quote: ${quoteError.message}`) as Error & { code?: string };
+      failure.code = quoteError.code;
+      throw failure;
     }
 
     // Insert items
@@ -877,6 +883,7 @@ class QuoteRepositoryImpl {
       poDocumentUrl: data.po_document_url,
       customerPoNumber: data.customer_po_number,
       convertedToSalesOrderId: data.converted_to_sales_order_id,
+      pipedriveDealId: (data as { pipedrive_deal_id?: number | null }).pipedrive_deal_id ?? null,
       convertedAt: data.converted_at ? new Date(data.converted_at) : null,
       convertedBy: data.converted_by,
       createdAt: new Date(data.created_at),

@@ -115,6 +115,8 @@ export const createQuoteSchema = z.object({
   termsAndConditions: z.string().nullable().optional(),
   poDocumentUrl: z.string().nullable().optional(),
   customerPoNumber: z.string().max(100).nullable().optional(),
+  // Pipedrive deal this quote is created for (unique among live quotes, migration 155)
+  pipedriveDealId: z.number().int().positive().nullable().optional(),
 });
 
 export const updateQuoteSchema = z.object({

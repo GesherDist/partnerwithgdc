@@ -7,11 +7,17 @@
  */
 
 import { revalidatePath } from 'next/cache';
-import { getCurrentUser } from '@/shared/lib/auth/check-permission';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth/check-permission';
+import type { AppUser } from '@/shared/stores/auth.store';
 import { dealsService } from '../services/deals.service';
 import { pipedrivePushService } from '@/features/pipedrive/services/pipedrive-push.service';
 import { dealsRepository } from '../repositories/deals.repository';
 import { customerService } from '@/features/customers/services/customer.service';
+import { customerRepository } from '@/features/customers/repositories/customer.repository';
+import { GDC_LOST_REASONS, isGdcLostReason } from '@/features/pipedrive/gdc/config';
+import { findLiveQuoteForDeal as findLiveQuoteForPipedriveDeal } from '@/features/pipedrive/gdc/deal-erp.service';
+import { MigrationRequiredError } from '@/features/pipedrive/gdc/schema-guard';
+import { db } from '@/shared/lib/supabase/database';
 import { quoteService } from '@/features/quotes/services/quote.service';
 import type {
   Deal,
@@ -37,6 +43,37 @@ export type ActionResult<T> = {
 };
 
 // ============================================
+// AUTHORIZATION HELPERS
+// ============================================
+
+/**
+ * Same permission that gates the /deals page. Server actions are callable
+ * directly, so they must enforce it themselves.
+ */
+const DEALS_PERMISSION = 'customers.view_module';
+
+type AuthorizeResult =
+  | { ok: true; user: AppUser }
+  | { ok: false; result: { success: false; error: string } };
+
+/**
+ * Resolve the current application user and verify a permission.
+ */
+async function authorize(permission: string): Promise<AuthorizeResult> {
+  const user = await getCurrentUser();
+
+  if (!user) {
+    return { ok: false, result: { success: false, error: 'Authentication required' } };
+  }
+
+  if (!hasPermission(user, permission)) {
+    return { ok: false, result: { success: false, error: `Permission denied: ${permission}` } };
+  }
+
+  return { ok: true, user };
+}
+
+// ============================================
 // READ ACTIONS
 // ============================================
 
@@ -44,6 +81,11 @@ export type ActionResult<T> = {
  * Get a deal by ID
  */
 export async function getDeal(id: string): Promise<ActionResult<Deal>> {
+  const auth = await authorize(DEALS_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   try {
     const deal = await dealsService.getDeal(id);
 
@@ -67,6 +109,11 @@ export async function getDeal(id: string): Promise<ActionResult<Deal>> {
 export async function getDeals(
   params: DealListParams = {}
 ): Promise<ActionResult<PaginatedDealResult>> {
+  const auth = await authorize(DEALS_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   try {
     const result = await dealsService.getDeals(params);
     return { success: true, data: result };
@@ -89,6 +136,11 @@ export async function getDealStats(): Promise<
     valueByPipeline: Array<{ pipeline: string; totalValue: number; count: number }>;
   }>
 > {
+  const auth = await authorize(DEALS_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   try {
     const stats = await dealsService.getDealStats();
     return { success: true, data: stats };
@@ -109,9 +161,14 @@ export async function getDealStats(): Promise<
  * Create a new deal
  */
 export async function createDeal(dto: CreateDealDTO): Promise<ActionResult<Deal>> {
+  const auth = await authorize(DEALS_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   try {
-    const user = await getCurrentUser();
-    const deal = await dealsService.createDeal(dto, user?.id);
+    const user = auth.user;
+    const deal = await dealsService.createDeal(dto, user.id);
 
     revalidatePath('/deals');
     return { success: true, data: deal };
@@ -131,9 +188,14 @@ export async function updateDeal(
   id: string,
   dto: UpdateDealDTO
 ): Promise<ActionResult<Deal>> {
+  const auth = await authorize(DEALS_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   try {
-    const user = await getCurrentUser();
-    const deal = await dealsService.updateDeal(id, dto, user?.id);
+    const user = auth.user;
+    const deal = await dealsService.updateDeal(id, dto, user.id);
 
     // Push update to Pipedrive (non-blocking)
     try {
@@ -164,9 +226,14 @@ export async function updateDeal(
  * Delete a deal
  */
 export async function deleteDeal(id: string): Promise<ActionResult<void>> {
+  const auth = await authorize(DEALS_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   try {
-    const user = await getCurrentUser();
-    await dealsService.deleteDeal(id, user?.id);
+    const user = auth.user;
+    await dealsService.deleteDeal(id, user.id);
 
     revalidatePath('/deals');
     return { success: true, data: undefined };
@@ -183,9 +250,14 @@ export async function deleteDeal(id: string): Promise<ActionResult<void>> {
  * Mark deal as won
  */
 export async function markDealAsWon(id: string): Promise<ActionResult<Deal>> {
+  const auth = await authorize(DEALS_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   try {
-    const user = await getCurrentUser();
-    const deal = await dealsService.markAsWon(id, user?.id);
+    const user = auth.user;
+    const deal = await dealsService.markAsWon(id, user.id);
 
     revalidatePath('/deals');
     revalidatePath(`/deals/${id}`);
@@ -206,9 +278,19 @@ export async function markDealAsLost(
   id: string,
   lostReason?: string
 ): Promise<ActionResult<Deal>> {
+  const auth = await authorize(DEALS_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
+  // GDC spec: one of the predefined lost reasons is required (same list as Pipedrive)
+  if (!isGdcLostReason(lostReason)) {
+    return { success: false, error: `A lost reason is required: ${GDC_LOST_REASONS.join(', ')}` };
+  }
+
   try {
-    const user = await getCurrentUser();
-    const deal = await dealsService.markAsLost(id, lostReason, user?.id);
+    const user = auth.user;
+    const deal = await dealsService.markAsLost(id, lostReason, user.id);
 
     revalidatePath('/deals');
     revalidatePath(`/deals/${id}`);
@@ -226,9 +308,14 @@ export async function markDealAsLost(
  * Reopen a deal
  */
 export async function reopenDeal(id: string): Promise<ActionResult<Deal>> {
+  const auth = await authorize(DEALS_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   try {
-    const user = await getCurrentUser();
-    const deal = await dealsService.reopenDeal(id, user?.id);
+    const user = auth.user;
+    const deal = await dealsService.reopenDeal(id, user.id);
 
     revalidatePath('/deals');
     revalidatePath(`/deals/${id}`);
@@ -249,9 +336,14 @@ export async function linkDealToCustomer(
   dealId: string,
   customerId: string
 ): Promise<ActionResult<Deal>> {
+  const auth = await authorize(DEALS_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   try {
-    const user = await getCurrentUser();
-    const deal = await dealsService.linkToCustomer(dealId, customerId, user?.id);
+    const user = auth.user;
+    const deal = await dealsService.linkToCustomer(dealId, customerId, user.id);
 
     revalidatePath('/deals');
     revalidatePath(`/deals/${dealId}`);
@@ -273,6 +365,11 @@ export async function linkDealToCustomer(
  * Get notes for a deal
  */
 export async function getDealNotes(dealId: string): Promise<ActionResult<DealNote[]>> {
+  const auth = await authorize(DEALS_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   try {
     const notes = await dealsService.getNotes(dealId);
     return { success: true, data: notes };
@@ -293,13 +390,18 @@ export async function addDealNote(
   dealId: string,
   content: string
 ): Promise<ActionResult<DealNote>> {
+  const auth = await authorize(DEALS_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   try {
-    const user = await getCurrentUser();
+    const user = auth.user;
 
     // 1. Save note locally first
     const note = await dealsService.addNote(
       { dealId, content },
-      user?.id
+      user.id
     );
 
     // 2. Push to Pipedrive if deal is linked (non-blocking)
@@ -312,8 +414,12 @@ export async function addDealNote(
           orgId: deal.pipedriveOrgId || undefined,
         });
 
-        if (pushResult.success) {
-          console.log(`[addDealNote] Note synced to Pipedrive: ${pushResult.pipedriveNoteId}`);
+        if (pushResult.success && pushResult.pipedriveNoteId) {
+          // Link the local note to its Pipedrive copy; without this the next
+          // deals sync imports the same note again as a duplicate.
+          await dealsRepository.markNoteSynced(note.id, pushResult.pipedriveNoteId);
+          note.pipedriveNoteId = pushResult.pipedriveNoteId;
+          note.syncedToPipedrive = true;
         } else {
           console.warn(`[addDealNote] Pipedrive push warning: ${pushResult.error}`);
         }
@@ -338,7 +444,25 @@ export async function addDealNote(
  * Delete a deal note
  */
 export async function deleteDealNote(noteId: string, dealId: string): Promise<ActionResult<void>> {
+  const auth = await authorize(DEALS_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   try {
+    // Delete the Pipedrive copy first. If that fails, keep the local note:
+    // deleting only locally would let the next sync bring the note back.
+    const note = await dealsRepository.getNoteById(noteId);
+    if (note?.pipedriveNoteId) {
+      const pipedriveResult = await pipedrivePushService.deleteNoteFromPipedrive(note.pipedriveNoteId);
+      if (!pipedriveResult.success && !pipedriveResult.notConnected) {
+        return {
+          success: false,
+          error: `Could not delete the note in Pipedrive, so it was kept. Please try again. (${pipedriveResult.error})`,
+        };
+      }
+    }
+
     await dealsService.deleteNote(noteId);
 
     revalidatePath(`/deals/${dealId}`);
@@ -398,12 +522,14 @@ interface ConvertDealToCustomerData {
 export async function convertDealToCustomer(
   dealId: string,
   data: ConvertDealToCustomerData
-): Promise<ActionResult<{ customerId: string; quoteId: string | null }>> {
+): Promise<ActionResult<{ customerId: string; quoteId: string | null; quoteError?: string }>> {
+  const auth = await authorize(DEALS_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return { success: false, error: 'Authentication required' };
-    }
+    const user = auth.user;
 
     // 1. Get the deal
     const deal = await dealsService.getDeal(dealId);
@@ -414,6 +540,47 @@ export async function convertDealToCustomer(
     // 2. Verify deal is won
     if (deal.status !== 'won') {
       return { success: false, error: 'Only won deals can be converted to customers' };
+    }
+
+    // Idempotency: a deal converts to exactly one customer. The UI hides the
+    // button once converted, but a double submit or second tab can still call this.
+    if (deal.customerId) {
+      return { success: false, error: 'This deal has already been converted to a customer' };
+    }
+
+    // Validate quote lines before creating anything, so a bad line cannot leave
+    // a customer behind with a silently missing quote.
+    const wantsQuote = data.createQuote !== false;
+    if (wantsQuote) {
+      if (data.products.length === 0) {
+        return { success: false, error: 'Add at least one product for the quote, or turn off quote creation' };
+      }
+      const unmatched = data.products.filter((product) => !product.productId);
+      if (unmatched.length > 0) {
+        return {
+          success: false,
+          error: `Select a catalog product for: ${unmatched.map((p) => p.sku || p.description).join(', ')}`,
+        };
+      }
+    }
+
+    // A won Pipedrive deal may already have its ERP quote (created by the webhook
+    // flow); never create a second one for the same deal. Checked before anything
+    // is created so a failure here leaves no partial records behind.
+    // Without migration 155 the deal link is unavailable: the quote is created
+    // the legacy way (not linked to the deal) and the user is told.
+    let existingDealQuote: { quote_number: string } | null = null;
+    let dealLinkUnavailable = false;
+    if (wantsQuote && deal.pipedriveDealId) {
+      try {
+        existingDealQuote = await findLiveQuoteForPipedriveDeal(deal.pipedriveDealId);
+      } catch (error) {
+        if (!(error instanceof MigrationRequiredError)) {
+          throw error;
+        }
+        console.warn('[convertDealToCustomer] Migration 155 not applied; quote will not be linked to the Pipedrive deal');
+        dealLinkUnavailable = true;
+      }
     }
 
     // 3. Create customer using createFromForm (auto-generates customerCode)
@@ -475,18 +642,31 @@ export async function convertDealToCustomer(
     }
 
     const customer = customerResult.data;
-    console.log('[convertDealToCustomer] Customer created:', customer.id);
 
-    // 4. Create quote if requested
+    // 4. Link the deal to the customer right away, atomically. If another
+    // request linked it first, undo this customer instead of keeping a duplicate.
+    const linked = await dealsRepository.linkCustomerIfUnlinked(dealId, customer.id, user.id);
+    if (!linked) {
+      await customerRepository.softDelete(customer.id, user.id);
+      return { success: false, error: 'This deal has already been converted to a customer' };
+    }
+
+    // Link the new customer to the deal's Pipedrive organization so won deals
+    // and purchase history resolve it. Only when no other customer holds that
+    // organization; a failure here never undoes the conversion.
+    if (deal.pipedriveOrgId) {
+      await linkCustomerToPipedriveOrg(customer.id, deal.pipedriveOrgId);
+    }
+
+    // 5. Create quote if requested
     let quoteId: string | null = null;
+    let quoteError: string | undefined;
 
-    console.log('[convertDealToCustomer] createQuote flag:', data.createQuote);
-    console.log('[convertDealToCustomer] products count:', data.products.length);
+    if (wantsQuote && existingDealQuote) {
+      quoteError = `Quote ${existingDealQuote.quote_number} already exists for this Pipedrive deal; no new quote was created`;
+    }
 
-    if (data.createQuote !== false) {
-      console.log('[convertDealToCustomer] Creating quote...');
-      console.log('[convertDealToCustomer] Customer ID for quote:', customer.id);
-
+    if (wantsQuote && !existingDealQuote) {
       const quoteData: CreateQuoteInput = {
         quoteNumber: data.quoteNumber || undefined,
         quoteDate: data.quoteDate || new Date(),
@@ -514,9 +694,9 @@ export async function convertDealToCustomer(
           country: data.shippingAddress.country,
         },
 
-        // Quote items
+        // Quote items (productId presence validated above)
         items: data.products.map((product) => ({
-          productId: product.productId || '', // Will need to resolve by SKU on server
+          productId: product.productId || '',
           sku: product.sku,
           description: product.description,
           quantity: product.quantity,
@@ -529,22 +709,30 @@ export async function convertDealToCustomer(
         customerNotes: data.customerNotes,
         internalNotes: data.internalNotes || null,
         termsAndConditions: data.termsAndConditions || null,
+        // Linked at insert time: a concurrent won-deal run cannot add a second quote
+        pipedriveDealId: deal.pipedriveDealId && !dealLinkUnavailable ? deal.pipedriveDealId : null,
       };
 
       const quoteResult = await quoteService.create(quoteData, user.id);
 
       if (!quoteResult.success || !quoteResult.data) {
+        // The customer is created and linked; report the quote failure instead
+        // of claiming success, so the user can create the quote manually.
         console.error('[convertDealToCustomer] Quote creation failed:', quoteResult.error);
-        // Don't fail the whole operation, customer is already created
-        // Just log the error
+        const winner =
+          deal.pipedriveDealId && !dealLinkUnavailable
+            ? await findLiveQuoteForPipedriveDeal(deal.pipedriveDealId).catch(() => null)
+            : null;
+        quoteError = winner
+          ? `Quote ${winner.quote_number} already exists for this Pipedrive deal; no new quote was created`
+          : quoteResult.error || 'Quote could not be created';
       } else {
         quoteId = quoteResult.data.id;
-        console.log('[convertDealToCustomer] Quote created:', quoteId);
+        if (dealLinkUnavailable) {
+          quoteError = 'Quote created but not linked to the Pipedrive deal (database migration 155 pending); the SO number will not be written back automatically';
+        }
       }
     }
-
-    // 5. Update deal to mark as converted
-    await dealsService.updateDeal(dealId, { customerId: customer.id }, user.id);
 
     revalidatePath('/deals');
     revalidatePath('/customers');
@@ -557,6 +745,7 @@ export async function convertDealToCustomer(
       data: {
         customerId: customer.id,
         quoteId,
+        quoteError,
       },
     };
   } catch (error) {
@@ -565,5 +754,33 @@ export async function convertDealToCustomer(
       success: false,
       error: error instanceof Error ? error.message : 'Failed to convert deal to customer',
     };
+  }
+}
+
+/**
+ * Set customers.pipedrive_org_id for a newly converted customer, unless another
+ * live customer already holds that organization or the customer is linked.
+ */
+async function linkCustomerToPipedriveOrg(customerId: string, orgId: number): Promise<void> {
+  try {
+    const { data: holders, error } = await db
+      .from('customers')
+      .select('id')
+      .eq('pipedrive_org_id', orgId)
+      .is('deleted_at', null)
+      .limit(1);
+    if (error || (holders ?? []).length > 0) {
+      return;
+    }
+    const { error: updateError } = await db
+      .from('customers')
+      .update({ pipedrive_org_id: orgId })
+      .eq('id', customerId)
+      .is('pipedrive_org_id', null);
+    if (updateError) {
+      console.warn('[convertDealToCustomer] Could not link customer to the Pipedrive organization:', updateError.message);
+    }
+  } catch (error) {
+    console.warn('[convertDealToCustomer] Could not link customer to the Pipedrive organization:', error);
   }
 }

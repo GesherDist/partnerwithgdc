@@ -22,6 +22,8 @@ import {
   UserPlus,
   MapPin,
   Pencil,
+  FileText,
+  Loader2,
 } from 'lucide-react';
 
 import {
@@ -43,8 +45,11 @@ import {
 
 import { getDeal, getDealNotes, addDealNote, deleteDealNote, markDealAsWon, markDealAsLost } from '../actions';
 import { getPipedriveCompanyDomain } from '@/features/pipedrive/actions';
+import { createErpQuoteForWonDeal } from '@/features/pipedrive/gdc/actions';
 import type { Deal, DealNote, DealStatus } from '../types';
 import { ConvertDealToCustomerDialog } from './ConvertDealToCustomerDialog';
+import { LostReasonDialog } from './LostReasonDialog';
+import type { GdcLostReason } from '@/features/pipedrive/gdc/config';
 import { EditDealDialog } from './EditDealDialog';
 
 // ============================================
@@ -104,12 +109,14 @@ export function DealDetailDrawer({
   const [deal, setDeal] = useState<Deal | null>(null);
   const [notes, setNotes] = useState<DealNote[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isCreatingErpQuote, setIsCreatingErpQuote] = useState(false);
   const [newNote, setNewNote] = useState('');
   const [isAddingNote, setIsAddingNote] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [pipedriveCompanyDomain, setPipedriveCompanyDomain] = useState<string | null>(null);
   const [isConvertDialogOpen, setIsConvertDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [isLostDialogOpen, setIsLostDialogOpen] = useState(false);
 
   // ----------------------------------------
   // EFFECTS
@@ -232,14 +239,15 @@ export function DealDetailDrawer({
     }
   };
 
-  const handleMarkAsLost = async () => {
+  const handleMarkAsLost = async (reason: GdcLostReason) => {
     if (!dealId) return;
 
     setIsUpdating(true);
     try {
-      const result = await markDealAsLost(dealId);
+      const result = await markDealAsLost(dealId, reason);
       if (result.success) {
         setDeal(result.data);
+        setIsLostDialogOpen(false);
         toast.success('Deal marked as lost');
         onRefresh?.();
       } else {
@@ -250,6 +258,27 @@ export function DealDetailDrawer({
       toast.error('Failed to update deal');
     } finally {
       setIsUpdating(false);
+    }
+  };
+
+  // Retry the won-deal -> ERP quote flow after fixing the customer link,
+  // products or SKUs. Idempotent: an existing quote is reported, never duplicated.
+  const handleCreateErpQuote = async () => {
+    if (!deal?.pipedriveDealId) {
+      return;
+    }
+    setIsCreatingErpQuote(true);
+    try {
+      const result = await createErpQuoteForWonDeal(deal.pipedriveDealId);
+      if (result.data?.status === 'quote_created') {
+        toast.success(`ERP quote ${result.data.quoteNumber} created and submitted for approval`);
+      } else if (result.data?.status === 'already_processed') {
+        toast.info(result.data.message);
+      } else {
+        toast.error(result.data?.message || result.error || 'ERP quote could not be created');
+      }
+    } finally {
+      setIsCreatingErpQuote(false);
     }
   };
 
@@ -334,7 +363,7 @@ export function DealDetailDrawer({
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={handleMarkAsLost}
+                    onClick={() => setIsLostDialogOpen(true)}
                     disabled={isUpdating}
                     className="w-full"
                   >
@@ -591,12 +620,38 @@ export function DealDetailDrawer({
                 </Button>
               )}
             </div>
+
+            {deal.status === 'won' && deal.pipedriveDealId && (
+              <Button
+                variant="outline"
+                onClick={handleCreateErpQuote}
+                disabled={isCreatingErpQuote}
+                className="w-full"
+                title="Create the ERP quote for this won deal (or show the existing one)"
+              >
+                {isCreatingErpQuote ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <FileText className="mr-2 h-4 w-4" />
+                )}
+                Create ERP quote
+              </Button>
+            )}
           </div>
         ) : (
           <div className="flex items-center justify-center py-12">
             <p className="text-muted-foreground">Deal not found</p>
           </div>
         )}
+
+        {/* Lost reason (required) */}
+        <LostReasonDialog
+          open={isLostDialogOpen}
+          dealTitle={deal?.title}
+          submitting={isUpdating}
+          onConfirm={handleMarkAsLost}
+          onClose={() => setIsLostDialogOpen(false)}
+        />
 
         {/* Convert to Customer Dialog */}
         <ConvertDealToCustomerDialog

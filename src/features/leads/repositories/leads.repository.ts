@@ -5,6 +5,7 @@
  */
 
 import { db } from '@/shared/lib/supabase/database';
+import { fetchAllRows, chunk } from '@/shared/lib/supabase/paginate';
 import type {
   Lead,
   LeadNote,
@@ -15,6 +16,19 @@ import type {
   UpdateLeadDTO,
   CreateLeadNoteDTO,
 } from '../types';
+
+/**
+ * Who soft-deleted a lead (leads.deleted_source, migration 153).
+ * Sync-deleted leads may be restored when they reappear in Pipedrive;
+ * user-deleted leads must never be re-created by a sync.
+ */
+export const LEAD_DELETED_SOURCE = {
+  USER: 'user',
+  PIPEDRIVE_SYNC: 'pipedrive_sync',
+} as const;
+
+/** IDs per bulk soft-delete request (keeps .in() filters within URL limits) */
+const SOFT_DELETE_CHUNK_SIZE = 200;
 
 // ============================================
 // TYPE DEFINITIONS
@@ -211,36 +225,45 @@ class LeadsRepository {
    * Get a lead by Pipedrive Person ID
    */
   async getByPipedrivePersonId(pipedrivePersonId: number): Promise<Lead | null> {
+    // A Pipedrive person can own several leads; return the oldest deterministically.
+    // .single() would error on multiple rows and look like "not found".
     const { data, error } = await db
       .from('leads')
       .select('*')
       .eq('pipedrive_person_id', pipedrivePersonId)
       .is('deleted_at', null)
-      .single();
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
 
-    if (error || !data) {
+    if (error) {
+      console.error('Error fetching lead by Pipedrive person ID:', error);
       return null;
     }
 
-    return mapRowToLead(data as LeadRow);
+    return data ? mapRowToLead(data as LeadRow) : null;
   }
 
   /**
    * Get a lead by Pipedrive Deal ID
    */
   async getByPipedriveDealId(pipedriveDealId: number): Promise<Lead | null> {
+    // pipedrive_deal_id is not unique on leads; avoid .single() failing on duplicates
     const { data, error } = await db
       .from('leads')
       .select('*')
       .eq('pipedrive_deal_id', pipedriveDealId)
       .is('deleted_at', null)
-      .single();
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
 
-    if (error || !data) {
+    if (error) {
+      console.error('Error fetching lead by Pipedrive deal ID:', error);
       return null;
     }
 
-    return mapRowToLead(data as LeadRow);
+    return data ? mapRowToLead(data as LeadRow) : null;
   }
 
   /**
@@ -617,6 +640,7 @@ class LeadsRepository {
       .from('leads')
       .update({
         deleted_at: new Date().toISOString(),
+        deleted_source: LEAD_DELETED_SOURCE.USER,
         updated_by: userId || null,
       })
       .eq('id', id);
@@ -632,18 +656,24 @@ class LeadsRepository {
    * Used to detect deletions during sync
    */
   async getAllPipedrivePersonIds(): Promise<number[]> {
-    const { data, error } = await db
-      .from('leads')
-      .select('pipedrive_person_id')
-      .not('pipedrive_person_id', 'is', null)
-      .is('deleted_at', null);
-
-    if (error) {
+    // Paged: a single query is silently capped at Supabase max-rows (1000)
+    let data: Array<{ pipedrive_person_id: number | null }>;
+    try {
+      data = await fetchAllRows<{ pipedrive_person_id: number | null }>((from, to) =>
+        db
+          .from('leads')
+          .select('id, pipedrive_person_id')
+          .not('pipedrive_person_id', 'is', null)
+          .is('deleted_at', null)
+          .order('id', { ascending: true })
+          .range(from, to)
+      );
+    } catch (error) {
       console.error('Error fetching pipedrive person IDs:', error);
       return [];
     }
 
-    return (data || [])
+    return data
       .map((row: { pipedrive_person_id: number | null }) => row.pipedrive_person_id)
       .filter((id): id is number => id !== null);
   }
@@ -655,22 +685,29 @@ class LeadsRepository {
   async softDeleteByPipedrivePersonIds(personIds: number[], userId?: string): Promise<number> {
     if (personIds.length === 0) return 0;
 
-    const { data, error } = await db
-      .from('leads')
-      .update({
-        deleted_at: new Date().toISOString(),
-        updated_by: userId || null,
-      })
-      .in('pipedrive_person_id', personIds)
-      .is('deleted_at', null)
-      .select('id');
+    // Chunked: one huge .in() filter can exceed URL length limits
+    let deleted = 0;
+    for (const ids of chunk(personIds, SOFT_DELETE_CHUNK_SIZE)) {
+      const { data, error } = await db
+        .from('leads')
+        .update({
+          deleted_at: new Date().toISOString(),
+          deleted_source: LEAD_DELETED_SOURCE.PIPEDRIVE_SYNC,
+          updated_by: userId || null,
+        })
+        .in('pipedrive_person_id', ids)
+        .is('deleted_at', null)
+        .select('id');
 
-    if (error) {
-      console.error('Error soft deleting leads:', error);
-      return 0;
+      if (error) {
+        console.error('Error soft deleting leads:', error);
+        return deleted;
+      }
+
+      deleted += data?.length || 0;
     }
 
-    return data?.length || 0;
+    return deleted;
   }
 
   /**
@@ -678,20 +715,32 @@ class LeadsRepository {
    * Used to detect deletions during Leads Inbox sync
    */
   async getAllPipedriveLeadIds(): Promise<Array<{ id: string; pipedriveLeadId: string }>> {
-    const { data, error } = await db
-      .from('leads')
-      .select('id, pipedrive_lead_id')
-      .not('pipedrive_lead_id', 'is', null)
-      .is('deleted_at', null);
-
-    if (error) {
+    // Used only to find leads removed from Pipedrive. Converted leads are
+    // excluded: converting deletes the Pipedrive Leads Inbox entry on purpose,
+    // and the converted lead must stay in Gesher.
+    // Paged: a single query is silently capped at Supabase max-rows (1000)
+    let data: Array<{ id: string; pipedrive_lead_id: string | null }>;
+    try {
+      data = await fetchAllRows<{ id: string; pipedrive_lead_id: string | null }>((from, to) =>
+        db
+          .from('leads')
+          .select('id, pipedrive_lead_id')
+          .not('pipedrive_lead_id', 'is', null)
+          .is('deleted_at', null)
+          .is('converted_deal_id', null)
+          .is('converted_customer_id', null)
+          .not('status', 'in', '("deal","converted")')
+          .order('id', { ascending: true })
+          .range(from, to)
+      );
+    } catch (error) {
       console.error('Error fetching pipedrive lead IDs:', error);
       return [];
     }
 
-    return (data || [])
-      .filter((row: { id: string; pipedrive_lead_id: string | null }) => row.pipedrive_lead_id !== null)
-      .map((row: { id: string; pipedrive_lead_id: string }) => ({
+    return data
+      .filter((row): row is { id: string; pipedrive_lead_id: string } => row.pipedrive_lead_id !== null)
+      .map((row) => ({
         id: row.id,
         pipedriveLeadId: row.pipedrive_lead_id,
       }));
@@ -704,22 +753,29 @@ class LeadsRepository {
   async softDeleteByPipedriveLeadIds(leadIds: string[], userId?: string): Promise<number> {
     if (leadIds.length === 0) return 0;
 
-    const { data, error } = await db
-      .from('leads')
-      .update({
-        deleted_at: new Date().toISOString(),
-        updated_by: userId || null,
-      })
-      .in('pipedrive_lead_id', leadIds)
-      .is('deleted_at', null)
-      .select('id');
+    // Chunked: one huge .in() filter can exceed URL length limits
+    let deleted = 0;
+    for (const ids of chunk(leadIds, SOFT_DELETE_CHUNK_SIZE)) {
+      const { data, error } = await db
+        .from('leads')
+        .update({
+          deleted_at: new Date().toISOString(),
+          deleted_source: LEAD_DELETED_SOURCE.PIPEDRIVE_SYNC,
+          updated_by: userId || null,
+        })
+        .in('pipedrive_lead_id', ids)
+        .is('deleted_at', null)
+        .select('id');
 
-    if (error) {
-      console.error('Error soft deleting leads by pipedrive_lead_id:', error);
-      return 0;
+      if (error) {
+        console.error('Error soft deleting leads by pipedrive_lead_id:', error);
+        return deleted;
+      }
+
+      deleted += data?.length || 0;
     }
 
-    return data?.length || 0;
+    return deleted;
   }
 
   /**
@@ -747,7 +803,13 @@ class LeadsRepository {
    * Upsert lead from Pipedrive Leads Inbox API
    * Creates or updates based on pipedrive_lead_id (UUID)
    */
-  async upsertFromPipedriveLeadsInbox(dto: CreateLeadDTO, userId?: string): Promise<{ lead: Lead; isNew: boolean }> {
+  async upsertFromPipedriveLeadsInbox(
+    dto: CreateLeadDTO,
+    userId?: string
+  ): Promise<
+    | { lead: Lead; isNew: boolean; restored?: boolean; skippedDeleted?: false }
+    | { lead: null; isNew: false; restored?: false; skippedDeleted: true }
+  > {
     if (!dto.pipedriveLeadId) {
       throw new Error('pipedriveLeadId is required for Leads Inbox upsert');
     }
@@ -755,9 +817,31 @@ class LeadsRepository {
     const existing = await this.getByPipedriveLeadId(dto.pipedriveLeadId);
 
     if (existing) {
-      // Use updateFromPipedrive for full field update including Pipedrive-specific fields
-      const updated = await this.updateFromPipedrive(existing.id, dto, userId);
+      // Lead status is a Gesher workflow field (contacted, qualified, deal, ...);
+      // Pipedrive Leads Inbox has no equivalent, so never overwrite it on update.
+      const updated = await this.updateFromPipedrive(
+        existing.id,
+        { ...dto, status: undefined },
+        userId
+      );
       return { lead: updated, isNew: false };
+    }
+
+    // Respect deletions made in Gesher, and restore leads that the sync itself
+    // removed earlier (e.g. archived in Pipedrive, then unarchived).
+    const deleted = await this.getDeletedByPipedriveLeadId(dto.pipedriveLeadId);
+    if (deleted) {
+      if (deleted.deletedSource === LEAD_DELETED_SOURCE.PIPEDRIVE_SYNC) {
+        const restored = await this.updateFromPipedrive(
+          deleted.id,
+          { ...dto, status: undefined },
+          userId,
+          { restore: true }
+        );
+        return { lead: restored, isNew: false, restored: true };
+      }
+
+      return { lead: null, isNew: false, skippedDeleted: true };
     }
 
     const created = await this.create(dto, userId);
@@ -765,13 +849,47 @@ class LeadsRepository {
   }
 
   /**
+   * Find a soft-deleted lead by Pipedrive Lead ID, with how it was deleted
+   */
+  private async getDeletedByPipedriveLeadId(
+    pipedriveLeadId: string
+  ): Promise<{ id: string; deletedSource: string | null } | null> {
+    const { data, error } = await db
+      .from('leads')
+      .select('id, deleted_source')
+      .eq('pipedrive_lead_id', pipedriveLeadId)
+      .not('deleted_at', 'is', null)
+      .order('deleted_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      // Fail closed: treat as deleted-by-user so a lead is never re-created by mistake
+      console.error('Error fetching soft-deleted lead by Pipedrive lead ID:', error);
+      throw new Error('Failed to check for a previously deleted lead');
+    }
+
+    return data ? { id: data.id, deletedSource: data.deleted_source ?? null } : null;
+  }
+
+  /**
    * Update lead from Pipedrive sync
    * Updates all fields including Pipedrive-specific ones
    */
-  async updateFromPipedrive(id: string, dto: CreateLeadDTO, userId?: string): Promise<Lead> {
+  async updateFromPipedrive(
+    id: string,
+    dto: CreateLeadDTO,
+    userId?: string,
+    options: { restore?: boolean } = {}
+  ): Promise<Lead> {
     const updateData: Record<string, unknown> = {
       updated_by: userId || null,
     };
+
+    if (options.restore) {
+      updateData.deleted_at = null;
+      updateData.deleted_source = null;
+    }
 
     // Basic fields
     if (dto.name !== undefined) updateData.name = dto.name;

@@ -3,6 +3,14 @@
     {
       "path": "/api/cron/cma-cgm-sync",
       "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/pipedrive-daily-digest",
+      "schedule": "0 12 * * 1-5"
+    },
+    {
+      "path": "/api/cron/pipedrive-reconcile",
+      "schedule": "15 13 * * *"
     }
   ]
 }

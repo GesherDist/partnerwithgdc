@@ -766,6 +766,10 @@ export const quoteService = {
         });
       }
 
+      // If the quote came from a won Pipedrive deal, write the SO number back (never throws)
+      const { writeBackSalesOrderNumber } = await import('@/features/pipedrive/gdc/deal-erp.service');
+      await writeBackSalesOrderNumber(id, salesOrderResult.data.id);
+
       return {
         success: true,
         data: {

@@ -102,6 +102,8 @@ export interface Quote {
 
   // Chain Link
   convertedToSalesOrderId: string | null;
+  /** Pipedrive deal this quote was created for (migration 155); null otherwise */
+  pipedriveDealId?: number | null;
   convertedAt: Date | null;
   convertedBy: string | null;
 
@@ -219,6 +221,8 @@ export interface CreateQuoteDTO {
   termsAndConditions?: string | null;
   poDocumentUrl?: string | null;
   customerPoNumber?: string | null;
+  /** Pipedrive deal this quote is created for; only sent when set (migration 155) */
+  pipedriveDealId?: number | null;
 }
 
 export interface UpdateQuoteDTO {

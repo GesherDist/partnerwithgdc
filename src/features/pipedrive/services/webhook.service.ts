@@ -9,6 +9,7 @@ import { db } from '@/shared/lib/supabase/database';
 import { leadsRepository } from '@/features/leads/repositories/leads.repository';
 import type { CreateLeadDTO, LeadStatus } from '@/features/leads/types';
 import type { PipedriveWebhookEvent } from '../lib/webhook-verify';
+import { toPipedriveId } from '../lib/sync-log';
 
 // ============================================
 // TYPES
@@ -80,10 +81,32 @@ interface WebhookPayload {
   event: string;
 }
 
+/**
+ * True when `field` changed from something other than `value` to `value`.
+ *
+ * Webhooks v1 send the full previous record; webhooks v2 send only the fields
+ * that changed. In both cases a field that changed is present in `previous`,
+ * so an unrelated edit (no `field` in `previous`) is never a transition.
+ */
+export function changedTo(
+  current: Record<string, unknown> | undefined,
+  previous: Record<string, unknown> | undefined,
+  field: string,
+  isValue: (value: unknown) => boolean
+): boolean {
+  if (!current || !isValue(current[field])) {
+    return false;
+  }
+  if (!previous || !Object.prototype.hasOwnProperty.call(previous, field)) {
+    return false;
+  }
+  return !isValue(previous[field]);
+}
+
 interface ProcessResult {
   success: boolean;
   action: 'created' | 'updated' | 'skipped' | 'error';
-  entityType: 'lead' | 'customer' | 'note';
+  entityType: 'lead' | 'customer' | 'note' | 'quote' | 'deal' | 'activity';
   entityId?: string;
   message?: string;
 }
@@ -115,6 +138,8 @@ class PipedriveWebhookService {
           return await this.handleDealEvent(action, payload);
         case 'note':
           return await this.handleNoteEvent(action, payload);
+        case 'activity':
+          return await this.handleActivityEvent(action, payload);
         default:
           return {
             success: true,
@@ -318,32 +343,32 @@ class PipedriveWebhookService {
   }
 
   private async handleDealAdded(deal: PipedriveDealData): Promise<ProcessResult> {
-    // If deal has a person, update/create the lead with deal info
-    if (deal.person_id) {
-      const existingLead = await leadsRepository.getByPipedrivePersonId(deal.person_id);
+    // Update the lead already linked to this deal (or its person) instead of
+    // creating another one. Checking the deal ID first makes redelivered
+    // added.deal events idempotent, including deals without a person.
+    const existingLead = await this.findLeadByDeal(deal);
 
-      if (existingLead) {
-        // Update existing lead with deal info
-        // Filter out 'deleted' status as it's not a valid DealStatus
-        const dealStatus = deal.status === 'deleted' ? null : deal.status as 'open' | 'won' | 'lost' | null;
-        const lead = await leadsRepository.update(existingLead.id, {
-          pipedriveDealId: deal.id,
-          dealTitle: deal.title,
-          dealValue: deal.value || null,
-          dealStatus,
-          dealProbability: deal.probability || null,
-          expectedCloseDate: deal.expected_close_date ? new Date(deal.expected_close_date) : null,
-          status: this.mapDealStatusToLeadStatus(deal.status),
-        });
+    if (existingLead) {
+      // Update existing lead with deal info
+      // Filter out 'deleted' status as it's not a valid DealStatus
+      const dealStatus = deal.status === 'deleted' ? null : deal.status as 'open' | 'won' | 'lost' | null;
+      const lead = await leadsRepository.update(existingLead.id, {
+        pipedriveDealId: deal.id,
+        dealTitle: deal.title,
+        dealValue: deal.value || null,
+        dealStatus,
+        dealProbability: deal.probability || null,
+        expectedCloseDate: deal.expected_close_date ? new Date(deal.expected_close_date) : null,
+        status: this.mapDealStatusToLeadStatus(deal.status),
+      });
 
-        return {
-          success: true,
-          action: 'updated',
-          entityType: 'lead',
-          entityId: lead.id,
-          message: `Updated lead with deal: ${deal.title}`,
-        };
-      }
+      return {
+        success: true,
+        action: 'updated',
+        entityType: 'lead',
+        entityId: lead.id,
+        message: `Updated lead with deal: ${deal.title}`,
+      };
     }
 
     // Create a new lead from the deal
@@ -377,8 +402,9 @@ class PipedriveWebhookService {
     deal: PipedriveDealData,
     previous?: PipedriveDealData
   ): Promise<ProcessResult> {
-    // Check if deal was won
-    if (deal.status === 'won' && previous?.status !== 'won') {
+    // Only a real transition to Won runs the ERP flow; edits to an already won
+    // deal (including our own ERP Quote # write) do not
+    if (changedTo(deal as unknown as Record<string, unknown>, previous as unknown as Record<string, unknown>, 'status', (v) => v === 'won')) {
       return await this.handleDealWon(deal);
     }
 
@@ -439,85 +465,103 @@ class PipedriveWebhookService {
   }
 
   /**
-   * Handle deal won - Create customer automatically!
+   * Deal won (GDC spec): create the ERP quote from the deal's products and send
+   * it through the normal approval workflow (see deal-erp.service). The ERP
+   * customer is resolved from the deal's organization; customers are not created
+   * here. A linked lead only gets its deal status updated (its workflow status
+   * is owned by Gesher).
    */
   private async handleDealWon(deal: PipedriveDealData): Promise<ProcessResult> {
-    console.log(`[Pipedrive Webhook] Deal WON: ${deal.title}`);
-
-    // Find the lead
     const existingLead = await this.findLeadByDeal(deal);
-
-    // Check if customer already exists with this pipedrive deal
-    const { data: existingCustomer } = await db
-      .from('customers')
-      .select('id, name')
-      .eq('pipedrive_deal_id', deal.id)
-      .single();
-
-    if (existingCustomer) {
-      // Update lead as converted if exists
-      if (existingLead) {
-        await leadsRepository.markAsConverted(
-          existingLead.id,
-          existingCustomer.id
-        );
-      }
-
-      return {
-        success: true,
-        action: 'skipped',
-        entityType: 'customer',
-        entityId: existingCustomer.id,
-        message: `Customer already exists: ${existingCustomer.name}`,
-      };
-    }
-
-    // Create new customer
-    const customerName = existingLead?.company || existingLead?.name || deal.title;
-
-    const { data: newCustomer, error: customerError } = await db
-      .from('customers')
-      .insert({
-        name: customerName,
-        email: existingLead?.email || null,
-        phone: existingLead?.phone || null,
-        status: 'active',
-        channel: 'dealer',
-        billing_street: existingLead?.addressStreet || null,
-        billing_city: existingLead?.addressCity || null,
-        billing_state: existingLead?.addressState || null,
-        billing_postal_code: existingLead?.addressPostalCode || null,
-        billing_country: existingLead?.addressCountry || null,
-        pipedrive_person_id: existingLead?.pipedrivePersonId || deal.person_id || null,
-        pipedrive_org_id: existingLead?.pipedriveOrgId || deal.org_id || null,
-        pipedrive_deal_id: deal.id,
-      })
-      .select('id, name')
-      .single();
-
-    if (customerError) {
-      console.error('[Pipedrive Webhook] Error creating customer:', customerError);
-      return {
-        success: false,
-        action: 'error',
-        entityType: 'customer',
-        message: `Failed to create customer: ${customerError.message}`,
-      };
-    }
-
-    // Mark lead as converted
     if (existingLead) {
-      await leadsRepository.markAsConverted(existingLead.id, newCustomer.id);
+      await leadsRepository.update(existingLead.id, {
+        dealTitle: deal.title,
+        dealValue: deal.value || null,
+        dealStatus: 'won',
+      });
     }
 
-    console.log(`[Pipedrive Webhook] Customer created: ${newCustomer.name} (${newCustomer.id})`);
+    const { handleWonDeal } = await import('../gdc/deal-erp.service');
+    const result = await handleWonDeal(deal.id);
+
+    return {
+      // Only a failed quote creation is an error; missing links are reported on the deal
+      success: result.status !== 'quote_failed',
+      action: result.status === 'quote_created' ? 'created' : 'skipped',
+      entityType: 'quote',
+      entityId: result.quoteId,
+      message: result.message,
+    };
+  }
+
+  // ============================================
+  // ACTIVITY EVENTS
+  // ============================================
+
+  /**
+   * A completed Call or Site visit:
+   * - report check: Outcome, summary and next step must be in the note,
+   *   otherwise one reminder task is added for the owner (call-report.service)
+   * - stage progression: on a GDC deal still in "Lead / Prospect" it moves the
+   *   deal to "Contacted". Forward-only; other stages are moved by reps.
+   */
+  private async handleActivityEvent(action: string, payload: WebhookPayload): Promise<ProcessResult> {
+    const activity = payload.current as unknown as Record<string, unknown> | undefined;
+    const previous = payload.previous as unknown as Record<string, unknown> | undefined;
+    const isDone = (value: unknown) => value === true || value === 1;
+    // Added already done, or updated from not-done to done (v1 and v2 `previous`)
+    const newlyDone =
+      action === 'added' ? isDone(activity?.done) : action === 'updated' && changedTo(activity, previous, 'done', isDone);
+    const toNumberId = (value: unknown) => Number(value) || null;
+    const dealId = toNumberId(activity?.deal_id);
+
+    if (!newlyDone || !activity) {
+      return { success: true, action: 'skipped', entityType: 'activity', message: 'Not a newly completed activity' };
+    }
+
+    const { getActivePipedriveConnectionId } = await import('../gdc/settings');
+    const { getGdcConfig } = await import('../gdc/setup.service');
+    const { GDC_CONTACT_ACTIVITY_TYPES } = await import('../gdc/config');
+    const { advanceDealStage, parseDeal } = await import('../gdc/deal-erp.service');
+    const { ensureCallReport } = await import('../gdc/call-report.service');
+    const { pipedriveProvider } = await import('@/modules/integrations/providers/crm/pipedrive');
+
+    const connectionId = await getActivePipedriveConnectionId();
+    if (!connectionId) {
+      return { success: true, action: 'skipped', entityType: 'activity', message: 'Pipedrive not connected' };
+    }
+    const config = await getGdcConfig(connectionId);
+    const contactTypes = GDC_CONTACT_ACTIVITY_TYPES.map((key) => config.activityTypes[key]);
+    if (!contactTypes.includes(String(activity.type ?? ''))) {
+      return { success: true, action: 'skipped', entityType: 'activity', message: 'Not a call or site visit' };
+    }
+
+    const report = await ensureCallReport(connectionId, config, {
+      id: toNumberId(activity.id) ?? 0,
+      type: String(activity.type ?? ''),
+      subject: String(activity.subject ?? ''),
+      note: typeof activity.note === 'string' ? activity.note : null,
+      ownerId: toNumberId(activity.owner_id ?? activity.user_id),
+      dealId,
+      leadId: typeof activity.lead_id === 'string' && activity.lead_id ? activity.lead_id : null,
+      personId: toNumberId(activity.person_id),
+      orgId: toNumberId(activity.org_id),
+    });
+    const reportMessage =
+      report.status === 'task_created' ? `report incomplete (${report.missing.join(', ')}), reminder task added` : `report ${report.status}`;
+
+    let moved = false;
+    if (dealId) {
+      const response = await pipedriveProvider.request<unknown>(connectionId, 'GET', `deals/${dealId}`);
+      const deal = parseDeal(response.data);
+      moved = deal ? await advanceDealStage(connectionId, config, deal, 'contacted') : false;
+    }
 
     return {
       success: true,
-      action: 'created',
-      entityType: 'customer',
-      entityId: newCustomer.id,
-      message: `Created customer from won deal: ${newCustomer.name}`,
+      action: moved || report.status === 'task_created' ? 'updated' : 'skipped',
+      entityType: dealId ? 'deal' : 'activity',
+      message: `${moved ? `Deal ${dealId} moved to Contacted` : 'No stage change'}; ${reportMessage}`,
     };
   }
 
@@ -557,15 +601,7 @@ class PipedriveWebhookService {
     }
 
     if (!lead && noteData.deal_id) {
-      const { data } = await db
-        .from('leads')
-        .select('*')
-        .eq('pipedrive_deal_id', noteData.deal_id)
-        .single();
-
-      if (data) {
-        lead = await leadsRepository.getById(data.id);
-      }
+      lead = await leadsRepository.getByPipedriveDealId(noteData.deal_id);
     }
 
     if (!lead) {
@@ -582,7 +618,8 @@ class PipedriveWebhookService {
       .from('lead_notes')
       .select('id')
       .eq('pipedrive_note_id', noteData.id)
-      .single();
+      .limit(1)
+      .maybeSingle();
 
     if (existingNote) {
       // Update existing note
@@ -622,15 +659,12 @@ class PipedriveWebhookService {
   // ============================================
 
   private async findLeadByDeal(deal: PipedriveDealData) {
-    // First try by deal ID
-    const { data: byDealId } = await db
-      .from('leads')
-      .select('*')
-      .eq('pipedrive_deal_id', deal.id)
-      .single();
+    // First try by deal ID (tolerates several matching leads; .single() would
+    // error and fall through to creating yet another lead)
+    const byDealId = await leadsRepository.getByPipedriveDealId(deal.id);
 
     if (byDealId) {
-      return await leadsRepository.getById(byDealId.id);
+      return byDealId;
     }
 
     // Then try by person ID
@@ -657,15 +691,20 @@ class PipedriveWebhookService {
 
   private async logEvent(payload: WebhookPayload): Promise<void> {
     try {
-      await db.from('pipedrive_sync_log').insert({
+      // entity_id is a Gesher UUID column; the Pipedrive ID belongs in pipedrive_id
+      const { error } = await db.from('pipedrive_sync_log').insert({
         event_type: 'webhook',
         direction: 'inbound',
         entity_type: payload.meta.object,
-        entity_id: String(payload.meta.id),
-        pipedrive_id: payload.meta.id,
+        entity_id: null,
+        pipedrive_id: toPipedriveId(payload.meta.id),
         payload: payload as unknown as Record<string, unknown>,
         status: 'success',
       });
+
+      if (error) {
+        console.error('[Pipedrive Webhook] Failed to log event:', error.message);
+      }
     } catch (error) {
       console.error('[Pipedrive Webhook] Failed to log event:', error);
     }

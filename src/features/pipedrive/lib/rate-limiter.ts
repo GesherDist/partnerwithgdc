@@ -8,6 +8,9 @@
  * This utility ensures we don't exceed these limits.
  */
 
+import { isPipedriveApiError } from '@/modules/integrations/providers/crm/pipedrive/errors';
+import type { PageRequestRunner } from '@/modules/integrations/providers/crm/pipedrive';
+
 interface RateLimitConfig {
   maxRequests: number;
   windowMs: number;
@@ -171,7 +174,10 @@ export async function retryWithBackoff<T>(
 
       // Add jitter (random variation) to prevent thundering herd
       const jitter = Math.random() * 0.3 * delay;
-      const finalDelay = delay + jitter;
+
+      // Honour Pipedrive's Retry-After when it asks for a longer wait
+      const retryAfterMs = isPipedriveApiError(error) ? error.retryAfterMs : undefined;
+      const finalDelay = Math.min(Math.max(delay + jitter, retryAfterMs ?? 0), maxDelayMs);
 
       console.log(
         `[Pipedrive] Retry attempt ${attempt + 1}/${maxRetries} after ${Math.round(finalDelay)}ms`
@@ -188,29 +194,64 @@ export async function retryWithBackoff<T>(
  * Check if error is a rate limit error (429)
  */
 export function isRateLimitError(error: unknown): boolean {
+  if (isPipedriveApiError(error)) {
+    return error.status === 429;
+  }
   if (error instanceof Error) {
-    return error.message.includes('429') || error.message.includes('rate limit');
+    return error.message.includes('429') || error.message.toLowerCase().includes('rate limit');
   }
   return false;
 }
 
 /**
  * Check if error is retryable
+ *
+ * Retries rate limits (429), Pipedrive server errors (5xx) and network failures.
+ * Never retries other 4xx responses: they will not succeed on repeat and, for
+ * create requests, a blind retry could duplicate records.
  */
 export function isRetryableError(error: unknown): boolean {
+  if (isPipedriveApiError(error)) {
+    return error.status === 429 || (error.status >= 500 && error.status <= 599);
+  }
+
   if (error instanceof Error) {
-    // Retry on rate limits, network errors, and 5xx errors
+    // fetch() network failures surface as TypeError('fetch failed') with a cause
     const message = error.message.toLowerCase();
     return (
       isRateLimitError(error) ||
+      message.includes('fetch failed') ||
       message.includes('network') ||
       message.includes('timeout') ||
       message.includes('econnreset') ||
-      message.includes('500') ||
-      message.includes('502') ||
-      message.includes('503') ||
-      message.includes('504')
+      message.includes('etimedout')
     );
   }
   return false;
 }
+
+/**
+ * Run one Pipedrive request through the shared rate limiter with retries.
+ * Pass to the provider's full-collection reads so every page is limited and
+ * retried individually.
+ */
+export const runPipedriveRequest: PageRequestRunner = <R>(request: () => Promise<R>) =>
+  pipedriveRateLimiter.execute(() => retryWithBackoff(request, { shouldRetry: isRetryableError }));
+
+/**
+ * Pipedrive's Search API has its own limit of 10 requests per 2 seconds on every
+ * plan. Search calls go through this limiter in addition to the shared one.
+ */
+export const pipedriveSearchRateLimiter = new RateLimiter({
+  maxRequests: 8,
+  windowMs: 2000,
+});
+
+/**
+ * Run one Pipedrive WRITE (POST/PATCH/PUT/DELETE) through the shared limiter.
+ * Only 429 is retried: Pipedrive rejected the request without processing it.
+ * A 5xx or network error may arrive after the record was created, so retrying
+ * a create could duplicate it; those errors are surfaced instead.
+ */
+export const runPipedriveWrite: PageRequestRunner = <R>(request: () => Promise<R>) =>
+  pipedriveRateLimiter.execute(() => retryWithBackoff(request, { shouldRetry: isRateLimitError }));

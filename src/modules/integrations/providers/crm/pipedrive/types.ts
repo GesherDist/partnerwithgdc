@@ -286,6 +286,8 @@ export interface PipedriveConnectionMetadata {
   lastContactSync?: string;
   lastDealSync?: string;
   lastActivitySync?: string;
+  /** Scopes Pipedrive granted at connect time (from the token response) */
+  grantedScopes?: string[];
   [key: string]: unknown;
 }
 

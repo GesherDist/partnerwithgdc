@@ -79,6 +79,20 @@ function isValidStatusTransition(currentStatus: OrderStatus, newStatus: OrderSta
   return allowedTransitions.includes(newStatus);
 }
 
+/**
+ * Republish the customer's Pipedrive purchase history when an order enters or
+ * leaves the statuses counted as purchases. Never throws (see the service).
+ */
+async function refreshPipedrivePurchaseHistory(orderId: string, statuses: OrderStatus[]): Promise<void> {
+  const { PURCHASE_HISTORY_ORDER_STATUSES } = await import('@/features/pipedrive/gdc/config');
+  const counted = PURCHASE_HISTORY_ORDER_STATUSES as readonly string[];
+  if (!statuses.some((status) => counted.includes(status))) {
+    return;
+  }
+  const { refreshPurchaseHistoryForOrder } = await import('@/features/pipedrive/gdc/purchase-history.service');
+  await refreshPurchaseHistoryForOrder(orderId);
+}
+
 
 // ============================================
 // SERVICE
@@ -560,6 +574,9 @@ export const salesOrderService = {
         reason
       );
 
+      // Cancelling a placed order removes it from the customer's Pipedrive purchase history
+      await refreshPipedrivePurchaseHistory(id, [existing.status, 'cancelled']);
+
       return {
         success: true,
         data: order,
@@ -621,6 +638,9 @@ export const salesOrderService = {
       }).catch((err) => {
         console.error('Failed to log sales order status change audit:', err);
       });
+
+      // Keep the customer's Pipedrive purchase history in step with placed orders
+      await refreshPipedrivePurchaseHistory(id, [existing.status, newStatus]);
 
       return {
         success: true,

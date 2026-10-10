@@ -15,7 +15,9 @@ import {
   TrendingUp,
   RefreshCw,
   Download,
+  BarChart3,
 } from 'lucide-react';
+import Link from 'next/link';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/shared/components/ui/card';
 import { Button } from '@/shared/components/ui/button';
@@ -99,7 +101,7 @@ export function DealsPageContent() {
     refetch,
   } = useDeals(queryParams);
 
-  const { data: stats, isLoading: isLoadingStats } = useDealStats();
+  const { data: stats, isLoading: isLoadingStats, refetch: refetchStats } = useDealStats();
 
   // ----------------------------------------
   // HANDLERS
@@ -115,8 +117,10 @@ export function DealsPageContent() {
     setSelectedDealId(null);
   };
 
+  // The stat cards load once on mount; refresh them together with the list
   const handleRefresh = () => {
     refetch();
+    void refetchStats();
   };
 
   const handleSyncFromPipedrive = async () => {
@@ -129,6 +133,7 @@ export function DealsPageContent() {
           `Sync complete: ${created} created, ${updated} updated, ${deleted} removed`
         );
         refetch();
+        void refetchStats();
       } else {
         toast.error(result.error || 'Failed to sync deals');
       }
@@ -155,6 +160,12 @@ export function DealsPageContent() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="outline" asChild>
+            <Link href="/deals/rep-report">
+              <BarChart3 className="mr-2 h-4 w-4" />
+              Rep report
+            </Link>
+          </Button>
           <Button
             variant="outline"
             onClick={handleSyncFromPipedrive}

@@ -19,7 +19,8 @@ import type {
   LeadNote,
 } from '../types';
 import { createClient } from '@/shared/lib/supabase/server';
-import { getAppUserByAuthId } from '@/shared/lib/auth';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
+import type { AppUser } from '@/shared/stores/auth.store';
 import { pipedrivePushService } from '@/features/pipedrive/services/pipedrive-push.service';
 import { pipedriveSyncService } from '@/features/pipedrive/services/pipedrive-sync.service';
 
@@ -35,6 +36,37 @@ export interface ActionResult<T = unknown> {
 }
 
 // ============================================
+// AUTHORIZATION HELPERS
+// ============================================
+
+/**
+ * Same permission that gates the /leads page. Server actions are callable
+ * directly, so they must enforce it themselves.
+ */
+const LEADS_PERMISSION = 'customers.view_module';
+
+type AuthorizeResult =
+  | { ok: true; user: AppUser }
+  | { ok: false; result: ActionResult<never> };
+
+/**
+ * Resolve the current application user and verify a permission.
+ */
+async function authorize(permission: string): Promise<AuthorizeResult> {
+  const user = await getCurrentUser();
+
+  if (!user) {
+    return { ok: false, result: { success: false, error: 'Authentication required' } };
+  }
+
+  if (!hasPermission(user, permission)) {
+    return { ok: false, result: { success: false, error: `Permission denied: ${permission}` } };
+  }
+
+  return { ok: true, user };
+}
+
+// ============================================
 // LIST ACTIONS
 // ============================================
 
@@ -44,11 +76,9 @@ export interface ActionResult<T = unknown> {
 export async function getLeads(
   params: LeadListParams = {}
 ): Promise<ActionResult<LeadListResult>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(LEADS_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
@@ -67,11 +97,9 @@ export async function getLeads(
  * Get a single lead by ID
  */
 export async function getLead(id: string): Promise<ActionResult<Lead>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(LEADS_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
@@ -98,11 +126,9 @@ export async function getLead(id: string): Promise<ActionResult<Lead>> {
 export async function getLeadByPipedriveId(
   pipedrivePersonId: number
 ): Promise<ActionResult<Lead>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(LEADS_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
@@ -130,18 +156,13 @@ export async function getLeadByPipedriveId(
 export async function createLead(
   data: CreateLeadDTO
 ): Promise<ActionResult<Lead>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(LEADS_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
-    const appUser = await getAppUserByAuthId(user.id);
-    if (!appUser) {
-      return { success: false, error: 'User not found' };
-    }
+    const appUser = auth.user;
 
     // Create lead locally first
     let lead = await leadsRepository.create(data, appUser.id);
@@ -204,18 +225,13 @@ export async function updateLead(
   data: UpdateLeadDTO,
   labelIds?: string[]
 ): Promise<ActionResult<Lead>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(LEADS_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
-    const appUser = await getAppUserByAuthId(user.id);
-    if (!appUser) {
-      return { success: false, error: 'User not found' };
-    }
+    const appUser = auth.user;
 
     // Get current lead to check if it's linked to Pipedrive
     const currentLead = await leadsRepository.getById(id);
@@ -232,10 +248,15 @@ export async function updateLead(
     if (labelIds && labelIds.length > 0) {
       try {
         const availableLabels = await pipedriveSyncService.getLeadLabels();
-        labelNames = labelIds
-          .map((id) => availableLabels.find((l) => l.id === id)?.name)
-          .filter((name): name is string => !!name);
-        console.log('[updateLead] Mapped label IDs to names:', labelNames);
+        // An empty list means labels could not be loaded (getLeadLabels returns
+        // [] on failure); leave stored labels unchanged rather than clear them.
+        if (availableLabels.length > 0) {
+          labelNames = labelIds
+            .map((id) => availableLabels.find((l) => l.id === id)?.name)
+            .filter((name): name is string => !!name);
+        } else {
+          console.warn('[updateLead] Lead labels unavailable; keeping existing labels');
+        }
       } catch (labelError) {
         console.warn('[updateLead] Could not fetch labels:', labelError);
       }
@@ -337,15 +358,13 @@ export async function updateLead(
  * Delete a lead
  */
 export async function deleteLead(id: string): Promise<ActionResult<void>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(LEADS_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
-    await leadsRepository.delete(id);
+    await leadsRepository.delete(id, auth.user.id);
     revalidatePath('/leads');
     return { success: true };
   } catch (error) {
@@ -376,18 +395,16 @@ export async function convertLeadToDeal(
   id: string,
   _data: ConvertLeadDTO
 ): Promise<ActionResult<{ leadId: string; dealId: string }>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(LEADS_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
 
+  // Session-scoped client: deal inserts below run under the user's RLS policies
+  const supabase = await createClient();
+
   try {
-    const appUser = await getAppUserByAuthId(user.id);
-    if (!appUser) {
-      return { success: false, error: 'User not found' };
-    }
+    const appUser = auth.user;
 
     // Get the lead
     const lead = await leadsRepository.getById(id);
@@ -577,11 +594,9 @@ export async function convertLeadToCustomer(
 export async function getLeadNotes(
   leadId: string
 ): Promise<ActionResult<LeadNote[]>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(LEADS_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
@@ -604,18 +619,13 @@ export async function addLeadNote(
   leadId: string,
   content: string
 ): Promise<ActionResult<LeadNote>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(LEADS_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
-    const appUser = await getAppUserByAuthId(user.id);
-    if (!appUser) {
-      return { success: false, error: 'User not found' };
-    }
+    const appUser = auth.user;
 
     // 1. Save note locally first
     const note = await leadsRepository.addNote(leadId, content, appUser.id);
@@ -660,11 +670,9 @@ export async function deleteLeadNote(
   noteId: string,
   leadId: string
 ): Promise<ActionResult<void>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(LEADS_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
@@ -706,11 +714,9 @@ export async function updateLeadNote(
   leadId: string,
   content: string
 ): Promise<ActionResult<LeadNote>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(LEADS_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
@@ -762,12 +768,12 @@ export async function getLeadStats(): Promise<ActionResult<{
   converted: number;
   totalDealValue: number;
 }>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(LEADS_PERMISSION);
+  if (!auth.ok) {
+    return auth.result;
   }
+
+  const supabase = await createClient();
 
   try {
     // Get only active leads (not deleted, not converted to deal/customer)

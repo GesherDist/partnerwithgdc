@@ -361,14 +361,16 @@ export function ConvertDealToCustomerDialog({
       });
 
       if (result.success) {
-        const message = values.createQuote
-          ? `Customer and Quote created successfully! ${result.data.quoteId ? `Quote ID: ${result.data.quoteId}` : ''}`
-          : 'Customer created successfully (no quote)';
-        toast.success(message);
-
-        console.log('[Convert] Result:', result.data);
-        console.log('[Convert] Customer ID:', result.data.customerId);
-        console.log('[Convert] Quote ID:', result.data.quoteId);
+        if (result.data.quoteError) {
+          // Customer exists, but the quote failed - say so instead of claiming success
+          toast.warning(
+            `Customer created, but the quote could not be created: ${result.data.quoteError}. Please create the quote manually.`
+          );
+        } else if (result.data.quoteId) {
+          toast.success('Customer and quote created successfully');
+        } else {
+          toast.success('Customer created successfully (no quote)');
+        }
 
         onSuccess?.(result.data.customerId, result.data.quoteId || '');
         onClose();
