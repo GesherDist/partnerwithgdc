@@ -38,8 +38,8 @@ import {
   ViewPurchaseOrderDrawer,
   CreatePurchaseOrderDrawer,
   EditPurchaseOrderDrawer,
+  EditPOStatusDialogV2,
 } from '@/features/purchase-orders/components';
-import { UpdateSupplierStatusDialog } from '@/features/purchase-orders/components/UpdateSupplierStatusDialog';
 import { usePurchaseOrders } from '@/features/purchase-orders/hooks';
 import { deletePurchaseOrder, sendPurchaseOrder } from '@/features/purchase-orders/actions';
 import type { POListItem, POStatus, PurchaseOrderWithItems } from '@/features/purchase-orders/types';
@@ -290,14 +290,17 @@ export default function PurchaseOrdersPage() {
         onSuccess={handleEditSuccess}
       />
 
-      {/* Update Supplier Status Dialog (Shipment Load Status) */}
+      {/* Edit PO Status Dialog (Sequential: Confirmation → Production → Shipment) */}
       {selectedPOForStatus && (
-        <UpdateSupplierStatusDialog
+        <EditPOStatusDialogV2
           open={isEditStatusDialogOpen}
           onOpenChange={setIsEditStatusDialogOpen}
           poId={selectedPOForStatus.id}
           poNumber={selectedPOForStatus.poNumber}
-          currentStatus={selectedPOForStatus.latestShipmentStatus || 'No shipment'}
+          supplierConfirmedAt={selectedPOForStatus.supplierConfirmedAt || null}
+          currentProductionStatus={selectedPOForStatus.productionStatus || null}
+          currentLoadStatus={selectedPOForStatus.latestShipmentStatus || null}
+          shipmentId={selectedPOForStatus.latestShipmentId || null}
           onSuccess={handleEditStatusSuccess}
         />
       )}

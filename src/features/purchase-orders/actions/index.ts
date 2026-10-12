@@ -502,6 +502,95 @@ export async function updateShipmentLoadStatus(
 }
 
 // ============================================
+// UPDATE PO PRODUCTION STATUS
+// ============================================
+
+/**
+ * Update PO production status (Not Started → In Production → Ready to Ship → Shipped)
+ * This is used from the main PO page, not the supplier portal
+ */
+export async function updatePOProductionStatus(
+  poId: string,
+  productionStatus: 'not_started' | 'in_production' | 'ready_to_ship' | 'shipped'
+): Promise<{ success: boolean; error?: string }> {
+  const auth = await authorize('purchase_orders.edit');
+  if (!auth.ok) {
+    return { success: false, error: 'Permission denied' };
+  }
+
+  try {
+    const supabase = await createClient();
+
+    // Update PO production_status field
+    const { error: updateError } = await supabase
+      .from('purchase_orders')
+      .update({
+        production_status: productionStatus,
+        updated_at: new Date().toISOString(),
+        updated_by: auth.user.id,
+      })
+      .eq('id', poId);
+
+    if (updateError) {
+      console.error('[updatePOProductionStatus] Error updating PO:', updateError);
+      return { success: false, error: 'Failed to update production status' };
+    }
+
+    // Map production_status to PO status for workflow tracking
+    let newPOStatus: string | null = null;
+    if (productionStatus === 'in_production') {
+      newPOStatus = 'in_production';
+    } else if (productionStatus === 'ready_to_ship') {
+      newPOStatus = 'ready_to_ship';
+    } else if (productionStatus === 'shipped') {
+      newPOStatus = 'in_transit';
+    }
+
+    if (newPOStatus) {
+      await supabase
+        .from('purchase_orders')
+        .update({ status: newPOStatus })
+        .eq('id', poId);
+    }
+
+    // If shipped, update the shipment status to in_transit
+    if (productionStatus === 'shipped') {
+      const { data: shipment } = await supabase
+        .from('shipments')
+        .select('id')
+        .eq('purchase_order_id', poId)
+        .is('deleted_at', null)
+        .single();
+
+      if (shipment) {
+        await supabase
+          .from('shipments')
+          .update({
+            load_status: 'in_transit',
+            status: 'in_transit',
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', shipment.id);
+      }
+    }
+
+    // Revalidate paths
+    revalidatePath('/purchase-orders');
+    revalidatePath(`/purchase-orders/${poId}`);
+    revalidatePath('/operations');
+    revalidatePath('/dashboard/operations');
+
+    return { success: true };
+  } catch (err) {
+    console.error('[updatePOProductionStatus] Error:', err);
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'An unexpected error occurred',
+    };
+  }
+}
+
+// ============================================
 // GET NEXT PO NUMBER
 // ============================================
 
@@ -573,7 +662,9 @@ export async function getSuppliersForDropdown(): Promise<SupplierSummary[]> {
  * Filters:
  * - sales_order_id IS NULL (not linked to any SO)
  * - deleted_at IS NULL (not deleted)
- * - Any status (draft, sent, confirmed, etc.) - user can link to any unallocated PO
+ * - Must have at least one shipment created (shipment exists for this PO)
+ * - Not already used in fulfillment_allocations
+ * - Must have GDC Inventory location (not Kansas/Nebraska warehouse)
  *
  * @returns Array of unallocated POs with basic info
  */
@@ -586,40 +677,45 @@ export async function getUnallocatedPurchaseOrders(): Promise<ActionResult<any[]
   try {
     const supabase = await createClient();
 
-    // Debug logging (wrapped in try-catch to prevent breaking)
-    try {
-      const { data: allPOs, error: allError } = await supabase
-        .from('purchase_orders')
-        .select('id, po_number, sales_order_id, status, deleted_at')
-        .is('deleted_at', null)
-        .order('po_date', { ascending: false })
-        .limit(20);
+    // First, get the GDC-INV location ID (virtual location for GDC Inventory)
+    const { data: gdcInvLocation } = await supabase
+      .from('locations')
+      .select('id')
+      .eq('location_code', 'GDC-INV')
+      .maybeSingle();
 
-      if (!allError && allPOs && allPOs.length > 0) {
-        console.log('📊 [getUnallocatedPurchaseOrders] Database Analysis:');
-        console.log(`  Total recent POs: ${allPOs.length}`);
-        console.log(`  ✅ Unallocated (sales_order_id IS NULL): ${allPOs.filter(po => po.sales_order_id === null).length}`);
-        console.log(`  ❌ Already linked to SO: ${allPOs.filter(po => po.sales_order_id !== null).length}`);
+    const gdcInvLocationId = gdcInvLocation?.id || null;
+    console.log(`📊 [getUnallocatedPurchaseOrders] GDC-INV location ID: ${gdcInvLocationId || 'NOT FOUND'}`);
 
-        const statusBreakdown: Record<string, number> = {};
-        allPOs.forEach(po => {
-          if (po.status) {
-            statusBreakdown[po.status] = (statusBreakdown[po.status] || 0) + 1;
-          }
-        });
-        console.log('  Status breakdown:', statusBreakdown);
+    // Get PO IDs that have shipments created
+    const { data: posWithShipments, error: shipmentError } = await supabase
+      .from('shipments')
+      .select('purchase_order_id')
+      .not('purchase_order_id', 'is', null);
 
-        const unallocated = allPOs.filter(po => po.sales_order_id === null);
-        if (unallocated.length > 0) {
-          console.log('  Unallocated POs:', unallocated.map(po => `${po.po_number} (${po.status})`).join(', '));
-        }
-      }
-    } catch (debugError) {
-      console.warn('[getUnallocatedPurchaseOrders] Debug logging failed:', debugError);
-      // Continue execution - logging should not break the function
+    if (shipmentError) {
+      console.warn('[getUnallocatedPurchaseOrders] Error fetching POs with shipments:', shipmentError);
     }
 
-    // First, get PO IDs that are already used in fulfillment_allocations
+    // Get unique PO IDs that have shipments
+    const poIdsWithShipments = [...new Set(
+      (posWithShipments || [])
+        .map(s => s.purchase_order_id)
+        .filter((id): id is string => id !== null)
+    )];
+
+    console.log(`📊 [getUnallocatedPurchaseOrders] POs with shipments: ${poIdsWithShipments.length}`);
+
+    // If no POs have shipments, return empty array
+    if (poIdsWithShipments.length === 0) {
+      console.log('⚠️ [getUnallocatedPurchaseOrders] No POs have shipments created yet');
+      return {
+        success: true,
+        data: [],
+      };
+    }
+
+    // Get PO IDs that are already used in fulfillment_allocations
     const { data: allocatedPOs, error: allocError } = await supabase
       .from('fulfillment_allocations')
       .select('purchase_order_id')
@@ -636,16 +732,32 @@ export async function getUnallocatedPurchaseOrders(): Promise<ActionResult<any[]
 
     console.log(`📊 [getUnallocatedPurchaseOrders] Already allocated PO IDs: ${allocatedPOIds.length}`);
 
-    // Build query for unallocated POs
+    // Filter: POs with shipments but not yet allocated
+    const eligiblePOIds = poIdsWithShipments.filter(id => !allocatedPOIds.includes(id));
+
+    console.log(`📊 [getUnallocatedPurchaseOrders] Eligible PO IDs (with shipment, not allocated): ${eligiblePOIds.length}`);
+
+    // If no eligible POs, return empty array
+    if (eligiblePOIds.length === 0) {
+      console.log('⚠️ [getUnallocatedPurchaseOrders] All POs with shipments are already allocated');
+      return {
+        success: true,
+        data: [],
+      };
+    }
+
+    // Build query for unallocated POs that have shipments AND GDC Inventory location
+    // Only show POs with GDC-INV warehouse (not Kansas/Nebraska)
     let query = supabase
       .from('purchase_orders')
-      .select('id, po_number, po_date, expected_delivery_date, status, grand_total, order_series, warehouse_id, warehouse:locations!warehouse_id(name)')
-      .is('sales_order_id', null)  // KEY FILTER: Only unallocated POs
-      .is('deleted_at', null);      // Not deleted
+      .select('id, po_number, po_date, expected_delivery_date, status, grand_total, order_series, warehouse_id, warehouse:locations!warehouse_id(name, location_code)')
+      .in('id', eligiblePOIds)           // Only POs with shipments and not allocated
+      .is('sales_order_id', null)        // Not linked to any SO directly
+      .is('deleted_at', null);           // Not deleted
 
-    // Exclude POs that are already in fulfillment_allocations
-    if (allocatedPOIds.length > 0) {
-      query = query.not('id', 'in', `(${allocatedPOIds.join(',')})`);
+    // Filter by GDC-INV location only
+    if (gdcInvLocationId) {
+      query = query.eq('warehouse_id', gdcInvLocationId);
     }
 
     const { data, error } = await query
@@ -666,7 +778,7 @@ export async function getUnallocatedPurchaseOrders(): Promise<ActionResult<any[]
       location_name: (po as any).warehouse?.name || null,
     }));
 
-    console.log(`✅ [getUnallocatedPurchaseOrders] Found ${result.length} truly unallocated POs`);
+    console.log(`✅ [getUnallocatedPurchaseOrders] Found ${result.length} POs (GDC Inventory, with shipments, unallocated)`);
     if (result.length > 0) {
       console.log('  POs:', result.map(po => `${po.po_number} (${po.status})`).join(', '));
     }

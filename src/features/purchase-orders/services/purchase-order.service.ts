@@ -496,13 +496,31 @@ export const purchaseOrderService = {
     }
 
     // Generate shipment number from PO number
-    // PO format: PO-2600075 → Shipment format: SO2600075
-    // Extract the 7-digit number from PO (remove "PO-" prefix)
-    const poNumberMatch = po.poNumber.match(/PO-?(\d{7})/);
-    if (!poNumberMatch) {
-      throw new Error(`Invalid PO number format: ${po.poNumber}`);
+    // PO format: PO-2600052 or PO-2600052-A → Shipment format: SO2600052 or SO2600052-A
+    // Extract the number part from PO (remove "PO-" prefix)
+    const poNumberPart = po.poNumber.replace(/^PO-?/i, '');
+    const desiredShipmentNumber = `SO${poNumberPart}`;
+
+    // Check if shipment number already exists
+    const { data: existingShipment } = await db
+      .from('shipments')
+      .select('id')
+      .eq('shipment_number', desiredShipmentNumber)
+      .maybeSingle();
+
+    let shipmentNumber: string;
+    if (existingShipment) {
+      // Shipment number exists, generate auto number
+      const { data: autoShipmentNumber, error: shipmentNumberError } = await db.rpc('generate_shipment_number');
+      if (shipmentNumberError || !autoShipmentNumber) {
+        throw new Error(`Failed to generate shipment number: ${shipmentNumberError?.message}`);
+      }
+      shipmentNumber = autoShipmentNumber;
+      console.log(`ℹ️ Shipment number ${desiredShipmentNumber} already exists, using auto-generated: ${shipmentNumber}`);
+    } else {
+      shipmentNumber = desiredShipmentNumber;
+      console.log(`✅ Using PO-matched shipment number: ${shipmentNumber}`);
     }
-    const shipmentNumber = `SO${poNumberMatch[1]}`; // e.g., SO2600075
 
     // Calculate total quantity
     const totalQty = po.items.reduce((sum, item) => sum + item.quantityOrdered, 0);

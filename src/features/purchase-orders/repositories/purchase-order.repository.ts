@@ -121,6 +121,8 @@ class PurchaseOrderRepositoryImpl {
         created_at,
         sales_order_id,
         warehouse_id,
+        supplier_confirmed_at,
+        production_status,
         sales_orders:sales_order_id (
           order_series,
           order_number,
@@ -736,6 +738,8 @@ class PurchaseOrderRepositoryImpl {
       created_at: string;
       sales_order_id: string | null;
       warehouse_id: string | null;
+      supplier_confirmed_at: string | null;
+      production_status: 'not_started' | 'in_production' | 'ready_to_ship' | 'shipped' | null;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       sales_orders: any; // Joined data from sales_orders table
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -775,7 +779,11 @@ class PurchaseOrderRepositoryImpl {
       // Shipment info (using load_status for Operations Dashboard)
       latestShipmentStatus: latestShipment?.load_status || null,
       latestShipmentNumber: latestShipment?.shipment_number || null,
+      latestShipmentId: latestShipment?.id || null,
       totalShipments: shipments.length,
+      // Supplier confirmation and production status
+      supplierConfirmedAt: data.supplier_confirmed_at || null,
+      productionStatus: data.production_status || null,
     };
   }
 

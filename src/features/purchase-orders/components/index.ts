@@ -5,3 +5,4 @@ export { CreatePurchaseOrderDrawer } from './CreatePurchaseOrderDrawer';
 export { EditPurchaseOrderDrawer } from './EditPurchaseOrderDrawer';
 export { AddPOItemDialog } from './AddPOItemDialog';
 export { POItemsTable } from './POItemsTable';
+export { EditPOStatusDialogV2 } from './EditPOStatusDialogV2';

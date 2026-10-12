@@ -685,14 +685,32 @@ export const quoteService = {
       // Import services dynamically to avoid circular dependencies
       const { salesOrderService } = await import('@/features/sales-orders/services');
       const { creditCheckService } = await import('@/features/customers/services/credit-check.service');
+      const { db } = await import('@/shared/lib/supabase/database');
 
       // Check customer credit
       const creditCheck = await creditCheckService.checkCredit(existing.customerId, existing.grandTotal);
       const creditStatus: 'ok' | 'hold' = creditCheck.passed ? 'ok' : 'hold';
 
+      // Extract number from quote number and create matching SO number
+      // QT-2600052 → C-SO-2600052
+      // QT-2026-00057 → C-SO-2026-00057
+      const quoteNumberPart = existing.quoteNumber.replace(/^QT-?/i, '');
+      const desiredSoNumber = `C-SO-${quoteNumberPart}`;
+
+      // Check if SO number already exists - if yes, let system auto-generate
+      const { data: existingSo } = await db
+        .from('sales_orders')
+        .select('id')
+        .eq('order_number', desiredSoNumber)
+        .maybeSingle();
+
+      // Use quote-based number if available, otherwise auto-generate
+      const salesOrderNumber = existingSo ? undefined : desiredSoNumber;
+
       // Create sales order from quote data
       const salesOrderResult = await salesOrderService.create(
         {
+          orderNumber: salesOrderNumber,
           orderDate: new Date(),
           requestedDeliveryDate: null,
           customerId: existing.customerId,
@@ -746,7 +764,6 @@ export const quoteService = {
       );
 
       // Update the sales order with quote reference and credit status
-      const { db } = await import('@/shared/lib/supabase/database');
       await db
         .from('sales_orders')
         .update({

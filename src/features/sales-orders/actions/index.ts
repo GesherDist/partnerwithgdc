@@ -934,17 +934,44 @@ async function createPurchaseOrderFromSalesOrder(
   console.log(`🏢 Creating PO(s) for ${allocationsBySupplier.size} supplier(s)`);
 
   // Create PO for each supplier
+  let supplierIndex = 0;
   for (const [supplierId, allocations] of allocationsBySupplier) {
     const supplier = supplierId ? suppliersMap.get(supplierId) : null;
 
     console.log(`📝 Creating PO for supplier: ${supplier?.name || 'Unknown'} (${allocations.length} item(s))`);
 
-    // Generate PO number
-    const { data: poNumber, error: poNumberError } = await db.rpc('generate_po_number');
-    if (poNumberError || !poNumber) {
-      console.error('❌ Failed to generate PO number:', poNumberError);
-      continue;
+    // Extract number from SO number and create matching PO number
+    // C-SO-2600052 → PO-2600052
+    // C-SO2600057 → PO-2600057
+    const soNumberPart = salesOrder.orderNumber.replace(/^C-?SO-?/i, '');
+    // If multiple suppliers, append suffix like -A, -B, etc.
+    const suffix = allocationsBySupplier.size > 1 ? `-${String.fromCharCode(65 + supplierIndex)}` : '';
+    const desiredPoNumber = `PO-${soNumberPart}${suffix}`;
+
+    // Check if PO number already exists
+    const { data: existingPo } = await db
+      .from('purchase_orders')
+      .select('id')
+      .eq('po_number', desiredPoNumber)
+      .maybeSingle();
+
+    let poNumber: string;
+    if (existingPo) {
+      // PO number exists, generate auto number
+      const { data: autoPoNumber, error: poNumberError } = await db.rpc('generate_po_number');
+      if (poNumberError || !autoPoNumber) {
+        console.error('❌ Failed to generate PO number:', poNumberError);
+        supplierIndex++;
+        continue;
+      }
+      poNumber = autoPoNumber;
+      console.log(`ℹ️ PO number ${desiredPoNumber} already exists, using auto-generated: ${poNumber}`);
+    } else {
+      poNumber = desiredPoNumber;
+      console.log(`✅ Using SO-matched PO number: ${poNumber}`);
     }
+
+    supplierIndex++;
 
     // Create PO items from allocations (use allocation quantity, not full SO item quantity)
     const poItems = allocations.map((allocation, index) => {

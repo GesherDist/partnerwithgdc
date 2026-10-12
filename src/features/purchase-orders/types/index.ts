@@ -388,7 +388,12 @@ export interface POListItem {
   // Shipment info (from linked shipments) - using load_status for Operations Dashboard
   latestShipmentStatus?: 'available' | 'sold' | 'open' | 'hold' | 'in_transit' | 'invoiced' | 'not_invoiced' | 'closed' | 'po_needed' | 'partially_paid' | 'paid' | 'disputed' | null;
   latestShipmentNumber?: string | null;
+  latestShipmentId?: string | null; // Shipment ID for status updates
   totalShipments?: number;
+  // Supplier confirmation (from supplier portal)
+  supplierConfirmedAt?: string | null;
+  // Production status (from supplier portal)
+  productionStatus?: 'not_started' | 'in_production' | 'ready_to_ship' | 'shipped' | null;
 }
 
 export interface PaginatedResult<T> {
