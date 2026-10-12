@@ -13,6 +13,7 @@ import type {
   InventoryListParams,
   CreateInventoryDTO,
   UpdateInventoryDTO,
+  InventoryAllocationDetail,
 } from '../types';
 
 // ============================================
@@ -239,5 +240,96 @@ export async function getInventoryStats(): Promise<{ success: boolean; data?: In
   } catch (error) {
     console.error('Error fetching inventory stats:', error);
     return { success: false, error: 'Failed to fetch inventory stats' };
+  }
+}
+
+// ============================================
+// GET INVENTORY ALLOCATIONS
+// ============================================
+
+/**
+ * Get all allocations for a specific product at a location
+ * Shows which Sales Orders have this inventory allocated
+ *
+ * @param productId - Product ID
+ * @param locationId - Location ID (warehouse or dealer location)
+ * @param sourceType - 'warehouse' for GDC inventory, 'dealer' for platinum dealer
+ */
+export async function getInventoryAllocations(
+  productId: string,
+  locationId: string,
+  sourceType: 'warehouse' | 'dealer' = 'warehouse'
+): Promise<{ success: boolean; data?: InventoryAllocationDetail[]; error?: string }> {
+  try {
+    const supabase = await createClient();
+
+    // Build the query based on source type
+    let query = supabase
+      .from('fulfillment_allocations')
+      .select(`
+        id,
+        quantity,
+        status,
+        fulfillment_source,
+        created_at,
+        location:locations(id, name),
+        platinum_dealer:platinum_dealers(id, dealer_name),
+        sales_order_item:sales_order_items!inner(
+          id,
+          sku,
+          description,
+          product_id,
+          sales_order:sales_orders!inner(
+            id,
+            order_number,
+            status,
+            customer:customers(
+              id,
+              name
+            )
+          )
+        )
+      `)
+      .eq('sales_order_item.product_id', productId)
+      .not('status', 'eq', 'cancelled')
+      .order('created_at', { ascending: false });
+
+    // Filter by location based on source type
+    if (sourceType === 'warehouse') {
+      query = query.eq('location_id', locationId);
+    } else {
+      query = query.eq('dealer_location_id', locationId);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.error('Error fetching inventory allocations:', error);
+      return { success: false, error: 'Failed to fetch allocations' };
+    }
+
+    // Map the data to our type
+    const allocations: InventoryAllocationDetail[] = (data || []).map((item: any) => ({
+      id: item.id,
+      quantity: item.quantity,
+      status: item.status,
+      fulfillmentSource: item.fulfillment_source,
+      createdAt: new Date(item.created_at),
+      salesOrderId: item.sales_order_item?.sales_order?.id || '',
+      salesOrderNumber: item.sales_order_item?.sales_order?.order_number || '',
+      salesOrderStatus: item.sales_order_item?.sales_order?.status || '',
+      customerId: item.sales_order_item?.sales_order?.customer?.id || '',
+      customerName: item.sales_order_item?.sales_order?.customer?.name || 'Unknown Customer',
+      salesOrderItemId: item.sales_order_item?.id || '',
+      sku: item.sales_order_item?.sku || '',
+      description: item.sales_order_item?.description || '',
+      locationName: item.location?.name,
+      dealerName: item.platinum_dealer?.dealer_name,
+    }));
+
+    return { success: true, data: allocations };
+  } catch (error) {
+    console.error('Error in getInventoryAllocations:', error);
+    return { success: false, error: 'An unexpected error occurred' };
   }
 }

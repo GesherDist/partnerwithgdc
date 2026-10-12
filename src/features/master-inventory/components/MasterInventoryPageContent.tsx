@@ -23,6 +23,7 @@ import {
 import { MasterInventoryStatsGrid } from './MasterInventoryStatsGrid';
 import { SourceBreakdownCards } from './SourceBreakdownCards';
 import { MasterInventoryTable } from './MasterInventoryTable';
+import { ViewMasterInventoryModal } from './ViewMasterInventoryModal';
 import { getMasterInventory, getMasterInventoryStats } from '../actions';
 import type {
   MasterInventoryItem,
@@ -55,6 +56,10 @@ export function MasterInventoryPageContent() {
   });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Drawer state
+  const [selectedItem, setSelectedItem] = useState<MasterInventoryItem | null>(null);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
   // Fetch data
   const fetchData = useCallback(async () => {
@@ -114,6 +119,16 @@ export function MasterInventoryPageContent() {
   const handleRefresh = useCallback(() => {
     fetchData();
   }, [fetchData]);
+
+  const handleView = useCallback((item: MasterInventoryItem) => {
+    setSelectedItem(item);
+    setIsDrawerOpen(true);
+  }, []);
+
+  const handleCloseDrawer = useCallback(() => {
+    setIsDrawerOpen(false);
+    setSelectedItem(null);
+  }, []);
 
   return (
     <div className="space-y-6">
@@ -205,13 +220,14 @@ export function MasterInventoryPageContent() {
 
         {/* Tab Content */}
         <TabsContent value="all" className="mt-0">
-          <MasterInventoryTable data={data} isLoading={isLoading} />
+          <MasterInventoryTable data={data} isLoading={isLoading} onView={handleView} />
         </TabsContent>
 
         <TabsContent value="warehouse" className="mt-0">
           <MasterInventoryTable
             data={data.filter((item) => item.sourceType === 'warehouse')}
             isLoading={isLoading}
+            onView={handleView}
           />
         </TabsContent>
 
@@ -219,9 +235,17 @@ export function MasterInventoryPageContent() {
           <MasterInventoryTable
             data={data.filter((item) => item.sourceType === 'platinum_dealer')}
             isLoading={isLoading}
+            onView={handleView}
           />
         </TabsContent>
       </Tabs>
+
+      {/* View Modal */}
+      <ViewMasterInventoryModal
+        open={isDrawerOpen}
+        onClose={handleCloseDrawer}
+        item={selectedItem}
+      />
 
       {/* Summary Footer */}
       {!isLoading && data.length > 0 && (

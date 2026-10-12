@@ -473,6 +473,10 @@ export interface PaginatedResult<T> {
 // COMPONENT PROP TYPES
 // ============================================
 
+// Sorting types for Shipments table
+export type ShipmentSortColumn = 'shipmentNumber' | 'shipmentDate' | 'carrier' | 'loadStatus' | 'estimatedArrival' | 'totalQty';
+export type ShipmentSortDirection = 'asc' | 'desc';
+
 export interface ShipmentsTableProps {
   data: ShipmentListItem[];
   isLoading?: boolean;
@@ -480,6 +484,7 @@ export interface ShipmentsTableProps {
   onView?: (shipment: ShipmentListItem) => void;
   onEdit?: (shipment: ShipmentListItem) => void;
   onDelete?: (shipment: ShipmentListItem) => void;
+  onEditStatus?: (shipment: ShipmentListItem) => void;
   toolbarContent?: React.ReactNode;
   // Server-side pagination
   pagination?: {
@@ -489,6 +494,12 @@ export interface ShipmentsTableProps {
     totalPages: number;
     onPageChange: (page: number) => void;
     onPageSizeChange: (pageSize: number) => void;
+  };
+  // Sorting
+  sorting?: {
+    column: ShipmentSortColumn | null;
+    direction: ShipmentSortDirection;
+    onSortChange: (column: ShipmentSortColumn) => void;
   };
 }
 

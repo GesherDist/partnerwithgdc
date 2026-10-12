@@ -7,7 +7,7 @@
  * Permission-gated for different roles.
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { Plus, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -36,10 +36,11 @@ import {
   ShipmentsTable,
   ViewShipmentDrawer,
   EditShipmentDrawer,
+  EditShipmentStatusDialog,
   useShipments,
 } from '@/features/shipments';
 import { deleteShipment } from '@/features/shipments/actions';
-import type { ShipmentListItem, ShipmentStatus, ShipmentWithItems } from '@/features/shipments/types';
+import type { ShipmentListItem, ShipmentStatus, ShipmentWithItems, ShipmentSortColumn, ShipmentSortDirection } from '@/features/shipments/types';
 import { SHIPMENT_STATUS_LABELS } from '@/features/shipments/types';
 
 export default function ShipmentsPage() {
@@ -80,12 +81,34 @@ export default function ShipmentsPage() {
   const [shipmentToDelete, setShipmentToDelete] = useState<ShipmentListItem | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Edit Status dialog
+  const [isEditStatusDialogOpen, setIsEditStatusDialogOpen] = useState(false);
+  const [shipmentToEditStatus, setShipmentToEditStatus] = useState<ShipmentListItem | null>(null);
+
   // Filters
   const [statusFilter, setStatusFilter] = useState<ShipmentStatus | 'all'>('all');
 
   // Pagination state
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+
+  // Sorting state
+  const [sortColumn, setSortColumn] = useState<ShipmentSortColumn | null>(null);
+  const [sortDirection, setSortDirection] = useState<ShipmentSortDirection>('asc');
+
+  // Handle sort change
+  const handleSortChange = (column: ShipmentSortColumn) => {
+    if (sortColumn === column) {
+      // Toggle direction
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      // New column, default to asc
+      setSortColumn(column);
+      setSortDirection('asc');
+    }
+    // Reset to page 1 when sorting changes
+    setPage(1);
+  };
 
   // Reset to page 1 when status filter changes
   useEffect(() => {
@@ -96,16 +119,20 @@ export default function ShipmentsPage() {
   // DATA HOOKS
   // ----------------------------------------
 
+  // Memoized params to prevent unnecessary re-fetches
+  const shipmentParams = useMemo(() => ({
+    ...(statusFilter !== 'all' && { status: statusFilter }),
+    page,
+    limit: pageSize,
+    ...(sortColumn && { sortBy: sortColumn, sortOrder: sortDirection }),
+  }), [statusFilter, page, pageSize, sortColumn, sortDirection]);
+
   const {
     data: shipments,
     meta,
     isLoading: isShipmentsLoading,
     refetch: refetchShipments,
-  } = useShipments({
-    ...(statusFilter !== 'all' && { status: statusFilter }),
-    page,
-    limit: pageSize,
-  });
+  } = useShipments(shipmentParams);
 
   // ----------------------------------------
   // HANDLERS
@@ -147,6 +174,16 @@ export default function ShipmentsPage() {
     setShipmentToDelete(shipment);
     setDeleteDialogOpen(true);
   }, []);
+
+  // Edit Status handlers
+  const handleEditStatusClick = useCallback((shipment: ShipmentListItem) => {
+    setShipmentToEditStatus(shipment);
+    setIsEditStatusDialogOpen(true);
+  }, []);
+
+  const handleEditStatusSuccess = useCallback(() => {
+    refetchShipments();
+  }, [refetchShipments]);
 
   const handleDeleteConfirm = async () => {
     if (!shipmentToDelete) {
@@ -226,6 +263,7 @@ export default function ShipmentsPage() {
         onView={handleView}
         onEdit={canEdit ? handleEdit : undefined}
         onDelete={canDelete ? handleDeleteClick : undefined}
+        onEditStatus={canEdit ? handleEditStatusClick : undefined}
         toolbarContent={
           <Select value={statusFilter} onValueChange={handleStatusFilterChange}>
             <SelectTrigger className="h-8 w-[150px]">
@@ -251,6 +289,11 @@ export default function ShipmentsPage() {
             setPageSize(newSize);
             setPage(1);
           },
+        }}
+        sorting={{
+          column: sortColumn,
+          direction: sortDirection,
+          onSortChange: handleSortChange,
         }}
       />
 
@@ -295,6 +338,19 @@ export default function ShipmentsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Edit Status Dialog */}
+      {shipmentToEditStatus && (
+        <EditShipmentStatusDialog
+          open={isEditStatusDialogOpen}
+          onOpenChange={setIsEditStatusDialogOpen}
+          shipmentId={shipmentToEditStatus.id}
+          shipmentNumber={shipmentToEditStatus.shipmentNumber}
+          currentLoadStatus={shipmentToEditStatus.loadStatus}
+          currentTrackingStatus={shipmentToEditStatus.status}
+          onSuccess={handleEditStatusSuccess}
+        />
+      )}
     </div>
   );
 }

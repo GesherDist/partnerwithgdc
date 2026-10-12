@@ -9,24 +9,74 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/shared/components/ui/dropdown-menu';
-import { MoreHorizontal, Eye, Pencil, Trash2 } from 'lucide-react';
+import { MoreHorizontal, Eye, Pencil, Trash2, ArrowUpDown, ArrowUp, ArrowDown, RefreshCw } from 'lucide-react';
 import { cn } from '@/shared/lib/utils';
-import type { ShipmentListItem } from '../types';
+import type { ShipmentListItem, ShipmentSortColumn, ShipmentSortDirection } from '../types';
 import { LOAD_STATUS_COLORS, LOAD_STATUS_LABELS } from '../types';
 
 interface ColumnsOptions {
   onView?: (shipment: ShipmentListItem) => void;
   onEdit?: (shipment: ShipmentListItem) => void;
   onDelete?: (shipment: ShipmentListItem) => void;
+  onEditStatus?: (shipment: ShipmentListItem) => void;
+  // Sorting options
+  sortColumn?: ShipmentSortColumn | null;
+  sortDirection?: ShipmentSortDirection;
+  onSortChange?: (column: ShipmentSortColumn) => void;
+}
+
+// Sortable header component
+function SortableHeader({
+  label,
+  column,
+  currentColumn,
+  currentDirection,
+  onSort,
+}: {
+  label: string;
+  column: ShipmentSortColumn;
+  currentColumn: ShipmentSortColumn | null | undefined;
+  currentDirection: ShipmentSortDirection | undefined;
+  onSort?: (column: ShipmentSortColumn) => void;
+}) {
+  if (!onSort) {
+    return <span>{label}</span>;
+  }
+
+  return (
+    <button
+      onClick={() => onSort(column)}
+      className="flex items-center gap-1 hover:text-primary font-medium"
+    >
+      {label}
+      {currentColumn === column ? (
+        currentDirection === 'asc' ? (
+          <ArrowUp className="h-3 w-3" />
+        ) : (
+          <ArrowDown className="h-3 w-3" />
+        )
+      ) : (
+        <ArrowUpDown className="h-3 w-3 opacity-40" />
+      )}
+    </button>
+  );
 }
 
 export function ShipmentsTableColumns(options: ColumnsOptions = {}): ColumnDef<ShipmentListItem>[] {
-  const { onView, onEdit, onDelete } = options;
+  const { onView, onEdit, onDelete, onEditStatus, sortColumn, sortDirection, onSortChange } = options;
 
   return [
     {
       accessorKey: 'shipmentNumber',
-      header: 'Shipment #',
+      header: () => (
+        <SortableHeader
+          label="Shipment #"
+          column="shipmentNumber"
+          currentColumn={sortColumn}
+          currentDirection={sortDirection}
+          onSort={onSortChange}
+        />
+      ),
       cell: ({ row }) => (
         <span className="font-mono text-sm font-medium">
           {row.original.shipmentNumber}
@@ -35,7 +85,15 @@ export function ShipmentsTableColumns(options: ColumnsOptions = {}): ColumnDef<S
     },
     {
       accessorKey: 'shipmentDate',
-      header: 'Date',
+      header: () => (
+        <SortableHeader
+          label="Date"
+          column="shipmentDate"
+          currentColumn={sortColumn}
+          currentDirection={sortDirection}
+          onSort={onSortChange}
+        />
+      ),
       cell: ({ row }) => (
         <span className="text-sm">
           {new Date(row.original.shipmentDate).toLocaleDateString()}
@@ -44,7 +102,15 @@ export function ShipmentsTableColumns(options: ColumnsOptions = {}): ColumnDef<S
     },
     {
       accessorKey: 'carrier',
-      header: 'Carrier',
+      header: () => (
+        <SortableHeader
+          label="Carrier"
+          column="carrier"
+          currentColumn={sortColumn}
+          currentDirection={sortDirection}
+          onSort={onSortChange}
+        />
+      ),
       cell: ({ row }) => (
         <span className="text-sm">{row.original.carrier || '-'}</span>
       ),
@@ -78,7 +144,15 @@ export function ShipmentsTableColumns(options: ColumnsOptions = {}): ColumnDef<S
     },
     {
       accessorKey: 'loadStatus',
-      header: 'Status',
+      header: () => (
+        <SortableHeader
+          label="Status"
+          column="loadStatus"
+          currentColumn={sortColumn}
+          currentDirection={sortDirection}
+          onSort={onSortChange}
+        />
+      ),
       cell: ({ row }) => {
         const loadStatus = row.original.loadStatus;
         return (
@@ -117,6 +191,12 @@ export function ShipmentsTableColumns(options: ColumnsOptions = {}): ColumnDef<S
                 <DropdownMenuItem onClick={() => onEdit(shipment)}>
                   <Pencil className="mr-2 h-4 w-4" />
                   Edit
+                </DropdownMenuItem>
+              )}
+              {onEditStatus && (
+                <DropdownMenuItem onClick={() => onEditStatus(shipment)}>
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Edit Status
                 </DropdownMenuItem>
               )}
               {onDelete && shipment.status === 'pending' && (

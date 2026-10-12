@@ -40,7 +40,6 @@ interface DbSalesOrder {
   customer_po_number: string | null;
   status: OrderStatus;
   credit_status?: OrderCreditStatus;
-  order_series?: string | null;
   billing_address_street: string | null;
   billing_address_city: string | null;
   billing_address_state: string | null;
@@ -131,7 +130,6 @@ class SalesOrderRepositoryImpl {
       limit = 10,
       search,
       status,
-      orderSeries,
       customerId,
       salesRepId,
       warehouseId,
@@ -156,7 +154,6 @@ class SalesOrderRepositoryImpl {
         requested_delivery_date,
         status,
         credit_status,
-        order_series,
         grand_total,
         currency_code,
         created_at,
@@ -178,11 +175,6 @@ class SalesOrderRepositoryImpl {
     // Apply status filter
     if (status) {
       query = query.eq('status', status);
-    }
-
-    // Apply order series filter
-    if (orderSeries) {
-      query = query.eq('order_series', orderSeries);
     }
 
     // Apply customer filter
@@ -211,8 +203,11 @@ class SalesOrderRepositoryImpl {
     // Map camelCase sort fields to snake_case
     const sortFieldMap: Record<string, string> = {
       orderNumber: 'order_number',
+      customerName: 'customers.name',  // Sort by joined customer name
+      customerPoNumber: 'customer_po_number',
       orderDate: 'order_date',
       requestedDeliveryDate: 'requested_delivery_date',
+      status: 'status',
       grandTotal: 'grand_total',
       createdAt: 'created_at',
       updatedAt: 'updated_at',
@@ -478,7 +473,6 @@ class SalesOrderRepositoryImpl {
         currency_code: data.currencyCode || 'USD',
         customer_po_number: data.customerPoNumber || null,
         status: data.status || 'draft',
-        order_series: data.orderSeries || null,
         billing_address_street: data.billingAddress.street,
         billing_address_city: data.billingAddress.city,
         billing_address_state: data.billingAddress.state,
@@ -565,7 +559,6 @@ class SalesOrderRepositoryImpl {
     if (data.warehouseId !== undefined) {updateData.warehouse_id = data.warehouseId;}
     if (data.currencyCode !== undefined) {updateData.currency_code = data.currencyCode;}
     if (data.customerPoNumber !== undefined) {updateData.customer_po_number = data.customerPoNumber;}
-    if (data.orderSeries !== undefined) {updateData.order_series = data.orderSeries;}
     if (data.billingAddress !== undefined) {
       updateData.billing_address_street = data.billingAddress.street;
       updateData.billing_address_city = data.billingAddress.city;
@@ -593,11 +586,6 @@ class SalesOrderRepositoryImpl {
 
     if (error) {
       throw new Error(`Failed to update sales order: ${error.message}`);
-    }
-
-    // Sync order_series to linked POs if order_series was updated
-    if (data.orderSeries !== undefined) {
-      await this.syncOrderSeriesToLinkedPOs(id, data.orderSeries, userId);
     }
 
     return this.mapToSalesOrder(result as DbSalesOrder);
@@ -1076,7 +1064,6 @@ class SalesOrderRepositoryImpl {
       customerPoNumber: data.customer_po_number,
       status: data.status,
       creditStatus: data.credit_status || 'ok',
-      orderSeries: data.order_series || null,
       billingAddressStreet: data.billing_address_street,
       billingAddressCity: data.billing_address_city,
       billingAddressState: data.billing_address_state,
@@ -1147,7 +1134,6 @@ class SalesOrderRepositoryImpl {
       requested_delivery_date: string | null;
       status: OrderStatus;
       credit_status?: OrderCreditStatus;
-      order_series?: string | null;
       grand_total: number;
       currency_code: string;
       created_at: string;
@@ -1167,68 +1153,11 @@ class SalesOrderRepositoryImpl {
       requestedDeliveryDate: data.requested_delivery_date,
       status: data.status,
       creditStatus: data.credit_status || 'ok',
-      orderSeries: data.order_series || null,
       grandTotal: data.grand_total,
       currencyCode: data.currency_code,
       itemCount: itemCounts[data.id] || 0,
       createdAt: new Date(data.created_at),
     };
-  }
-
-  /**
-   * Sync order_series from SO to all linked Purchase Orders
-   * Called when order_series is updated on a Sales Order
-   */
-  async syncOrderSeriesToLinkedPOs(
-    salesOrderId: string,
-    orderSeries: string | null,
-    userId?: string
-  ): Promise<void> {
-    // Update all POs linked to this SO
-    const { data: updatedPOs, error } = await db
-      .from('purchase_orders')
-      .update({
-        order_series: orderSeries,
-        updated_by: userId || null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('sales_order_id', salesOrderId)
-      .select('id');
-
-    if (error) {
-      console.error('Failed to sync order_series to linked POs:', error);
-      throw new Error(`Failed to sync order_series to linked POs: ${error.message}`);
-    }
-
-    if (updatedPOs && updatedPOs.length > 0) {
-      console.log(`[SO] Synced order_series '${orderSeries}' to ${updatedPOs.length} linked PO(s)`);
-    }
-  }
-
-  /**
-   * Update order_series on SO and sync to all linked POs
-   */
-  async updateOrderSeries(
-    salesOrderId: string,
-    orderSeries: string | null,
-    userId?: string
-  ): Promise<void> {
-    // Update the SO's order_series
-    const { error: soError } = await db
-      .from('sales_orders')
-      .update({
-        order_series: orderSeries,
-        updated_by: userId || null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', salesOrderId);
-
-    if (soError) {
-      throw new Error(`Failed to update SO order_series: ${soError.message}`);
-    }
-
-    // Sync to all linked POs
-    await this.syncOrderSeriesToLinkedPOs(salesOrderId, orderSeries, userId);
   }
 }
 

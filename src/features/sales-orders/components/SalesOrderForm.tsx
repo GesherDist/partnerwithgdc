@@ -47,7 +47,6 @@ const getDefaultFormValues = () => ({
   warehouseId: '',
   currencyId: 'USD',
   customerPoNumber: '',
-  orderSeries: '',
   status: 'draft' as const,
   billingAddress: {
     street: '',
@@ -143,7 +142,6 @@ function SalesOrderFormComponent({
         console.log('[SalesOrderForm] Resetting form with initialData (first load):', {
           orderDate: initialData.orderDate,
           requestedDeliveryDate: initialData.requestedDeliveryDate,
-          orderSeries: initialData.orderSeries,
           orderNumber: initialData.orderNumber,
           status: initialData.status,
         });
@@ -161,9 +159,6 @@ function SalesOrderFormComponent({
         if (initialData.requestedDeliveryDate) {
           setValue('requestedDeliveryDate', initialData.requestedDeliveryDate, { shouldValidate: false });
         }
-        if (initialData.orderSeries) {
-          setValue('orderSeries', initialData.orderSeries, { shouldValidate: false });
-        }
         if (initialData.orderNumber) {
           setValue('orderNumber', initialData.orderNumber, { shouldValidate: false });
         }
@@ -176,7 +171,6 @@ function SalesOrderFormComponent({
           console.log('[SalesOrderForm] Form values after reset:', {
             orderDate: currentValues.orderDate,
             requestedDeliveryDate: currentValues.requestedDeliveryDate,
-            orderSeries: currentValues.orderSeries,
             orderNumber: currentValues.orderNumber,
           });
         }, 100);

@@ -166,6 +166,7 @@ class PurchaseOrderRepositoryImpl {
       poDate: 'po_date',
       expectedDeliveryDate: 'expected_delivery_date',
       grandTotal: 'grand_total',
+      orderSeries: 'order_series',
       createdAt: 'created_at',
       updatedAt: 'updated_at',
     };
@@ -332,27 +333,37 @@ class PurchaseOrderRepositoryImpl {
     const currentYear = new Date().getFullYear();
     const yearSuffix = String(currentYear).slice(-2); // e.g., "26" for 2026
 
-    // Find the last PO number with the new format (PO-YYNNNNN)
-    const { data: lastPO } = await db
+    // Find the last PO number - check both formats (with and without hyphen)
+    // New format: PO-YYNNNNN (e.g., PO-2600076)
+    // Old format: POYYNNNNN (e.g., PO2600076)
+    const { data: allPOs } = await db
       .from('purchase_orders')
       .select('po_number')
-      .ilike('po_number', `PO-${yearSuffix}%`)
+      .or(`po_number.ilike.PO-${yearSuffix}%,po_number.ilike.PO${yearSuffix}%`)
       .order('po_number', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .limit(10);
 
-    let nextSequence = 1; // Default to 1 if no POs exist for this year
+    let maxSequence = 0;
 
-    if (lastPO?.po_number) {
-      // Extract sequence number from format PO-YYNNNNN
-      const match = lastPO.po_number.match(/^PO-\d{2}(\d{5})$/);
-      if (match) {
-        nextSequence = parseInt(match[1], 10) + 1;
+    if (allPOs && allPOs.length > 0) {
+      for (const po of allPOs) {
+        // Try new format: PO-YYNNNNN
+        const matchNew = po.po_number.match(/^PO-\d{2}(\d{5})$/);
+        if (matchNew && matchNew[1]) {
+          const seq = parseInt(matchNew[1], 10);
+          if (seq > maxSequence) maxSequence = seq;
+        }
+        // Try old format: POYYNNNNN (without hyphen)
+        const matchOld = po.po_number.match(/^PO\d{2}(\d{5})$/);
+        if (matchOld && matchOld[1]) {
+          const seq = parseInt(matchOld[1], 10);
+          if (seq > maxSequence) maxSequence = seq;
+        }
       }
     }
 
     // Generate new PO number: PO-YYNNNNN (with hyphen)
-    const poNumber = `PO-${yearSuffix}${String(nextSequence).padStart(5, '0')}`;
+    const poNumber = `PO-${yearSuffix}${String(maxSequence + 1).padStart(5, '0')}`;
 
     return poNumber;
   }

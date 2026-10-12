@@ -366,42 +366,6 @@ export const salesOrderService = {
   },
 
   /**
-   * Update order series only (allowed in any status)
-   * Order Series is a categorization field, not business-critical
-   */
-  async updateOrderSeries(
-    id: string,
-    orderSeries: string | null,
-    userId?: string
-  ): Promise<ServiceResult<SalesOrder>> {
-    try {
-      // Check if order exists
-      const existing = await salesOrderRepository.findById(id);
-      if (!existing) {
-        return {
-          success: false,
-          error: 'Sales order not found',
-        };
-      }
-
-      // No status check - Order Series can be updated in any status
-      // Update order with just orderSeries
-      const order = await salesOrderRepository.update(id, { orderSeries }, userId);
-
-      return {
-        success: true,
-        data: order,
-      };
-    } catch (error) {
-      console.error('SalesOrderService.updateOrderSeries error:', error);
-      return {
-        success: false,
-        error: 'Failed to update order series',
-      };
-    }
-  },
-
-  /**
    * Update order items
    */
   async updateItems(

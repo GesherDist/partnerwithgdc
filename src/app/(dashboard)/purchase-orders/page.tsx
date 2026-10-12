@@ -42,7 +42,7 @@ import {
 } from '@/features/purchase-orders/components';
 import { usePurchaseOrders } from '@/features/purchase-orders/hooks';
 import { deletePurchaseOrder, sendPurchaseOrder } from '@/features/purchase-orders/actions';
-import type { POListItem, POStatus, PurchaseOrderWithItems } from '@/features/purchase-orders/types';
+import type { POListItem, POStatus, PurchaseOrderWithItems, POSortColumn, SortDirection } from '@/features/purchase-orders/types';
 import { PO_STATUS_LABELS } from '@/features/purchase-orders/types';
 
 export default function PurchaseOrdersPage() {
@@ -70,6 +70,24 @@ export default function PurchaseOrdersPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
+  // Sorting state
+  const [sortColumn, setSortColumn] = useState<POSortColumn | null>(null);
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+
+  // Handle sort change
+  const handleSortChange = (column: POSortColumn) => {
+    if (sortColumn === column) {
+      // Toggle direction
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      // New column, default to asc
+      setSortColumn(column);
+      setSortDirection('asc');
+    }
+    // Reset to page 1 when sorting changes
+    setPage(1);
+  };
+
   // Reset to page 1 when status filter changes
   useEffect(() => {
     setPage(1);
@@ -84,7 +102,8 @@ export default function PurchaseOrdersPage() {
     ...(statusFilter !== 'all' && { status: statusFilter }),
     page,
     limit: pageSize,
-  }), [statusFilter, page, pageSize]);
+    ...(sortColumn && { sortBy: sortColumn, sortOrder: sortDirection }),
+  }), [statusFilter, page, pageSize, sortColumn, sortDirection]);
 
   const {
     data: purchaseOrders,
@@ -264,6 +283,11 @@ export default function PurchaseOrdersPage() {
             setPageSize(newSize);
             setPage(1);
           },
+        }}
+        sorting={{
+          column: sortColumn,
+          direction: sortDirection,
+          onSortChange: handleSortChange,
         }}
       />
 

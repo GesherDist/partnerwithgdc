@@ -133,7 +133,6 @@ export function EditSalesOrderDrawer({
       console.log('[EditSalesOrderDrawer] Updating order with DTO:', {
         orderDate: dto.orderDate,
         requestedDeliveryDate: dto.requestedDeliveryDate,
-        orderSeries: dto.orderSeries,
         itemsCount: dto.items.length,
         items: dto.items,
       });
@@ -201,7 +200,6 @@ export function EditSalesOrderDrawer({
     shippingMethod: order.shippingMethod,
     customerNotes: order.customerNotes,
     internalNotes: order.internalNotes,
-    orderSeries: order.orderSeries,
     orderNumber: order.orderNumber,
     items: order.items.map((item) => ({
       id: item.id,
@@ -227,7 +225,6 @@ export function EditSalesOrderDrawer({
         orderNumber: order.orderNumber,
         orderDate: order.orderDate,
         requestedDeliveryDate: order.requestedDeliveryDate,
-        orderSeries: order.orderSeries,
         status: order.status,
       });
     }
@@ -235,7 +232,6 @@ export function EditSalesOrderDrawer({
       console.log('[EditSalesOrderDrawer] initialFormData:', {
         orderDate: initialFormData.orderDate,
         requestedDeliveryDate: initialFormData.requestedDeliveryDate,
-        orderSeries: initialFormData.orderSeries,
         orderNumber: initialFormData.orderNumber,
       });
     }

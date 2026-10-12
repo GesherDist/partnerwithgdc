@@ -183,3 +183,37 @@ export interface EditInventoryDrawerProps {
   inventoryId: string | null;
   onSuccess?: () => void;
 }
+
+// ============================================
+// ALLOCATION DETAILS TYPES (for View Drawer)
+// ============================================
+
+/**
+ * Represents a single inventory allocation with SO/Customer details
+ * Used in ViewInventoryDrawer to show where inventory is allocated
+ */
+export interface InventoryAllocationDetail {
+  id: string;
+  quantity: number;
+  status: string;
+  fulfillmentSource: string;
+  createdAt: Date;
+
+  // Sales Order Info
+  salesOrderId: string;
+  salesOrderNumber: string;
+  salesOrderStatus: string;
+
+  // Customer Info
+  customerId: string;
+  customerName: string;
+
+  // Item Info
+  salesOrderItemId: string;
+  sku: string;
+  description: string;
+
+  // Location/Dealer Info (optional)
+  locationName?: string;
+  dealerName?: string;
+}

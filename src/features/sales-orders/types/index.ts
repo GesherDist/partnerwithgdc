@@ -161,7 +161,6 @@ export interface SalesOrder {
   customerPoNumber: string | null;
   status: OrderStatus;
   creditStatus: OrderCreditStatus;
-  orderSeries: string | null; // GDC 1, GDC 2, GDC 3 - time-based order cycles
 
   // Billing Address
   billingAddressStreet: string | null;
@@ -471,7 +470,6 @@ export interface CreateSalesOrderDTO {
   currencyCode?: string;
   customerPoNumber?: string | null;
   status?: OrderStatus;
-  orderSeries?: string | null; // GDC 1, GDC 2, GDC 3
   billingAddress: AddressDTO;
   shippingAddress: AddressDTO;
   shippingMethod?: string | null;
@@ -488,7 +486,6 @@ export interface UpdateSalesOrderDTO {
   warehouseId?: string | null;
   currencyCode?: string;
   customerPoNumber?: string | null;
-  orderSeries?: string | null; // GDC 1, GDC 2, GDC 3
   billingAddress?: AddressDTO;
   shippingAddress?: AddressDTO;
   shippingMethod?: string | null;
@@ -505,7 +502,6 @@ export interface SalesOrderListParams {
   limit?: number;
   search?: string;
   status?: OrderStatus;
-  orderSeries?: string;
   customerId?: string;
   salesRepId?: string;
   warehouseId?: string;
@@ -525,7 +521,6 @@ export interface SalesOrderListItem {
   requestedDeliveryDate: string | null;
   status: OrderStatus;
   creditStatus: OrderCreditStatus;
-  orderSeries?: string | null; // GDC 1, GDC 2, GDC 3 (optional)
   grandTotal: number; // cents
   currencyCode: string;
   itemCount: number;
@@ -709,7 +704,6 @@ export interface SalesOrderFormData {
   currencyId?: string;
   customerPoNumber?: string;
   status?: OrderStatus;
-  orderSeries?: string; // GDC 1, GDC 2, GDC 3
 
   billingAddress: Address;
   shippingAddress: Address;
@@ -778,6 +772,10 @@ export interface CreateSalesOrderDrawerProps {
   masterData: SalesOrderMasterData;
 }
 
+// Sorting types for Sales Orders table
+export type SOSortColumn = 'orderNumber' | 'customerName' | 'customerPoNumber' | 'orderDate' | 'requestedDeliveryDate' | 'status' | 'grandTotal';
+export type SOSortDirection = 'asc' | 'desc';
+
 export interface SalesOrdersTableProps {
   data: SalesOrderListItem[];
   isLoading?: boolean;
@@ -796,5 +794,11 @@ export interface SalesOrdersTableProps {
     totalPages: number;
     onPageChange: (page: number) => void;
     onPageSizeChange: (pageSize: number) => void;
+  };
+  // Server-side sorting
+  sorting?: {
+    column: SOSortColumn | null;
+    direction: SOSortDirection;
+    onSortChange: (column: SOSortColumn) => void;
   };
 }

@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useMemo } from 'react';
 import {
   useReactTable,
   getCoreRowModel,
@@ -25,7 +26,7 @@ import {
 } from '@/shared/components/ui/select';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { PurchaseOrdersTableColumns } from './PurchaseOrdersTableColumns';
-import type { PurchaseOrdersTableProps } from '../types';
+import type { PurchaseOrdersTableProps, POSortColumn, SortDirection } from '../types';
 
 export function PurchaseOrdersTable({
   data,
@@ -38,11 +39,95 @@ export function PurchaseOrdersTable({
   onDelete,
   toolbarContent,
   pagination,
+  sorting: externalSorting,
 }: PurchaseOrdersTableProps) {
-  const columns = PurchaseOrdersTableColumns({ onView, onEdit, onEditStatus, onSendToSupplier, onDelete });
+  // Internal sorting state (used when no external sorting provided)
+  const [internalSortColumn, setInternalSortColumn] = useState<POSortColumn | null>(null);
+  const [internalSortDirection, setInternalSortDirection] = useState<SortDirection>('asc');
+
+  // Use external sorting if provided, otherwise use internal
+  const sortColumn = externalSorting?.column ?? internalSortColumn;
+  const sortDirection = externalSorting?.direction ?? internalSortDirection;
+
+  // Handle sort change
+  const handleSortChange = (column: POSortColumn) => {
+    if (externalSorting?.onSortChange) {
+      // Use external handler (server-side sorting)
+      externalSorting.onSortChange(column);
+    } else {
+      // Use internal state (client-side sorting)
+      if (internalSortColumn === column) {
+        setInternalSortDirection(internalSortDirection === 'asc' ? 'desc' : 'asc');
+      } else {
+        setInternalSortColumn(column);
+        setInternalSortDirection('asc');
+      }
+    }
+  };
+
+  // Sort data client-side if no external sorting
+  const sortedData = useMemo(() => {
+    if (externalSorting || !internalSortColumn) {
+      return data;
+    }
+
+    return [...data].sort((a, b) => {
+      let aVal: string | number | null = null;
+      let bVal: string | number | null = null;
+
+      switch (internalSortColumn) {
+        case 'poNumber':
+          aVal = a.poNumber;
+          bVal = b.poNumber;
+          break;
+        case 'customerName':
+          aVal = a.customerName || a.warehouseLocationName || '';
+          bVal = b.customerName || b.warehouseLocationName || '';
+          break;
+        case 'poDate':
+          aVal = a.poDate ? new Date(a.poDate).getTime() : 0;
+          bVal = b.poDate ? new Date(b.poDate).getTime() : 0;
+          break;
+        case 'expectedDeliveryDate':
+          aVal = a.expectedDeliveryDate ? new Date(a.expectedDeliveryDate).getTime() : 0;
+          bVal = b.expectedDeliveryDate ? new Date(b.expectedDeliveryDate).getTime() : 0;
+          break;
+        case 'grandTotal':
+          aVal = a.grandTotal;
+          bVal = b.grandTotal;
+          break;
+        case 'orderSeries':
+          aVal = a.orderSeries || '';
+          bVal = b.orderSeries || '';
+          break;
+        case 'latestShipmentStatus':
+          aVal = a.latestShipmentStatus || '';
+          bVal = b.latestShipmentStatus || '';
+          break;
+        default:
+          return 0;
+      }
+
+      if (aVal === null || bVal === null) return 0;
+      if (aVal < bVal) return internalSortDirection === 'asc' ? -1 : 1;
+      if (aVal > bVal) return internalSortDirection === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [data, internalSortColumn, internalSortDirection, externalSorting]);
+
+  const columns = PurchaseOrdersTableColumns({
+    onView,
+    onEdit,
+    onEditStatus,
+    onSendToSupplier,
+    onDelete,
+    sortColumn,
+    sortDirection,
+    onSortChange: handleSortChange,
+  });
 
   const table = useReactTable({
-    data,
+    data: sortedData,
     columns,
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),

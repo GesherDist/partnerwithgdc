@@ -215,32 +215,34 @@ export async function POST(request: NextRequest) {
 // ============================================
 
 /**
- * Generate next quote number
+ * Generate next quote number using database function
+ * Format: QT-YYNNNNN (e.g., QT-2600064)
  */
 async function generateQuoteNumber(supabase: any): Promise<string> {
-  const year = new Date().getFullYear();
-  const prefix = `Q-${year}-`;
+  // Use the database function for consistent number generation
+  const { data, error } = await supabase.rpc('generate_quote_number');
 
-  // Get the latest quote number for this year
-  const { data: latestQuote } = await supabase
-    .from('quotes')
-    .select('quote_number')
-    .like('quote_number', `${prefix}%`)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .single();
+  if (error) {
+    console.error('[generateQuoteNumber] Error calling RPC:', error);
+    // Fallback: generate manually with new format
+    const yearShort = new Date().getFullYear().toString().slice(2); // "26"
+    const { data: latestQuote } = await supabase
+      .from('quotes')
+      .select('quote_number')
+      .like('quote_number', `QT-${yearShort}%`)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
 
-  let nextNumber = 1;
-
-  if (latestQuote) {
-    // Extract the number part and increment
-    const match = latestQuote.quote_number.match(/Q-\d{4}-(\d+)/);
-    if (match) {
-      nextNumber = parseInt(match[1], 10) + 1;
+    let nextNumber = 1;
+    if (latestQuote) {
+      const match = latestQuote.quote_number.match(/QT-\d{2}(\d{5})/);
+      if (match) {
+        nextNumber = parseInt(match[1], 10) + 1;
+      }
     }
+    return `QT-${yearShort}${nextNumber.toString().padStart(5, '0')}`;
   }
 
-  // Format as Q-2026-00001
-  const paddedNumber = nextNumber.toString().padStart(5, '0');
-  return `${prefix}${paddedNumber}`;
+  return data as string;
 }

@@ -15,7 +15,28 @@ ALTER TABLE pick_tickets DROP CONSTRAINT IF EXISTS pick_tickets_number_format;
 ALTER TABLE packing_lists DROP CONSTRAINT IF EXISTS packing_lists_number_format;
 
 -- ============================================
--- ADD NEW CONSTRAINTS
+-- CONVERT EXISTING DATA TO NEW FORMAT
+-- ============================================
+
+-- Convert Pick Ticket numbers: PT-2026-00001 → PT-2600001
+-- Position breakdown for PT-2026-00001:
+--   Position 1-2: "PT"
+--   Position 3: "-"
+--   Position 4-7: "2026" (full year)
+--   Position 8: "-"
+--   Position 9-13: "00001" (sequence)
+-- We need: "PT-" + positions 6-7 (YY) + positions 9+ (sequence)
+UPDATE pick_tickets
+SET pick_ticket_number = 'PT-' || SUBSTRING(pick_ticket_number FROM 6 FOR 2) || SUBSTRING(pick_ticket_number FROM 9)
+WHERE pick_ticket_number LIKE 'PT-20__-_____';
+
+-- Convert Packing List numbers: PL-2026-00001 → PL-2600001
+UPDATE packing_lists
+SET packing_list_number = 'PL-' || SUBSTRING(packing_list_number FROM 6 FOR 2) || SUBSTRING(packing_list_number FROM 9)
+WHERE packing_list_number LIKE 'PL-20__-_____';
+
+-- ============================================
+-- ADD NEW CONSTRAINTS (now data is converted)
 -- ============================================
 
 -- New format: PT-YYXXXXX (e.g., PT-2600001)

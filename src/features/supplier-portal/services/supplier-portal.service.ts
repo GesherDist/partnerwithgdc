@@ -92,8 +92,9 @@ export async function confirmPO(
     return { success: false, error: 'Purchase order has been rejected' };
   }
 
-  // First, update supplier-specific fields before status transition
   const db = await createClient();
+
+  // First, update supplier-specific fields before status transition
   const { error: updateError } = await db
     .from('purchase_orders')
     .update({
@@ -120,17 +121,44 @@ export async function confirmPO(
   const result = await purchaseOrderService.confirm(input.poId, userId);
 
   if (!result.success) {
+    console.error('[confirmPO] Error confirming PO:', result.error);
     return { success: false, error: result.error || 'Failed to confirm purchase order' };
   }
 
-  // Get the created shipment ID from shipments table
-  const { data: shipment } = await db
+  // Check if shipment was created
+  let { data: shipment } = await db
     .from('shipments')
     .select('id')
     .eq('purchase_order_id', input.poId)
     .order('created_at', { ascending: false })
     .limit(1)
-    .single();
+    .maybeSingle();
+
+  // If shipment wasn't created, try to create it explicitly
+  if (!shipment) {
+    console.log('[confirmPO] No shipment found after confirm, creating explicitly...');
+    try {
+      await purchaseOrderService.createSupplierShipment(input.poId, userId);
+
+      // Get the newly created shipment
+      const { data: newShipment } = await db
+        .from('shipments')
+        .select('id')
+        .eq('purchase_order_id', input.poId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      shipment = newShipment;
+
+      if (shipment) {
+        console.log('[confirmPO] ✅ Shipment created successfully:', shipment.id);
+      }
+    } catch (shipmentError) {
+      console.error('[confirmPO] Failed to create shipment:', shipmentError);
+      // Continue - PO is confirmed, but log the shipment creation failure
+    }
+  }
 
   // Update shipment with supplier reference number if provided
   if (shipment && input.supplierReferenceNumber) {
@@ -147,7 +175,7 @@ export async function confirmPO(
   return {
     success: true,
     shipmentId: shipment?.id,
-    error: shipment ? undefined : 'PO confirmed but shipment not found'
+    error: shipment ? undefined : 'PO confirmed but shipment creation failed - please check logs'
   };
 }
 

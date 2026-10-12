@@ -33,7 +33,6 @@ import { getNextOrderNumber } from '../actions';
 import type { SalesOrderInfoSectionProps } from '../types';
 import { ORDER_STATUS_LABELS, type OrderStatus } from '../types';
 import type { SalesOrderFormInput } from '../lib/schemas';
-import { ORDER_SERIES } from '@/shared/lib/global-data';
 
 // ============================================
 // COMPONENT
@@ -251,32 +250,6 @@ function SalesOrderInfoSectionComponent({
             placeholder="Enter PO number"
             {...register('customerPoNumber')}
           />
-        </div>
-
-        {/* Order Series */}
-        <div className="space-y-2">
-          <Label htmlFor="orderSeries">Order Series *</Label>
-          <Controller
-            name="orderSeries"
-            control={control}
-            render={({ field }) => (
-              <Select value={field.value || ''} onValueChange={field.onChange}>
-                <SelectTrigger id="orderSeries" className={errors.orderSeries ? 'border-destructive' : ''}>
-                  <SelectValue placeholder="Select order series" />
-                </SelectTrigger>
-                <SelectContent>
-                  {ORDER_SERIES.map((series) => (
-                    <SelectItem key={series.id} value={series.code}>
-                      {series.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          />
-          {errors.orderSeries && (
-            <p className="text-sm text-destructive">{errors.orderSeries.message}</p>
-          )}
         </div>
 
         {/* Order Status */}

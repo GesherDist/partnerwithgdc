@@ -51,7 +51,7 @@ import {
   useSalesOrders,
 } from '@/features/sales-orders';
 import { deleteSalesOrder, confirmSalesOrder, cancelSalesOrder } from '@/features/sales-orders/actions';
-import type { SalesOrderListItem, OrderStatus, SalesOrderWithItems } from '@/features/sales-orders/types';
+import type { SalesOrderListItem, OrderStatus, SalesOrderWithItems, SOSortColumn, SOSortDirection } from '@/features/sales-orders/types';
 import { ORDER_STATUS_LABELS } from '@/features/sales-orders/types';
 import { ORDER_SERIES } from '@/shared/lib/global-data';
 
@@ -116,6 +116,24 @@ export function SalesOrdersPageContent() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
+  // Sorting state
+  const [sortColumn, setSortColumn] = useState<SOSortColumn | null>(null);
+  const [sortDirection, setSortDirection] = useState<SOSortDirection>('asc');
+
+  // Handle sort change
+  const handleSortChange = (column: SOSortColumn) => {
+    if (sortColumn === column) {
+      // Toggle direction
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      // New column, default to asc
+      setSortColumn(column);
+      setSortDirection('asc');
+    }
+    // Reset to page 1 when sorting changes
+    setPage(1);
+  };
+
   // Reset to page 1 when filters change
   useEffect(() => {
     setPage(1);
@@ -128,13 +146,14 @@ export function SalesOrdersPageContent() {
   // Master data hook - fetches once, caches, shares across components
   const { data: masterData } = useSalesOrderMasterData();
 
-  // Sales orders list with status and order series filters and pagination
+  // Sales orders list with status and order series filters, pagination, and sorting
   const salesOrdersParams = useMemo(() => ({
     ...(statusFilter !== 'all' && { status: statusFilter }),
     ...(orderSeriesFilter !== 'all' && { orderSeries: orderSeriesFilter }),
     page,
     limit: pageSize,
-  }), [statusFilter, orderSeriesFilter, page, pageSize]);
+    ...(sortColumn && { sortBy: sortColumn, sortOrder: sortDirection }),
+  }), [statusFilter, orderSeriesFilter, page, pageSize, sortColumn, sortDirection]);
 
   const {
     data: salesOrders,
@@ -358,6 +377,11 @@ export function SalesOrdersPageContent() {
             setPageSize(newSize);
             setPage(1); // Reset to first page when page size changes
           },
+        }}
+        sorting={{
+          column: sortColumn,
+          direction: sortDirection,
+          onSortChange: handleSortChange,
         }}
         toolbarContent={
           <div className="flex items-center gap-2">

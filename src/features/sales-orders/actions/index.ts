@@ -256,7 +256,7 @@ export async function updateSalesOrder(
 
   const fields = [
     'orderDate', 'requestedDeliveryDate', 'customerId', 'salesRepId',
-    'warehouseId', 'currencyCode', 'customerPoNumber', 'orderSeries',
+    'warehouseId', 'currencyCode', 'customerPoNumber',
     'shippingMethod', 'customerNotes', 'internalNotes'
   ];
 
@@ -353,31 +353,6 @@ export async function updateSalesOrderFromData(
 }
 
 /**
- * Update order series only (allowed in any status)
- * Order Series is a categorization field for tracking on Operations Dashboard
- */
-export async function updateSalesOrderSeries(
-  id: string,
-  orderSeries: string | null
-): Promise<ActionResult<SalesOrder>> {
-  const auth = await authorize('orders.edit');
-  if (!auth.ok) {
-    return auth.result;
-  }
-
-  const result = await salesOrderService.updateOrderSeries(id, orderSeries, auth.user.id);
-
-  if (result.success) {
-    revalidatePath('/sales-orders');
-    revalidatePath(`/sales-orders/${id}`);
-    revalidatePath('/api/sales-orders');
-    revalidatePath('/operations');
-  }
-
-  return result;
-}
-
-/**
  * Update product source only (allowed only for draft/pending status)
  */
 export async function updateSalesOrderProductSource(
@@ -417,7 +392,6 @@ export async function updateSalesOrderFromDTO(
     warehouseId: string | null;
     currencyCode: string;
     customerPoNumber: string;
-    orderSeries: string | null;
     status: OrderStatus;
     billingAddress: {
       street: string | null;
@@ -539,20 +513,6 @@ export async function confirmSalesOrder(id: string): Promise<ActionResult<SalesO
   const auth = await authorize('orders.approve');
   if (!auth.ok) {
     return auth.result;
-  }
-
-  // Check if Order Series is selected before confirming
-  const { data: soCheck } = await db
-    .from('sales_orders')
-    .select('order_series')
-    .eq('id', id)
-    .single();
-
-  if (!soCheck?.order_series) {
-    return {
-      success: false,
-      error: 'Order Series is required. Please select an Order Series (GDC 1, GDC 2, or GDC 3) before confirming this order.',
-    };
   }
 
   // Check if all allocations are 'allocated' before confirming
@@ -753,11 +713,6 @@ export async function regeneratePurchaseOrder(salesOrderId: string): Promise<Act
   // Validate status - must be confirmed or processing
   if (!['confirmed', 'processing'].includes(so.status)) {
     return { success: false, error: 'Sales Order must be confirmed or processing to create a PO' };
-  }
-
-  // Validate order series
-  if (!so.order_series) {
-    return { success: false, error: 'Order Series is required. Please select an Order Series before creating a PO.' };
   }
 
   // Check if there are any 'direct' allocations (manufacturer fulfillment)
@@ -1964,7 +1919,6 @@ export async function getSalesOrdersOnHold(): Promise<ActionResult<SalesOrderLis
       productSource: row.product_source || 'direct',
       grandTotal: row.grand_total,
       currencyCode: row.currency_code,
-      orderSeries: row.order_series,
       itemCount: 0, // Not fetched for this list
       createdAt: new Date(row.created_at),
     }));
@@ -1979,6 +1933,48 @@ export async function getSalesOrdersOnHold(): Promise<ActionResult<SalesOrderLis
 // ============================================
 // PIPEDRIVE SYNC
 // ============================================
+
+/**
+ * Update Sales Order's order series
+ * Used by ViewPurchaseOrderDrawer to update the linked SO's order series
+ */
+export async function updateSalesOrderSeries(
+  salesOrderId: string,
+  orderSeries: string | null
+): Promise<ActionResult<SalesOrder>> {
+  const auth = await authorize('orders.edit');
+  if (!auth.ok) {
+    return auth.result;
+  }
+
+  try {
+    const { data, error } = await db
+      .from('sales_orders')
+      .update({
+        order_series: orderSeries,
+        updated_at: new Date().toISOString(),
+        updated_by: auth.user.id,
+      })
+      .eq('id', salesOrderId)
+      .is('deleted_at', null)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('updateSalesOrderSeries error:', error);
+      return { success: false, error: 'Failed to update order series' };
+    }
+
+    revalidatePath('/sales-orders');
+    revalidatePath(`/sales-orders/${salesOrderId}`);
+    revalidatePath('/purchase-orders');
+
+    return { success: true, data: data as SalesOrder };
+  } catch (error) {
+    console.error('updateSalesOrderSeries error:', error);
+    return { success: false, error: 'Failed to update order series' };
+  }
+}
 
 /**
  * Sync order activity to Pipedrive

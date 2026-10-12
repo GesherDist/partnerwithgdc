@@ -489,10 +489,27 @@ export const purchaseOrderService = {
     // Import db client for service role access (bypass RLS)
     const { db } = await import('@/shared/lib/supabase/database');
 
+    // Check if shipment already exists for this PO
+    const { data: existingPOShipment } = await db
+      .from('shipments')
+      .select('id, shipment_number')
+      .eq('purchase_order_id', poId)
+      .maybeSingle();
+
+    if (existingPOShipment) {
+      console.log(`[createSupplierShipment] Shipment ${existingPOShipment.shipment_number} already exists for PO ${poId}`);
+      return; // Shipment already exists, no need to create
+    }
+
     // Get PO with items
     const po = await purchaseOrderRepository.findById(poId);
     if (!po) {
       throw new Error('Purchase order not found');
+    }
+
+    // Ensure items exist
+    if (!po.items || po.items.length === 0) {
+      console.warn(`[createSupplierShipment] PO ${po.poNumber} has no items, creating shipment without items`);
     }
 
     // Generate shipment number from PO number
@@ -501,7 +518,7 @@ export const purchaseOrderService = {
     const poNumberPart = po.poNumber.replace(/^PO-?/i, '');
     const desiredShipmentNumber = `SO${poNumberPart}`;
 
-    // Check if shipment number already exists
+    // Check if shipment number already exists (different PO might have same number)
     const { data: existingShipment } = await db
       .from('shipments')
       .select('id')
@@ -522,29 +539,28 @@ export const purchaseOrderService = {
       console.log(`✅ Using PO-matched shipment number: ${shipmentNumber}`);
     }
 
-    // Calculate total quantity
-    const totalQty = po.items.reduce((sum, item) => sum + item.quantityOrdered, 0);
+    // Calculate total quantity (handle empty/undefined items)
+    const items = po.items || [];
+    const totalQty = items.reduce((sum, item) => sum + (item.quantityOrdered || 0), 0);
 
     // Get supplier_id from first PO item (item-level supplier)
-    const supplierId = po.items[0]?.supplierId || null;
+    const supplierId = items[0]?.supplierId || null;
 
     // Map PO status to shipment status
+    // Valid shipment status values: 'pending', 'in_transit', 'delivered', 'failed'
+    // Note: load_status is a separate field that can be 'available', 'sold', etc.
     const getShipmentStatus = (poStatus: string): string => {
       switch (poStatus) {
         case 'confirmed':
-          return 'confirmed';
         case 'in_production':
-          return 'in_production';
         case 'ready_to_ship':
-          return 'ready_to_ship';
+          return 'pending'; // Shipment is pending until it's actually in transit
         case 'in_transit':
           return 'in_transit';
-        case 'partial':
-          return 'partial';
         case 'received':
           return 'delivered';
         default:
-          return 'pending';
+          return 'pending'; // Default to pending for new shipments
       }
     };
 
@@ -580,30 +596,32 @@ export const purchaseOrderService = {
       throw new Error(`Failed to create shipment: ${shipmentError.message}`);
     }
 
-    // Create shipment items
-    const shipmentItems = po.items.map((item, index) => ({
-      shipment_id: shipment.id,
-      product_id: item.productId,
-      purchase_order_item_id: item.id,
-      sku: item.sku,
-      description: item.description,
-      quantity_shipped: item.quantityOrdered,
-      sort_order: index,
-      created_by: userId || null,
-      updated_by: userId || null,
-    }));
+    // Create shipment items (only if PO has items)
+    if (items.length > 0) {
+      const shipmentItems = items.map((item, index) => ({
+        shipment_id: shipment.id,
+        product_id: item.productId,
+        purchase_order_item_id: item.id,
+        sku: item.sku,
+        description: item.description,
+        quantity_shipped: item.quantityOrdered,
+        sort_order: index,
+        created_by: userId || null,
+        updated_by: userId || null,
+      }));
 
-    const { error: itemsError } = await db
-      .from('shipment_items')
-      .insert(shipmentItems);
+      const { error: itemsError } = await db
+        .from('shipment_items')
+        .insert(shipmentItems);
 
-    if (itemsError) {
-      // Clean up shipment if items insertion fails
-      await db.from('shipments').delete().eq('id', shipment.id);
-      throw new Error(`Failed to create shipment items: ${itemsError.message}`);
+      if (itemsError) {
+        // Clean up shipment if items insertion fails
+        await db.from('shipments').delete().eq('id', shipment.id);
+        throw new Error(`Failed to create shipment items: ${itemsError.message}`);
+      }
     }
 
-    console.log(`[PO Confirm] Auto-created shipment ${shipmentNumber} with source='supplier' for PO ${po.poNumber}`);
+    console.log(`[PO Confirm] ✅ Auto-created shipment ${shipmentNumber} with source='supplier' for PO ${po.poNumber}`);
   },
 
   /**
@@ -754,21 +772,15 @@ export const purchaseOrderService = {
         }
       } else {
         // Update existing shipment status if shipment exists
+        // Valid shipment status values: 'pending', 'in_transit', 'delivered', 'failed'
         const getShipmentStatusFromPO = (poStatus: string): string => {
           switch (poStatus) {
-            case 'confirmed':
-              return 'confirmed';
-            case 'in_production':
-              return 'in_production';
-            case 'ready_to_ship':
-              return 'ready_to_ship';
             case 'in_transit':
               return 'in_transit';
-            case 'partial':
-              return 'partial';
             case 'received':
               return 'delivered';
             default:
+              // All other statuses (confirmed, in_production, ready_to_ship, partial) = pending
               return 'pending';
           }
         };

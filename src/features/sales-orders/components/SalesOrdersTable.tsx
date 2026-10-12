@@ -31,6 +31,7 @@ export function SalesOrdersTable({
   onCancel,
   toolbarContent,
   pagination,
+  sorting,
 }: SalesOrdersTableProps) {
   // ----------------------------------------
   // COLUMNS
@@ -44,8 +45,11 @@ export function SalesOrdersTable({
         onDelete,
         onConfirm,
         onCancel,
+        sortColumn: sorting?.column,
+        sortDirection: sorting?.direction,
+        onSortChange: sorting?.onSortChange,
       }),
-    [onView, onEdit, onDelete, onConfirm, onCancel, onRowClick]
+    [onView, onEdit, onDelete, onConfirm, onCancel, onRowClick, sorting]
   );
 
   // ----------------------------------------

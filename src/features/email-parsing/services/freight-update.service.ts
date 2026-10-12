@@ -147,44 +147,56 @@ export async function processFreightUpdate(
 /**
  * Normalize SO/Shipment number to shipment_number formats
  * IMPORTANT: In freight emails, "SO" refers to SHIPMENT number, not Sales Order!
- * Converts: SO2600045 → SH-2026-00045 (database shipment_number format)
  *
- * Handles formats:
- * - SO2600045 (compact from emails) → SH-2026-00045
- * - SO-2600045 → SH-2600045 (current format without year expansion)
- * - SO-2026-00045 → SH-2026-00045
+ * Current database format: SO2600045 (SOYYNNNNN - no dashes)
+ * Old format for backward compatibility: SH-2026-00045
+ *
+ * Handles formats from emails:
+ * - SO2600045 (compact from emails) → SO2600045 (exact match)
+ * - SO-2600045 → SO2600045
+ * - SO-2026-00045 (old) → SO2600045
  */
 function normalizeShipmentNumber(soNumber: string): string[] {
   const formats: string[] = [];
 
-  // Pattern 1: SO2600045 (compact) → SH-2026-00045
+  // Pattern 1: SO2600045 (compact - current format) → exact match + alternatives
   const compactMatch = soNumber.match(/^SO(\d{2})(\d{5})$/i);
   if (compactMatch && compactMatch[1] && compactMatch[2]) {
     const yearShort = compactMatch[1]; // "26"
     const seqNum = compactMatch[2]; // "00045"
     const yearFull = `20${yearShort}`; // "2026"
-    formats.push(`SH-${yearFull}-${seqNum}`); // Database format: SH-2026-00045
-    formats.push(`SH-${yearShort}${seqNum}`); // Alternative: SH-2600045
+    formats.push(`SO${yearShort}${seqNum}`); // Current format: SO2600045
+    formats.push(`SH-${yearFull}-${seqNum}`); // Old format for backward compatibility
   }
 
-  // Pattern 2: SO-2600045 (with dash, short year) → SH-2600045
+  // Pattern 2: SO-2600045 (with dash, short year) → SO2600045
   const dashShortMatch = soNumber.match(/^SO-(\d{2})(\d{5})$/i);
   if (dashShortMatch && dashShortMatch[1] && dashShortMatch[2]) {
     const yearShort = dashShortMatch[1];
     const seqNum = dashShortMatch[2];
     const yearFull = `20${yearShort}`;
-    formats.push(`SH-${yearShort}${seqNum}`); // SH-2600045
-    formats.push(`SH-${yearFull}-${seqNum}`); // SH-2026-00045
+    formats.push(`SO${yearShort}${seqNum}`); // Current format: SO2600045
+    formats.push(`SH-${yearFull}-${seqNum}`); // Old format for backward compatibility
   }
 
-  // Pattern 3: SO-2026-00045 (expanded) → SH-2026-00045
+  // Pattern 3: SO-2026-00045 (old expanded) → SO2600045
   const expandedMatch = soNumber.match(/^SO-(\d{4})-(\d{5})$/i);
   if (expandedMatch && expandedMatch[1] && expandedMatch[2]) {
     const yearFull = expandedMatch[1]; // "2026"
     const seqNum = expandedMatch[2]; // "00045"
     const yearShort = yearFull.slice(2); // "26"
-    formats.push(`SH-${yearFull}-${seqNum}`); // SH-2026-00045
-    formats.push(`SH-${yearShort}${seqNum}`); // SH-2600045
+    formats.push(`SO${yearShort}${seqNum}`); // Current format: SO2600045
+    formats.push(`SH-${yearFull}-${seqNum}`); // Old format for backward compatibility
+  }
+
+  // Pattern 4: SH-2026-00045 (old database format) → SO2600045
+  const oldShMatch = soNumber.match(/^SH-(\d{4})-(\d{5})$/i);
+  if (oldShMatch && oldShMatch[1] && oldShMatch[2]) {
+    const yearFull = oldShMatch[1]; // "2026"
+    const seqNum = oldShMatch[2]; // "00045"
+    const yearShort = yearFull.slice(2); // "26"
+    formats.push(`SO${yearShort}${seqNum}`); // Current format: SO2600045
+    formats.push(`SH-${yearFull}-${seqNum}`); // Keep original
   }
 
   return [...new Set(formats)]; // Remove duplicates
@@ -245,10 +257,10 @@ async function matchShipment(
 
   // Try 3: Match by SO number (actually SHIPMENT number in freight emails)
   // IMPORTANT: Freight forwarders call shipments as "SO" but they mean SHIPMENT, not Sales Order
-  // Email format: "SO2600045" → Database format: "SH-2026-00045"
+  // Email format: "SO2600045" → Database format: "SO2600045" (same format)
   if (!shipmentId && parsedData.soNumber) {
     // Convert SO number to shipment number formats
-    // Email: SO2600045 → Database: SH-2026-00045
+    // Email: SO2600045 → Database: SO2600045
     const shipmentFormats = normalizeShipmentNumber(parsedData.soNumber);
     console.log('[Freight Matching] Trying Shipment formats:', shipmentFormats);
 

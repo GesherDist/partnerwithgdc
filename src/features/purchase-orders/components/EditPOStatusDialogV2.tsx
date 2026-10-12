@@ -24,6 +24,7 @@ import {
   Ship,
   AlertTriangle,
   ChevronRight,
+  XCircle,
 } from 'lucide-react';
 
 import {
@@ -41,7 +42,9 @@ import { RadioGroup, RadioGroupItem } from '@/shared/components/ui/radio-group';
 import { cn } from '@/shared/lib/utils';
 import { toast } from 'sonner';
 
-import { updatePOProductionStatus, updateShipmentLoadStatus } from '../actions';
+import { updatePOProductionStatus, updateShipmentLoadStatus, adminConfirmPurchaseOrder, adminRejectPurchaseOrder } from '../actions';
+import { Input } from '@/shared/components/ui/input';
+import { Textarea } from '@/shared/components/ui/textarea';
 
 // ============================================
 // TYPES
@@ -203,6 +206,12 @@ export function EditPOStatusDialogV2({
   // Current step: 'confirmation' | 'production' | 'shipment'
   const [currentStep, setCurrentStep] = useState<'confirmation' | 'production' | 'shipment'>('confirmation');
 
+  // Admin confirm/reject state
+  const [showRejectForm, setShowRejectForm] = useState(false);
+  const [rejectionReason, setRejectionReason] = useState('');
+  const [expectedDate, setExpectedDate] = useState('');
+  const [adminNotes, setAdminNotes] = useState('');
+
   // Helper to check if a status is a base LoadStatus
   const isBaseLoadStatus = (status: ExtendedLoadStatus): status is LoadStatus => {
     const baseStatuses: LoadStatus[] = ['available', 'open', 'hold', 'in_transit', 'sold', 'invoiced', 'closed'];
@@ -215,6 +224,11 @@ export function EditPOStatusDialogV2({
       setSelectedProductionStatus(currentProductionStatus);
       // Only set selectedLoadStatus if it's a base LoadStatus (not extended like 'paid', 'disputed')
       setSelectedLoadStatus(isBaseLoadStatus(currentLoadStatus) ? currentLoadStatus : null);
+      // Reset admin confirm/reject state
+      setShowRejectForm(false);
+      setRejectionReason('');
+      setExpectedDate('');
+      setAdminNotes('');
 
       // Determine initial step
       if (!isSupplierConfirmed) {
@@ -226,6 +240,49 @@ export function EditPOStatusDialogV2({
       }
     }
   }, [open, currentProductionStatus, currentLoadStatus, isSupplierConfirmed, isShipped]);
+
+  // Handle admin accept PO
+  const handleAdminAccept = () => {
+    startTransition(async () => {
+      const result = await adminConfirmPurchaseOrder(poId, expectedDate || undefined, adminNotes || undefined);
+
+      if (result.success) {
+        toast.success('Order Accepted', {
+          description: `${poNumber} has been confirmed and shipment created`,
+        });
+        onSuccess?.();
+        onOpenChange(false);
+      } else {
+        toast.error('Failed to accept order', {
+          description: result.error || 'Please try again',
+        });
+      }
+    });
+  };
+
+  // Handle admin reject PO
+  const handleAdminReject = () => {
+    if (!rejectionReason.trim()) {
+      toast.error('Please enter a rejection reason');
+      return;
+    }
+
+    startTransition(async () => {
+      const result = await adminRejectPurchaseOrder(poId, rejectionReason);
+
+      if (result.success) {
+        toast.success('Order Rejected', {
+          description: `${poNumber} has been rejected`,
+        });
+        onSuccess?.();
+        onOpenChange(false);
+      } else {
+        toast.error('Failed to reject order', {
+          description: result.error || 'Please try again',
+        });
+      }
+    });
+  };
 
   // Handle production status update
   const handleUpdateProductionStatus = () => {
@@ -357,25 +414,98 @@ export function EditPOStatusDialogV2({
         <div className="space-y-4 py-2">
           {/* Step 1: Supplier Confirmation Check */}
           {currentStep === 'confirmation' && !isSupplierConfirmed && (
-            <div className="rounded-lg border-2 border-amber-200 bg-amber-50 p-4">
-              <div className="flex items-start gap-3">
-                <div className="rounded-full bg-amber-100 p-2">
-                  <AlertTriangle className="h-5 w-5 text-amber-600" />
-                </div>
-                <div className="flex-1">
-                  <h4 className="font-semibold text-amber-800 mb-1">
-                    Awaiting Supplier Confirmation
-                  </h4>
-                  <p className="text-sm text-amber-700 mb-3">
-                    This Purchase Order has not been confirmed by the supplier yet.
-                    The supplier needs to accept or reject this order from their Supplier Portal.
-                  </p>
-                  <div className="flex items-center gap-2 text-xs text-amber-600">
-                    <Clock className="h-3.5 w-3.5" />
-                    <span>Status will update automatically when supplier responds</span>
+            <div className="space-y-4">
+              {!showRejectForm ? (
+                <>
+                  {/* Info Banner */}
+                  <div className="rounded-lg border-2 border-amber-200 bg-amber-50 p-4">
+                    <div className="flex items-start gap-3">
+                      <div className="rounded-full bg-amber-100 p-2">
+                        <AlertTriangle className="h-5 w-5 text-amber-600" />
+                      </div>
+                      <div className="flex-1">
+                        <h4 className="font-semibold text-amber-800 mb-1">
+                          Awaiting Supplier Confirmation
+                        </h4>
+                        <p className="text-sm text-amber-700">
+                          The supplier has not confirmed this PO yet. You can either wait for the supplier to respond,
+                          or accept/reject on their behalf.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Admin Accept Form */}
+                  <div className="space-y-3 rounded-lg border p-4">
+                    <Label className="text-sm font-medium">Accept Order (Optional Details)</Label>
+                    <div className="space-y-2">
+                      <Label htmlFor="expectedDate" className="text-xs text-muted-foreground">Expected Completion Date</Label>
+                      <Input
+                        id="expectedDate"
+                        type="date"
+                        value={expectedDate}
+                        onChange={(e) => setExpectedDate(e.target.value)}
+                        className="h-9"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="adminNotes" className="text-xs text-muted-foreground">Notes (Optional)</Label>
+                      <Textarea
+                        id="adminNotes"
+                        value={adminNotes}
+                        onChange={(e) => setAdminNotes(e.target.value)}
+                        placeholder="Add any notes..."
+                        className="h-16 resize-none"
+                      />
+                    </div>
+                  </div>
+                </>
+              ) : (
+                /* Reject Form */
+                <div className="space-y-3 rounded-lg border-2 border-red-200 bg-red-50 p-4">
+                  <div className="flex items-center gap-2 text-red-800">
+                    <XCircle className="h-5 w-5" />
+                    <Label className="text-sm font-semibold">Reject Order</Label>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="rejectionReason" className="text-xs text-muted-foreground">
+                      Rejection Reason <span className="text-red-500">*</span>
+                    </Label>
+                    <Textarea
+                      id="rejectionReason"
+                      value={rejectionReason}
+                      onChange={(e) => setRejectionReason(e.target.value)}
+                      placeholder="Enter the reason for rejection..."
+                      className="h-24 resize-none"
+                      autoFocus
+                    />
+                  </div>
+                  <div className="flex gap-2 mt-3">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setShowRejectForm(false);
+                        setRejectionReason('');
+                      }}
+                      disabled={isPending}
+                    >
+                      Back
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      onClick={handleAdminReject}
+                      disabled={isPending || !rejectionReason.trim()}
+                    >
+                      {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                      Confirm Rejection
+                    </Button>
                   </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
 
@@ -569,37 +699,82 @@ export function EditPOStatusDialogV2({
         </div>
 
         <DialogFooter className="gap-2 sm:gap-0">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            disabled={isPending}
-          >
-            {currentStep === 'confirmation' && !isSupplierConfirmed ? 'Close' : 'Cancel'}
-          </Button>
-
-          {/* Production Status Button */}
-          {currentStep === 'production' && isSupplierConfirmed && (
-            <Button
-              type="button"
-              onClick={handleUpdateProductionStatus}
-              disabled={isPending || !selectedProductionStatus || selectedProductionStatus === currentProductionStatus}
-            >
-              {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {selectedProductionStatus === 'shipped' ? 'Mark as Shipped' : 'Update Status'}
-            </Button>
+          {/* Confirmation Step - Show Accept/Reject */}
+          {currentStep === 'confirmation' && !isSupplierConfirmed && !showRejectForm && (
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onOpenChange(false)}
+                disabled={isPending}
+              >
+                Close
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setShowRejectForm(true)}
+                disabled={isPending}
+                className="text-red-600 hover:text-red-700 hover:bg-red-50"
+              >
+                <XCircle className="mr-2 h-4 w-4" />
+                Reject Order
+              </Button>
+              <Button
+                type="button"
+                onClick={handleAdminAccept}
+                disabled={isPending}
+                className="bg-green-600 hover:bg-green-700"
+              >
+                {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                <CheckCircle2 className="mr-2 h-4 w-4" />
+                Accept Order
+              </Button>
+            </>
           )}
 
-          {/* Shipment Status Button */}
+          {/* Production Status Step */}
+          {currentStep === 'production' && isSupplierConfirmed && (
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onOpenChange(false)}
+                disabled={isPending}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                onClick={handleUpdateProductionStatus}
+                disabled={isPending || !selectedProductionStatus || selectedProductionStatus === currentProductionStatus}
+              >
+                {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {selectedProductionStatus === 'shipped' ? 'Mark as Shipped' : 'Update Status'}
+              </Button>
+            </>
+          )}
+
+          {/* Shipment Status Step */}
           {currentStep === 'shipment' && isShipped && (
-            <Button
-              type="button"
-              onClick={handleUpdateLoadStatus}
-              disabled={isPending || !selectedLoadStatus || selectedLoadStatus === currentLoadStatus}
-            >
-              {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Update Shipment Status
-            </Button>
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onOpenChange(false)}
+                disabled={isPending}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                onClick={handleUpdateLoadStatus}
+                disabled={isPending || !selectedLoadStatus || selectedLoadStatus === currentLoadStatus}
+              >
+                {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Update Shipment Status
+              </Button>
+            </>
           )}
         </DialogFooter>
       </DialogContent>

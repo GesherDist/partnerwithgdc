@@ -113,23 +113,6 @@ export async function createPurchaseOrder(data: CreatePOInput) {
     return auth.result;
   }
 
-  // If linking to a Sales Order, validate that Order Series is selected
-  if (data.salesOrderId) {
-    const supabase = await createClient();
-    const { data: soCheck } = await supabase
-      .from('sales_orders')
-      .select('order_series')
-      .eq('id', data.salesOrderId)
-      .single();
-
-    if (!soCheck?.order_series) {
-      return {
-        success: false,
-        error: 'Order Series is required. Please select an Order Series (GDC 1, GDC 2, or GDC 3) on the linked Sales Order before creating a Purchase Order.',
-      };
-    }
-  }
-
   const result = await purchaseOrderService.create(data, auth.user.id);
 
   if (result.success) {
@@ -508,11 +491,12 @@ export async function updateShipmentLoadStatus(
 /**
  * Update PO production status (Not Started → In Production → Ready to Ship → Shipped)
  * This is used from the main PO page, not the supplier portal
+ * If shipment doesn't exist, it will be created automatically
  */
 export async function updatePOProductionStatus(
   poId: string,
   productionStatus: 'not_started' | 'in_production' | 'ready_to_ship' | 'shipped'
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; shipmentCreated?: boolean }> {
   const auth = await authorize('purchase_orders.edit');
   if (!auth.ok) {
     return { success: false, error: 'Permission denied' };
@@ -553,25 +537,60 @@ export async function updatePOProductionStatus(
         .eq('id', poId);
     }
 
-    // If shipped, update the shipment status to in_transit
-    if (productionStatus === 'shipped') {
-      const { data: shipment } = await supabase
-        .from('shipments')
-        .select('id')
-        .eq('purchase_order_id', poId)
-        .is('deleted_at', null)
-        .single();
+    // Check if shipment exists for this PO
+    let { data: shipment } = await supabase
+      .from('shipments')
+      .select('id')
+      .eq('purchase_order_id', poId)
+      .is('deleted_at', null)
+      .maybeSingle();
 
-      if (shipment) {
-        await supabase
+    let shipmentCreated = false;
+
+    // If no shipment exists, create one
+    if (!shipment) {
+      console.log(`[updatePOProductionStatus] No shipment found for PO ${poId}, creating...`);
+      try {
+        await purchaseOrderService.createSupplierShipment(poId, auth.user.id);
+        shipmentCreated = true;
+
+        // Get the newly created shipment
+        const { data: newShipment } = await supabase
           .from('shipments')
-          .update({
-            load_status: 'in_transit',
-            status: 'in_transit',
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', shipment.id);
+          .select('id')
+          .eq('purchase_order_id', poId)
+          .is('deleted_at', null)
+          .maybeSingle();
+
+        shipment = newShipment;
+        console.log(`[updatePOProductionStatus] ✅ Shipment created: ${shipment?.id}`);
+      } catch (shipmentError) {
+        console.error('[updatePOProductionStatus] Failed to create shipment:', shipmentError);
+        // Continue - production status is updated, but shipment creation failed
       }
+    }
+
+    // Update shipment status based on production status
+    if (shipment) {
+      const shipmentUpdateData: Record<string, unknown> = {
+        updated_at: new Date().toISOString(),
+        updated_by: auth.user.id,
+      };
+
+      // Map production status to shipment status
+      if (productionStatus === 'in_production') {
+        shipmentUpdateData.status = 'in_production';
+      } else if (productionStatus === 'ready_to_ship') {
+        shipmentUpdateData.status = 'ready_to_ship';
+      } else if (productionStatus === 'shipped') {
+        shipmentUpdateData.status = 'in_transit';
+        shipmentUpdateData.load_status = 'in_transit';
+      }
+
+      await supabase
+        .from('shipments')
+        .update(shipmentUpdateData)
+        .eq('id', shipment.id);
     }
 
     // Revalidate paths
@@ -579,10 +598,226 @@ export async function updatePOProductionStatus(
     revalidatePath(`/purchase-orders/${poId}`);
     revalidatePath('/operations');
     revalidatePath('/dashboard/operations');
+    revalidatePath('/shipments');
+
+    return { success: true, shipmentCreated };
+  } catch (err) {
+    console.error('[updatePOProductionStatus] Error:', err);
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'An unexpected error occurred',
+    };
+  }
+}
+
+// ============================================
+// ADMIN CONFIRM/REJECT PO
+// ============================================
+
+/**
+ * Admin Confirm Purchase Order
+ * Used when admin wants to accept/confirm a PO on behalf of the supplier.
+ * This sets supplier_confirmed_at, production_status = 'not_started',
+ * and auto-creates a shipment (same behavior as supplier portal).
+ *
+ * Flow:
+ * 1. Validate PO is not already confirmed/rejected
+ * 2. Update supplier_confirmed_at, production_status
+ * 3. Transition PO status to 'confirmed' (if needed)
+ * 4. Create shipment with load_status = 'available'
+ */
+export async function adminConfirmPurchaseOrder(
+  poId: string,
+  expectedCompletionDate?: string,
+  notes?: string
+): Promise<ActionResult<{ shipmentId?: string }>> {
+  const auth = await authorize('purchase_orders.edit');
+  if (!auth.ok) {
+    return auth.result;
+  }
+
+  try {
+    const supabase = await createClient();
+
+    // Check current state
+    const { data: po, error: fetchError } = await supabase
+      .from('purchase_orders')
+      .select('id, po_number, status, supplier_confirmed_at, supplier_rejected_at')
+      .eq('id', poId)
+      .single();
+
+    if (fetchError || !po) {
+      return { success: false, error: 'Purchase order not found' };
+    }
+
+    if (po.supplier_confirmed_at) {
+      return { success: false, error: 'Purchase order already confirmed' };
+    }
+
+    if (po.supplier_rejected_at) {
+      return { success: false, error: 'Purchase order has been rejected' };
+    }
+
+    console.log(`[adminConfirmPurchaseOrder] Confirming PO ${po.po_number}, current status: ${po.status}`);
+
+    // Update PO with confirmation details AND status to 'confirmed'
+    const { error: updateError } = await supabase
+      .from('purchase_orders')
+      .update({
+        supplier_confirmed_at: new Date().toISOString(),
+        supplier_confirmed_by: auth.user.id,
+        expected_completion_date: expectedCompletionDate || null,
+        supplier_notes: notes || null,
+        production_status: 'not_started',
+        status: 'confirmed', // Directly set status to confirmed
+        updated_at: new Date().toISOString(),
+        updated_by: auth.user.id,
+      })
+      .eq('id', poId);
+
+    if (updateError) {
+      console.error('[adminConfirmPurchaseOrder] Error updating PO:', updateError);
+      return { success: false, error: 'Failed to confirm purchase order' };
+    }
+
+    console.log(`[adminConfirmPurchaseOrder] ✅ PO ${po.po_number} confirmed, now creating shipment...`);
+
+    // Check if shipment already exists
+    let { data: shipment } = await supabase
+      .from('shipments')
+      .select('id, shipment_number')
+      .eq('purchase_order_id', poId)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    // If no shipment exists, create one
+    if (!shipment) {
+      console.log(`[adminConfirmPurchaseOrder] No shipment found for PO ${po.po_number}, creating...`);
+      try {
+        await purchaseOrderService.createSupplierShipment(poId, auth.user.id);
+
+        const { data: newShipment } = await supabase
+          .from('shipments')
+          .select('id, shipment_number')
+          .eq('purchase_order_id', poId)
+          .is('deleted_at', null)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        shipment = newShipment;
+
+        if (shipment) {
+          console.log(`[adminConfirmPurchaseOrder] ✅ Shipment ${shipment.shipment_number} created with load_status='available'`);
+        }
+      } catch (shipmentError) {
+        console.error('[adminConfirmPurchaseOrder] Failed to create shipment:', shipmentError);
+        // Return success but warn about shipment
+        revalidatePath('/purchase-orders');
+        revalidatePath(`/purchase-orders/${poId}`);
+        revalidatePath('/operations');
+
+        return {
+          success: true,
+          data: {},
+          error: 'PO confirmed but shipment creation failed - please create manually',
+        };
+      }
+    } else {
+      console.log(`[adminConfirmPurchaseOrder] Shipment ${shipment.shipment_number} already exists for PO ${po.po_number}`);
+    }
+
+    // Revalidate paths
+    revalidatePath('/purchase-orders');
+    revalidatePath(`/purchase-orders/${poId}`);
+    revalidatePath('/supplier-portal');
+    revalidatePath('/supplier-portal/purchase-orders');
+    revalidatePath('/operations');
+    revalidatePath('/shipments');
+
+    return {
+      success: true,
+      data: { shipmentId: shipment?.id },
+    };
+  } catch (err) {
+    console.error('[adminConfirmPurchaseOrder] Error:', err);
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'An unexpected error occurred',
+    };
+  }
+}
+
+/**
+ * Admin Reject Purchase Order
+ * Used when admin wants to reject a PO on behalf of the supplier.
+ * This sets supplier_rejected_at and rejection_reason.
+ */
+export async function adminRejectPurchaseOrder(
+  poId: string,
+  rejectionReason: string
+): Promise<ActionResult> {
+  const auth = await authorize('purchase_orders.edit');
+  if (!auth.ok) {
+    return auth.result;
+  }
+
+  if (!rejectionReason.trim()) {
+    return { success: false, error: 'Rejection reason is required' };
+  }
+
+  try {
+    const supabase = await createClient();
+
+    // Check current state
+    const { data: po, error: fetchError } = await supabase
+      .from('purchase_orders')
+      .select('id, po_number, supplier_confirmed_at, supplier_rejected_at')
+      .eq('id', poId)
+      .single();
+
+    if (fetchError || !po) {
+      return { success: false, error: 'Purchase order not found' };
+    }
+
+    if (po.supplier_rejected_at) {
+      return { success: false, error: 'Purchase order already rejected' };
+    }
+
+    if (po.supplier_confirmed_at) {
+      return { success: false, error: 'Cannot reject a confirmed purchase order' };
+    }
+
+    // Update PO with rejection details
+    const { error: updateError } = await supabase
+      .from('purchase_orders')
+      .update({
+        supplier_rejected_at: new Date().toISOString(),
+        supplier_rejected_by: auth.user.id,
+        rejection_reason: rejectionReason.trim(),
+        status: 'cancelled',
+        updated_at: new Date().toISOString(),
+        updated_by: auth.user.id,
+      })
+      .eq('id', poId);
+
+    if (updateError) {
+      console.error('[adminRejectPurchaseOrder] Error updating PO:', updateError);
+      return { success: false, error: 'Failed to reject purchase order' };
+    }
+
+    // Revalidate paths
+    revalidatePath('/purchase-orders');
+    revalidatePath(`/purchase-orders/${poId}`);
+    revalidatePath('/supplier-portal');
+    revalidatePath('/supplier-portal/purchase-orders');
+    revalidatePath('/operations');
 
     return { success: true };
   } catch (err) {
-    console.error('[updatePOProductionStatus] Error:', err);
+    console.error('[adminRejectPurchaseOrder] Error:', err);
     return {
       success: false,
       error: err instanceof Error ? err.message : 'An unexpected error occurred',

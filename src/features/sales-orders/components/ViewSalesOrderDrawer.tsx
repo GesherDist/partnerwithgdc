@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState, useTransition } from 'react';
-import { Loader2, MapPin, Package, FileText, Calendar, User, Building2, Truck, AlertTriangle, ShieldCheck, CheckCircle, XCircle, ClipboardList, Receipt, Pencil, Layers, Eye } from 'lucide-react';
+import { Loader2, MapPin, Package, FileText, Calendar, User, Building2, Truck, AlertTriangle, ShieldCheck, CheckCircle, XCircle, ClipboardList, Receipt, Eye } from 'lucide-react';
 
 import { Button } from '@/shared/components/ui/button';
 import { useAuthStore } from '@/shared/stores';
@@ -43,16 +43,7 @@ import {
 } from '@/shared/components/ui/alert-dialog';
 import { Textarea } from '@/shared/components/ui/textarea';
 import { Label } from '@/shared/components/ui/label';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/shared/components/ui/select';
-
-import { getSalesOrder, releaseSalesOrderHold, confirmSalesOrder, cancelSalesOrder, updateSalesOrderSeries } from '../actions';
-import { ORDER_SERIES } from '@/shared/lib/global-data';
+import { getSalesOrder, releaseSalesOrderHold, confirmSalesOrder, cancelSalesOrder } from '../actions';
 import { createInvoiceFromSalesOrder, getInvoiceBySalesOrder } from '@/features/invoices/actions';
 import type { InvoiceListItem } from '@/features/invoices/types';
 import type { SalesOrderWithItems } from '../types';
@@ -211,10 +202,6 @@ const [isReleasingHold, setIsReleasingHold] = useState(false);
   const [showInvoicePdfModal, setShowInvoicePdfModal] = useState(false);
   const [existingInvoice, setExistingInvoice] = useState<InvoiceListItem | null>(null);
 
-  // Order Series inline edit
-  const [isEditingOrderSeries, setIsEditingOrderSeries] = useState(false);
-  const [isUpdatingOrderSeries, setIsUpdatingOrderSeries] = useState(false);
-
   // ----------------------------------------
   // EFFECTS
   // ----------------------------------------
@@ -268,28 +255,6 @@ const [isReleasingHold, setIsReleasingHold] = useState(false);
   const handleEdit = () => {
     if (order) {
       onEdit?.(order);
-    }
-  };
-
-  const handleUpdateOrderSeries = async (newOrderSeries: string) => {
-    if (!order) { return; }
-
-    setIsUpdatingOrderSeries(true);
-    try {
-      // Use dedicated action that allows update in any status
-      const result = await updateSalesOrderSeries(order.id, newOrderSeries || null);
-      if (result.success) {
-        toast.success('Order series updated');
-        setIsEditingOrderSeries(false);
-        // Refresh order data
-        await fetchOrder();
-      } else {
-        toast.error(result.error || 'Failed to update order series');
-      }
-    } catch {
-      toast.error('Failed to update order series');
-    } finally {
-      setIsUpdatingOrderSeries(false);
     }
   };
 
@@ -554,62 +519,6 @@ const handleReleaseHold = async () => {
                       value={order.customerPoNumber || '-'}
                       icon={<FileText className="h-4 w-4" />}
                     />
-
-                    {/* Order Series - Inline Edit */}
-                    <div className="flex items-start gap-3">
-                      <Layers className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs text-muted-foreground mb-0.5">
-                          Order Series <span className="text-destructive">*</span>
-                        </p>
-                        {isEditingOrderSeries ? (
-                          <div className="flex items-center gap-2">
-                            <Select
-                              defaultValue={order.orderSeries || ''}
-                              onValueChange={handleUpdateOrderSeries}
-                              disabled={isUpdatingOrderSeries}
-                            >
-                              <SelectTrigger className="h-8 w-[140px]">
-                                <SelectValue placeholder="Select order series" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="">Select order series</SelectItem>
-                                {ORDER_SERIES.map((series) => (
-                                  <SelectItem key={series.id} value={series.code}>
-                                    {series.name}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-8 w-8 p-0"
-                              onClick={() => setIsEditingOrderSeries(false)}
-                              disabled={isUpdatingOrderSeries}
-                            >
-                              <XCircle className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium text-foreground">
-                              {order.orderSeries || '-'}
-                            </span>
-                            {canEditPermission && (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-6 w-6 p-0"
-                                onClick={() => setIsEditingOrderSeries(true)}
-                              >
-                                <Pencil className="h-3 w-3" />
-                              </Button>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
 
                     {order.pickTickets && order.pickTickets.length > 0 && (
                       <InfoItem

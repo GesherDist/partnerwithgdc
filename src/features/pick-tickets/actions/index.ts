@@ -689,7 +689,7 @@ export async function createPickTicketFromSalesOrder(
     // Check if sales order is confirmed or processing and has order_series
     const { data: soStatus } = await db
       .from('sales_orders')
-      .select('status, order_series')
+      .select('status')
       .eq('id', salesOrderId)
       .single();
 
@@ -701,14 +701,6 @@ export async function createPickTicketFromSalesOrder(
           error: 'Sales order must be confirmed or processing to create a pick ticket',
         };
       }
-    }
-
-    // Validate Order Series is selected (only if not skipping status check)
-    if (!skipStatusCheck && !soStatus?.order_series) {
-      return {
-        success: false,
-        error: 'Order Series is required. Please select an Order Series (GDC 1, GDC 2, or GDC 3) on the Sales Order before generating a Pick Ticket.',
-      };
     }
 
     // Determine warehouse ID early

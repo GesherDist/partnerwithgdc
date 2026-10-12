@@ -9,9 +9,9 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/shared/components/ui/dropdown-menu';
-import { MoreHorizontal, Eye, Pencil, Trash2, FileEdit, Send } from 'lucide-react';
+import { MoreHorizontal, Eye, Pencil, Trash2, FileEdit, Send, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { cn } from '@/shared/lib/utils';
-import type { POListItem } from '../types';
+import type { POListItem, POSortColumn, SortDirection } from '../types';
 import { LOAD_STATUS_COLORS, LOAD_STATUS_LABELS } from '@/features/shipments/types';
 
 interface ColumnsOptions {
@@ -20,15 +20,64 @@ interface ColumnsOptions {
   onEditStatus?: (po: POListItem) => void;
   onSendToSupplier?: (po: POListItem) => void;
   onDelete?: (po: POListItem) => void;
+  // Sorting options
+  sortColumn?: POSortColumn | null;
+  sortDirection?: SortDirection;
+  onSortChange?: (column: POSortColumn) => void;
+}
+
+// Sortable header component
+function SortableHeader({
+  label,
+  column,
+  currentColumn,
+  currentDirection,
+  onSort,
+}: {
+  label: string;
+  column: POSortColumn;
+  currentColumn: POSortColumn | null | undefined;
+  currentDirection: SortDirection | undefined;
+  onSort?: (column: POSortColumn) => void;
+}) {
+  if (!onSort) {
+    return <span>{label}</span>;
+  }
+
+  return (
+    <button
+      onClick={() => onSort(column)}
+      className="flex items-center gap-1 hover:text-primary font-medium"
+    >
+      {label}
+      {currentColumn === column ? (
+        currentDirection === 'asc' ? (
+          <ArrowUp className="h-3 w-3" />
+        ) : (
+          <ArrowDown className="h-3 w-3" />
+        )
+      ) : (
+        <ArrowUpDown className="h-3 w-3 opacity-40" />
+      )}
+    </button>
+  );
 }
 
 export function PurchaseOrdersTableColumns(options: ColumnsOptions = {}): ColumnDef<POListItem>[] {
-  const { onView, onEdit, onEditStatus, onSendToSupplier, onDelete } = options;
+  const { onView, onEdit, onEditStatus, onSendToSupplier, onDelete, sortColumn, sortDirection, onSortChange } = options;
 
   return [
     {
       accessorKey: 'poNumber',
-      header: 'PO Number',
+      header: () => (
+        <SortableHeader
+          label="PO Number"
+          column="poNumber"
+          currentColumn={sortColumn}
+          currentDirection={sortDirection}
+          onSort={onSortChange}
+        />
+      ),
       cell: ({ row }) => (
         <span className="font-mono text-sm font-medium">
           {row.original.poNumber}
@@ -46,7 +95,15 @@ export function PurchaseOrdersTableColumns(options: ColumnsOptions = {}): Column
     },
     {
       accessorKey: 'customerName',
-      header: 'Customer/Warehouse',
+      header: () => (
+        <SortableHeader
+          label="Customer/Warehouse"
+          column="customerName"
+          currentColumn={sortColumn}
+          currentDirection={sortDirection}
+          onSort={onSortChange}
+        />
+      ),
       cell: ({ row }) => {
         const displayValue = row.original.customerName || row.original.warehouseLocationName || '-';
         return (
@@ -78,7 +135,15 @@ export function PurchaseOrdersTableColumns(options: ColumnsOptions = {}): Column
     },
     {
       accessorKey: 'latestShipmentStatus',
-      header: 'Shipment Status',
+      header: () => (
+        <SortableHeader
+          label="Shipment Status"
+          column="latestShipmentStatus"
+          currentColumn={sortColumn}
+          currentDirection={sortDirection}
+          onSort={onSortChange}
+        />
+      ),
       cell: ({ row }) => {
         const loadStatus = row.original.latestShipmentStatus;
         const totalShipments = row.original.totalShipments || 0;
@@ -99,7 +164,15 @@ export function PurchaseOrdersTableColumns(options: ColumnsOptions = {}): Column
     },
     {
       accessorKey: 'orderSeries',
-      header: 'Order Series',
+      header: () => (
+        <SortableHeader
+          label="Order Series"
+          column="orderSeries"
+          currentColumn={sortColumn}
+          currentDirection={sortDirection}
+          onSort={onSortChange}
+        />
+      ),
       cell: ({ row }) => (
         <span className="text-sm">
           {row.original.orderSeries || '-'}
@@ -108,7 +181,15 @@ export function PurchaseOrdersTableColumns(options: ColumnsOptions = {}): Column
     },
     {
       accessorKey: 'poDate',
-      header: 'Date',
+      header: () => (
+        <SortableHeader
+          label="Date"
+          column="poDate"
+          currentColumn={sortColumn}
+          currentDirection={sortDirection}
+          onSort={onSortChange}
+        />
+      ),
       cell: ({ row }) => (
         <span className="text-sm">
           {new Date(row.original.poDate).toLocaleDateString()}
@@ -117,7 +198,15 @@ export function PurchaseOrdersTableColumns(options: ColumnsOptions = {}): Column
     },
     {
       accessorKey: 'expectedDeliveryDate',
-      header: 'Expected Delivery',
+      header: () => (
+        <SortableHeader
+          label="Expected Delivery"
+          column="expectedDeliveryDate"
+          currentColumn={sortColumn}
+          currentDirection={sortDirection}
+          onSort={onSortChange}
+        />
+      ),
       cell: ({ row }) => (
         <span className="text-sm">
           {row.original.expectedDeliveryDate
@@ -128,7 +217,15 @@ export function PurchaseOrdersTableColumns(options: ColumnsOptions = {}): Column
     },
     {
       accessorKey: 'grandTotal',
-      header: 'Total',
+      header: () => (
+        <SortableHeader
+          label="Total"
+          column="grandTotal"
+          currentColumn={sortColumn}
+          currentDirection={sortDirection}
+          onSort={onSortChange}
+        />
+      ),
       cell: ({ row }) => (
         <span className="font-medium">
           ${(row.original.grandTotal / 100).toLocaleString(undefined, {

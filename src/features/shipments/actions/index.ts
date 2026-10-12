@@ -183,3 +183,97 @@ export async function markShipmentFailed(id: string) {
 
   return result;
 }
+
+// ============================================
+// UPDATE LOAD STATUS (Operations Dashboard)
+// ============================================
+
+import type { LoadStatus } from '../types';
+import { db } from '@/shared/lib/supabase/database';
+
+/**
+ * Update shipment's load status (for Operations Dashboard)
+ * Available, Sold, Open, Hold, In Transit, Invoiced, etc.
+ */
+export async function updateShipmentLoadStatus(
+  id: string,
+  loadStatus: LoadStatus
+): Promise<ActionResult> {
+  const auth = await authorize('shipments.edit');
+  if (!auth.ok) return auth.result;
+
+  try {
+    const { error } = await db
+      .from('shipments')
+      .update({
+        load_status: loadStatus,
+        updated_at: new Date().toISOString(),
+        updated_by: auth.user.id,
+      })
+      .eq('id', id)
+      .is('deleted_at', null);
+
+    if (error) {
+      console.error('updateShipmentLoadStatus error:', error);
+      return { success: false, error: 'Failed to update shipment status' };
+    }
+
+    revalidatePath('/shipments');
+    revalidatePath(`/shipments/${id}`);
+    revalidatePath('/operations');
+
+    return { success: true };
+  } catch (error) {
+    console.error('updateShipmentLoadStatus error:', error);
+    return { success: false, error: 'Failed to update shipment status' };
+  }
+}
+
+/**
+ * Update shipment's tracking status (pending, in_transit, delivered, failed)
+ */
+export async function updateShipmentTrackingStatus(
+  id: string,
+  status: 'pending' | 'in_transit' | 'delivered' | 'failed'
+): Promise<ActionResult> {
+  const auth = await authorize('shipments.update_status');
+  if (!auth.ok) return auth.result;
+
+  try {
+    const updateData: Record<string, unknown> = {
+      status,
+      updated_at: new Date().toISOString(),
+      updated_by: auth.user.id,
+    };
+
+    // If marking as delivered, also set actual_arrival
+    if (status === 'delivered') {
+      updateData.actual_arrival = new Date().toISOString().split('T')[0];
+    }
+
+    // If marking as in_transit, also update load_status
+    if (status === 'in_transit') {
+      updateData.load_status = 'in_transit';
+    }
+
+    const { error } = await db
+      .from('shipments')
+      .update(updateData)
+      .eq('id', id)
+      .is('deleted_at', null);
+
+    if (error) {
+      console.error('updateShipmentTrackingStatus error:', error);
+      return { success: false, error: 'Failed to update shipment status' };
+    }
+
+    revalidatePath('/shipments');
+    revalidatePath(`/shipments/${id}`);
+    revalidatePath('/operations');
+
+    return { success: true };
+  } catch (error) {
+    console.error('updateShipmentTrackingStatus error:', error);
+    return { success: false, error: 'Failed to update shipment status' };
+  }
+}

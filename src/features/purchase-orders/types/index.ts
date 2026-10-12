@@ -419,6 +419,10 @@ export interface POTotals {
 // COMPONENT PROP TYPES
 // ============================================
 
+// Sorting types for PO table
+export type POSortColumn = 'poNumber' | 'customerName' | 'poDate' | 'expectedDeliveryDate' | 'grandTotal' | 'orderSeries' | 'latestShipmentStatus';
+export type SortDirection = 'asc' | 'desc';
+
 export interface PurchaseOrdersTableProps {
   data: POListItem[];
   isLoading?: boolean;
@@ -437,6 +441,12 @@ export interface PurchaseOrdersTableProps {
     totalPages: number;
     onPageChange: (page: number) => void;
     onPageSizeChange: (pageSize: number) => void;
+  };
+  // Sorting
+  sorting?: {
+    column: POSortColumn | null;
+    direction: SortDirection;
+    onSortChange: (column: POSortColumn) => void;
   };
 }
 

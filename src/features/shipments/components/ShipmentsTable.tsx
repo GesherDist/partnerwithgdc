@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useMemo } from 'react';
 import {
   useReactTable,
   getCoreRowModel,
@@ -25,7 +26,7 @@ import {
 } from '@/shared/components/ui/select';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { ShipmentsTableColumns } from './ShipmentsTableColumns';
-import type { ShipmentsTableProps } from '../types';
+import type { ShipmentsTableProps, ShipmentSortColumn, ShipmentSortDirection } from '../types';
 
 export function ShipmentsTable({
   data,
@@ -34,13 +35,93 @@ export function ShipmentsTable({
   onView,
   onEdit,
   onDelete,
+  onEditStatus,
   toolbarContent,
   pagination,
+  sorting: externalSorting,
 }: ShipmentsTableProps) {
-  const columns = ShipmentsTableColumns({ onView, onEdit, onDelete });
+  // Internal sorting state (used when no external sorting provided)
+  const [internalSortColumn, setInternalSortColumn] = useState<ShipmentSortColumn | null>(null);
+  const [internalSortDirection, setInternalSortDirection] = useState<ShipmentSortDirection>('asc');
+
+  // Use external sorting if provided, otherwise use internal
+  const sortColumn = externalSorting?.column ?? internalSortColumn;
+  const sortDirection = externalSorting?.direction ?? internalSortDirection;
+
+  // Handle sort change
+  const handleSortChange = (column: ShipmentSortColumn) => {
+    if (externalSorting?.onSortChange) {
+      // Use external handler (server-side sorting)
+      externalSorting.onSortChange(column);
+    } else {
+      // Use internal state (client-side sorting)
+      if (internalSortColumn === column) {
+        setInternalSortDirection(internalSortDirection === 'asc' ? 'desc' : 'asc');
+      } else {
+        setInternalSortColumn(column);
+        setInternalSortDirection('asc');
+      }
+    }
+  };
+
+  // Sort data client-side if no external sorting
+  const sortedData = useMemo(() => {
+    if (externalSorting || !internalSortColumn) {
+      return data;
+    }
+
+    return [...data].sort((a, b) => {
+      let aVal: string | number | null = null;
+      let bVal: string | number | null = null;
+
+      switch (internalSortColumn) {
+        case 'shipmentNumber':
+          aVal = a.shipmentNumber;
+          bVal = b.shipmentNumber;
+          break;
+        case 'shipmentDate':
+          aVal = a.shipmentDate ? new Date(a.shipmentDate).getTime() : 0;
+          bVal = b.shipmentDate ? new Date(b.shipmentDate).getTime() : 0;
+          break;
+        case 'carrier':
+          aVal = a.carrier || '';
+          bVal = b.carrier || '';
+          break;
+        case 'loadStatus':
+          aVal = a.loadStatus || '';
+          bVal = b.loadStatus || '';
+          break;
+        case 'estimatedArrival':
+          aVal = a.estimatedArrival ? new Date(a.estimatedArrival).getTime() : 0;
+          bVal = b.estimatedArrival ? new Date(b.estimatedArrival).getTime() : 0;
+          break;
+        case 'totalQty':
+          aVal = a.totalQty || 0;
+          bVal = b.totalQty || 0;
+          break;
+        default:
+          return 0;
+      }
+
+      if (aVal === null || bVal === null) return 0;
+      if (aVal < bVal) return internalSortDirection === 'asc' ? -1 : 1;
+      if (aVal > bVal) return internalSortDirection === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [data, internalSortColumn, internalSortDirection, externalSorting]);
+
+  const columns = ShipmentsTableColumns({
+    onView,
+    onEdit,
+    onDelete,
+    onEditStatus,
+    sortColumn,
+    sortDirection,
+    onSortChange: handleSortChange,
+  });
 
   const table = useReactTable({
-    data,
+    data: sortedData,
     columns,
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),

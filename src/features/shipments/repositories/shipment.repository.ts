@@ -200,6 +200,9 @@ class ShipmentRepositoryImpl {
       shipmentNumber: 'shipment_number',
       shipmentDate: 'shipment_date',
       estimatedArrival: 'estimated_arrival',
+      carrier: 'carrier',
+      loadStatus: 'load_status',
+      totalQty: 'total_qty',
       createdAt: 'created_at',
       updatedAt: 'updated_at',
     };

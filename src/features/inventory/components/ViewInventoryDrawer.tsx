@@ -13,6 +13,7 @@ import { Skeleton } from '@/shared/components/ui/skeleton';
 import { Pencil, ArrowUpDown, Package, MapPin, AlertTriangle } from 'lucide-react';
 import { cn } from '@/shared/lib/utils';
 import { useInventoryItem } from '../hooks/useInventoryItem';
+import { InventoryAllocationsList } from './InventoryAllocationsList';
 import type { ViewInventoryDrawerProps } from '../types';
 
 export function ViewInventoryDrawer({
@@ -118,6 +119,19 @@ export function ViewInventoryDrawer({
                 </div>
               </div>
             </div>
+
+            {/* Allocation Details Section */}
+            {inventory.allocated > 0 && (
+              <>
+                <Separator />
+                <InventoryAllocationsList
+                  productId={inventory.productId}
+                  locationId={inventory.locationId}
+                  sourceType="warehouse"
+                  totalAllocated={inventory.allocated}
+                />
+              </>
+            )}
 
             <Separator />
 
