@@ -83,6 +83,24 @@ export async function getInvoice(id: string) {
 }
 
 // ============================================
+// GET INVOICE BY SALES ORDER
+// ============================================
+
+export async function getInvoiceBySalesOrder(salesOrderId: string) {
+  const result = await invoiceService.list({ salesOrderId, limit: 1 });
+  if (result.success && result.data && result.data.data.length > 0) {
+    return {
+      success: true,
+      data: result.data.data[0],
+    };
+  }
+  return {
+    success: false,
+    data: null,
+  };
+}
+
+// ============================================
 // CREATE INVOICE
 // ============================================
 

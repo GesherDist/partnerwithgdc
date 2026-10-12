@@ -219,8 +219,8 @@ export function getQuotesTableColumns(
       id: 'actions',
       cell: ({ row }) => {
         const quote = row.original;
-        // ONLY Super Admin can convert (from any status)
-        const canConvert = options.isSuperAdmin === true;
+        // ONLY Super Admin can convert (from any status except already converted)
+        const canConvert = options.isSuperAdmin === true && quote.status !== 'converted';
         const canEdit = quote.status === 'draft';
         const canDelete = quote.status === 'draft';
         const canSubmitForApproval = quote.status === 'draft';

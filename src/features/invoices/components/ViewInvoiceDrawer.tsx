@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { toast } from 'sonner';
+// import { toast } from 'sonner'; // QuickBooks integration - commented out
 import {
   Sheet,
   SheetContent,
@@ -12,13 +12,21 @@ import { Badge } from '@/shared/components/ui/badge';
 import { Button } from '@/shared/components/ui/button';
 import { Separator } from '@/shared/components/ui/separator';
 import { Skeleton } from '@/shared/components/ui/skeleton';
-import { Pencil, CreditCard, Building2, MapPin, Package, Calendar, FileText, User, Truck, Loader2, ExternalLink, CheckCircle2, FileDown } from 'lucide-react';
+import { Pencil, CreditCard, Building2, MapPin, Package, Calendar, FileText, User, Truck, FileDown } from 'lucide-react';
 import { PdfViewerModal } from '@/shared/components/pdf-viewer/PdfViewerModal';
 import { cn } from '@/shared/lib/utils';
 import { useInvoice } from '../hooks/useInvoice';
-import { pushInvoiceToQuickBooks } from '../actions';
+// import { pushInvoiceToQuickBooks } from '../actions'; // QuickBooks integration - commented out
 import { INVOICE_STATUS_COLORS, INVOICE_STATUS_LABELS, INVOICE_TYPE_LABELS } from '../types';
 import type { ViewInvoiceDrawerProps } from '../types';
+
+// Helper to format currency with commas
+const formatCurrency = (cents: number) => {
+  return (cents / 100).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+};
 
 export function ViewInvoiceDrawer({
   open,
@@ -27,8 +35,7 @@ export function ViewInvoiceDrawer({
   onEdit,
   onRecordPayment,
 }: ViewInvoiceDrawerProps) {
-  const { data: invoice, isLoading, refetch } = useInvoice(open ? invoiceId : null);
-  const [isPushingToQbo, setIsPushingToQbo] = useState(false);
+  const { data: invoice, isLoading } = useInvoice(open ? invoiceId : null);
   const [showPdfModal, setShowPdfModal] = useState(false);
 
   const handleViewPdf = () => {
@@ -36,24 +43,25 @@ export function ViewInvoiceDrawer({
     setShowPdfModal(true);
   };
 
-  const handlePushToQuickBooks = async () => {
-    if (!invoiceId) return;
-
-    setIsPushingToQbo(true);
-    try {
-      const result = await pushInvoiceToQuickBooks(invoiceId);
-      if (result.success) {
-        toast.success('Invoice pushed to QuickBooks successfully');
-        refetch(); // Refresh to show updated QBO status
-      } else {
-        toast.error(result.error || 'Failed to push invoice to QuickBooks');
-      }
-    } catch (error) {
-      toast.error('Failed to push invoice to QuickBooks');
-    } finally {
-      setIsPushingToQbo(false);
-    }
-  };
+  // QuickBooks integration - commented out for now
+  // const [isPushingToQbo, setIsPushingToQbo] = useState(false);
+  // const handlePushToQuickBooks = async () => {
+  //   if (!invoiceId) return;
+  //   setIsPushingToQbo(true);
+  //   try {
+  //     const result = await pushInvoiceToQuickBooks(invoiceId);
+  //     if (result.success) {
+  //       toast.success('Invoice pushed to QuickBooks successfully');
+  //       refetch();
+  //     } else {
+  //       toast.error(result.error || 'Failed to push invoice to QuickBooks');
+  //     }
+  //   } catch (error) {
+  //     toast.error('Failed to push invoice to QuickBooks');
+  //   } finally {
+  //     setIsPushingToQbo(false);
+  //   }
+  // };
 
   return (
     <Sheet open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
@@ -308,11 +316,11 @@ export function ViewInvoiceDrawer({
                           )}
                         </div>
                         <p className="text-sm font-medium">
-                          ${(item.lineTotal / 100).toFixed(2)}
+                          ${formatCurrency(item.lineTotal)}
                         </p>
                       </div>
                       <div className="mt-1 text-xs text-muted-foreground">
-                        {item.quantity} x ${(item.unitPrice / 100).toFixed(2)}
+                        {item.quantity} x ${formatCurrency(item.unitPrice)}
                         {item.discountPercent > 0 && (
                           <span className="text-amber-600 ml-1">
                             (-{item.discountPercent}%)
@@ -331,33 +339,33 @@ export function ViewInvoiceDrawer({
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Subtotal</span>
-                <span>${(invoice.subtotal / 100).toFixed(2)}</span>
+                <span>${formatCurrency(invoice.subtotal)}</span>
               </div>
               {invoice.discountTotal > 0 && (
                 <div className="flex justify-between text-amber-600">
                   <span>Discount</span>
-                  <span>-${(invoice.discountTotal / 100).toFixed(2)}</span>
+                  <span>-${formatCurrency(invoice.discountTotal)}</span>
                 </div>
               )}
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Tax</span>
-                <span>${(invoice.taxTotal / 100).toFixed(2)}</span>
+                <span>${formatCurrency(invoice.taxTotal)}</span>
               </div>
               <Separator />
               <div className="flex justify-between font-semibold text-base">
                 <span>Grand Total</span>
-                <span>${(invoice.grandTotal / 100).toFixed(2)}</span>
+                <span>${formatCurrency(invoice.grandTotal)}</span>
               </div>
               <div className="flex justify-between text-emerald-600">
                 <span>Amount Paid</span>
-                <span>${(invoice.amountPaid / 100).toFixed(2)}</span>
+                <span>${formatCurrency(invoice.amountPaid)}</span>
               </div>
               <div className={cn(
                 'flex justify-between font-semibold',
                 invoice.balanceDue > 0 ? 'text-amber-600' : 'text-emerald-600'
               )}>
                 <span>Balance Due</span>
-                <span>${(invoice.balanceDue / 100).toFixed(2)}</span>
+                <span>${formatCurrency(invoice.balanceDue)}</span>
               </div>
             </div>
 
@@ -377,7 +385,7 @@ export function ViewInvoiceDrawer({
                       >
                         <div>
                           <p className="font-medium">
-                            ${(payment.amount / 100).toFixed(2)}
+                            ${formatCurrency(payment.amount)}
                           </p>
                           <p className="text-xs text-muted-foreground">
                             {new Date(payment.paymentDate).toLocaleDateString()}
@@ -421,8 +429,8 @@ export function ViewInvoiceDrawer({
               </>
             )}
 
-            {/* QuickBooks Status */}
-            {invoice.quickbooksInvoiceId && (
+            {/* QuickBooks Status - Hidden for now */}
+            {/* {invoice.quickbooksInvoiceId && (
               <>
                 <Separator />
                 <a
@@ -444,7 +452,7 @@ export function ViewInvoiceDrawer({
                   <ExternalLink className="h-4 w-4 text-emerald-600" />
                 </a>
               </>
-            )}
+            )} */}
 
             {/* Actions */}
             <Separator />
@@ -471,8 +479,8 @@ export function ViewInvoiceDrawer({
                   View PDF
                 </Button>
 
-                {/* QuickBooks Push Button */}
-                {!invoice.quickbooksInvoiceId && invoice.status !== 'cancelled' ? (
+                {/* QuickBooks Push Button - Hidden for now */}
+                {/* {!invoice.quickbooksInvoiceId && invoice.status !== 'cancelled' ? (
                   <Button
                     onClick={handlePushToQuickBooks}
                     variant="outline"
@@ -490,7 +498,8 @@ export function ViewInvoiceDrawer({
                   </Button>
                 ) : (
                   <div />
-                )}
+                )} */}
+                <div />
               </div>
 
               {/* Row 2: Record Payment (full width) */}

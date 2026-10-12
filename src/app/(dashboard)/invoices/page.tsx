@@ -7,6 +7,7 @@
  */
 
 import { useState, useCallback, useEffect } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { Plus, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -42,6 +43,10 @@ import type { InvoiceListItem, InvoiceStatus, InvoiceWithItems } from '@/feature
 import { INVOICE_STATUS_LABELS } from '@/features/invoices/types';
 
 export default function InvoicesPage() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const viewIdParam = searchParams.get('viewId');
+
   // ----------------------------------------
   // STATE
   // ----------------------------------------
@@ -68,6 +73,16 @@ export default function InvoicesPage() {
   useEffect(() => {
     setPage(1);
   }, [statusFilter]);
+
+  // Auto-open drawer if viewId query param is present
+  useEffect(() => {
+    if (viewIdParam) {
+      setSelectedInvoiceId(viewIdParam);
+      setIsViewDrawerOpen(true);
+      // Clear the query param from URL
+      router.replace('/invoices', { scroll: false });
+    }
+  }, [viewIdParam, router]);
 
   // ----------------------------------------
   // DATA HOOKS
