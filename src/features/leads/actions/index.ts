@@ -151,6 +151,27 @@ export async function getLeadByPipedriveId(
 // ============================================
 
 /**
+ * Convert Pipedrive lead label IDs to label names (leads store names locally).
+ * Returns null when the labels could not be loaded from Pipedrive.
+ */
+async function labelIdsToNames(labelIds: string[]): Promise<string[] | null> {
+  try {
+    // getLeadLabels returns [] on failure
+    const availableLabels = await pipedriveSyncService.getLeadLabels();
+    if (availableLabels.length === 0) {
+      console.warn('[leads] Lead labels unavailable');
+      return null;
+    }
+    return labelIds
+      .map((id) => availableLabels.find((l) => l.id === id)?.name)
+      .filter((name): name is string => !!name);
+  } catch (error) {
+    console.warn('[leads] Could not fetch labels:', error);
+    return null;
+  }
+}
+
+/**
  * Create a new lead
  */
 export async function createLead(
@@ -164,8 +185,12 @@ export async function createLead(
   try {
     const appUser = auth.user;
 
+    // The dialog sends Pipedrive label IDs; store label names locally (same as updateLead)
+    const labelIds = data.pipedriveLabels ?? [];
+    const labelNames = labelIds.length > 0 ? await labelIdsToNames(labelIds) : [];
+
     // Create lead locally first
-    let lead = await leadsRepository.create(data, appUser.id);
+    let lead = await leadsRepository.create({ ...data, pipedriveLabels: labelNames ?? [] }, appUser.id);
 
     // Try to push to Pipedrive if connected
     try {
@@ -188,7 +213,7 @@ export async function createLead(
           currency: data.dealCurrency || 'USD',
           expectedCloseDate: data.expectedCloseDate,
           notes: data.notes,
-          labelIds: data.pipedriveLabels || undefined,
+          labelIds: labelIds.length > 0 ? labelIds : undefined,
         });
 
         if (pushResult.success && pushResult.pipedriveLeadId) {
@@ -246,20 +271,8 @@ export async function updateLead(
     // If labelIds are provided, convert them to label names for local storage
     let labelNames: string[] | undefined;
     if (labelIds && labelIds.length > 0) {
-      try {
-        const availableLabels = await pipedriveSyncService.getLeadLabels();
-        // An empty list means labels could not be loaded (getLeadLabels returns
-        // [] on failure); leave stored labels unchanged rather than clear them.
-        if (availableLabels.length > 0) {
-          labelNames = labelIds
-            .map((id) => availableLabels.find((l) => l.id === id)?.name)
-            .filter((name): name is string => !!name);
-        } else {
-          console.warn('[updateLead] Lead labels unavailable; keeping existing labels');
-        }
-      } catch (labelError) {
-        console.warn('[updateLead] Could not fetch labels:', labelError);
-      }
+      // null means labels could not be loaded; leave stored labels unchanged rather than clear them.
+      labelNames = (await labelIdsToNames(labelIds)) ?? undefined;
     } else if (labelIds && labelIds.length === 0) {
       // User explicitly cleared all labels
       labelNames = [];

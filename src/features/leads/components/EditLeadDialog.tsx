@@ -139,7 +139,8 @@ export function EditLeadDialog({ open, onClose, lead, onSuccess }: EditLeadDialo
             // Match current lead labels with available labels
             if (lead?.pipedriveLabels && result.data.labels.length > 0) {
               const matchedIds = result.data.labels
-                .filter((l) => lead.pipedriveLabels?.includes(l.name))
+                // Older leads created in Gesher stored label IDs instead of names
+                .filter((l) => lead.pipedriveLabels?.includes(l.name) || lead.pipedriveLabels?.includes(l.id))
                 .map((l) => l.id);
               setFormState((prev) => ({
                 ...prev,
