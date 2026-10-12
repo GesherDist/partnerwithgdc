@@ -76,7 +76,9 @@ class LocationRepositoryImpl {
     let query = db
       .from('locations')
       .select('*', { count: 'exact' })
-      .is('deleted_at', null);
+      .is('deleted_at', null)
+      // Exclude GDC-INV (virtual location for GDC Inventory tracking - internal use only)
+      .neq('location_code', 'GDC-INV');
 
     // Apply search filter
     if (search) {

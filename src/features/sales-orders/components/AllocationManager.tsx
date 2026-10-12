@@ -293,7 +293,7 @@ export function AllocationManager({
                     <TableHead>Source</TableHead>
                     <TableHead>Quantity</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead>Location/Dealer</TableHead>
+                    <TableHead>PO/Location/Dealer</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -312,10 +312,13 @@ export function AllocationManager({
                         </Badge>
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
-                        {allocation.location?.name ||
-                          allocation.platinumDealer?.dealerName ||
-                          allocation.dealerLocation?.locationName ||
-                          '-'}
+                        {/* Show PO number for Manufacturer (Direct) */}
+                        {allocation.fulfillmentSource === 'direct' && allocation.purchaseOrder?.poNumber
+                          ? allocation.purchaseOrder.poNumber
+                          : allocation.location?.name ||
+                            allocation.platinumDealer?.dealerName ||
+                            allocation.dealerLocation?.locationName ||
+                            '-'}
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-2">

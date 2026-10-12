@@ -1803,9 +1803,36 @@ export async function getGDCInventoryByOrderSeries(
   }
 
   // ============================================
+  // FILTER: Only include SOs that have fulfillment allocations
+  // Business Logic: SO should only appear in Operations Dashboard
+  // AFTER fulfillment allocation is completed
+  // ============================================
+  const soIdsWithAllocations = new Set<string>();
+
+  soItems?.forEach((item) => {
+    const allocations = (item as any)?.fulfillment_allocations;
+    // Check if this SO item has at least one allocation
+    if (allocations && Array.isArray(allocations) && allocations.length > 0) {
+      soIdsWithAllocations.add(item.sales_order_id);
+    }
+  });
+
+  // Filter salesOrdersWithoutPOs to only include those with allocations
+  const originalCount = salesOrdersWithoutPOs?.length || 0;
+  const filteredSalesOrdersWithoutPOs = salesOrdersWithoutPOs?.filter(so =>
+    soIdsWithAllocations.has(so.id)
+  ) || [];
+
+  console.log(`[GDC] Filtered SOs: ${originalCount} total → ${filteredSalesOrdersWithoutPOs.length} with allocations (${originalCount - filteredSalesOrdersWithoutPOs.length} excluded)`);
+
+  // Replace the original array with filtered array for subsequent processing
+  // Use type assertion to maintain the same type
+  const salesOrdersWithAllocations = filteredSalesOrdersWithoutPOs;
+
+  // ============================================
   // QUERY 3: Get Shipments for these POs and SOs (for ETA dates and status)
   // ============================================
-  const soIdsForShipments = salesOrdersWithoutPOs?.map(so => so.id) || [];
+  const soIdsForShipments = salesOrdersWithAllocations?.map(so => so.id) || [];
 
   // Fetch shipments for both POs and SOs
   const shipmentsForPOs = poIds.length > 0 ? await supabase
@@ -1861,6 +1888,85 @@ export async function getGDCInventoryByOrderSeries(
     }
   });
 
+  // Log PO shipment filter stats
+  const posWithShipments = purchaseOrders.filter(po => shipmentByPO.has(po.id)).length;
+  const posWithoutShipments = purchaseOrders.length - posWithShipments;
+  console.log(`[GDC] PO Shipment Filter: ${purchaseOrders.length} total → ${posWithShipments} with shipments (${posWithoutShipments} excluded)`);
+
+  // ============================================
+  // QUERY 4: Get Fulfillment Allocations directly for POs
+  // (Fallback: when PO items don't have sales_order_item_id linked)
+  // ============================================
+  const allocationsForPOs = poIds.length > 0 ? await supabase
+    .from('fulfillment_allocations')
+    .select(`
+      id,
+      purchase_order_id,
+      sales_order_item_id,
+      fulfillment_source,
+      quantity,
+      status,
+      location:locations(name),
+      platinum_dealer:platinum_dealers(dealer_name, code),
+      dealer_location:platinum_dealer_locations(location_name)
+    `)
+    .in('purchase_order_id', poIds) : { data: [] };
+
+  // Get unique sales_order_item_ids from allocations to fetch sibling allocations
+  const soItemIdsFromAllocations = new Set<string>();
+  allocationsForPOs.data?.forEach(alloc => {
+    if (alloc.sales_order_item_id) {
+      soItemIdsFromAllocations.add(alloc.sales_order_item_id);
+    }
+  });
+
+  // Fetch ALL sibling allocations for those SO items (to show multiple fulfillment sources)
+  let allSiblingAllocations: any[] = [];
+  if (soItemIdsFromAllocations.size > 0) {
+    const { data: siblings } = await supabase
+      .from('fulfillment_allocations')
+      .select(`
+        id,
+        purchase_order_id,
+        sales_order_item_id,
+        fulfillment_source,
+        quantity,
+        status,
+        location:locations(name),
+        platinum_dealer:platinum_dealers(dealer_name, code),
+        dealer_location:platinum_dealer_locations(location_name)
+      `)
+      .in('sales_order_item_id', Array.from(soItemIdsFromAllocations));
+    allSiblingAllocations = siblings || [];
+  }
+
+  // Map: PO ID -> All allocations (including sibling allocations for same SO item)
+  const allocationsByPO = new Map<string, any[]>();
+
+  // First, add direct allocations
+  allocationsForPOs.data?.forEach(alloc => {
+    if (!allocationsByPO.has(alloc.purchase_order_id)) {
+      allocationsByPO.set(alloc.purchase_order_id, []);
+    }
+    allocationsByPO.get(alloc.purchase_order_id)!.push(alloc);
+  });
+
+  // Then, add sibling allocations that aren't already in the list
+  allSiblingAllocations.forEach(sibling => {
+    // Find which PO this sibling belongs to (via same sales_order_item_id)
+    allocationsForPOs.data?.forEach(directAlloc => {
+      if (directAlloc.sales_order_item_id === sibling.sales_order_item_id) {
+        const poId = directAlloc.purchase_order_id;
+        const existingIds = allocationsByPO.get(poId)?.map(a => a.id) || [];
+        if (!existingIds.includes(sibling.id)) {
+          allocationsByPO.get(poId)?.push(sibling);
+        }
+      }
+    });
+  });
+
+  console.log(`[GDC] Found ${allocationsForPOs.data?.length || 0} direct allocations, ${allSiblingAllocations.length} sibling allocations`);
+
   // Group items by purchase order and build SKU info map
   const itemsByPO = new Map<string, { sku: string; productName: string; qty: number; unitPrice: number }[]>();
   const supplierNameByPO = new Map<string, string>(); // purchase_order_id -> supplier_name
@@ -1904,6 +2010,16 @@ export async function getGDCInventoryByOrderSeries(
 
     // Get shipment data for this PO (early fetch for filtering)
     const shipment = shipmentByPO.get(po.id);
+
+    // ============================================
+    // FILTER: Only include POs that have shipments
+    // Business Logic: PO should only appear in Operations Dashboard
+    // AFTER shipment is created (tracking starts)
+    // ============================================
+    if (!shipment) {
+      console.log(`[GDC] Skipping PO ${po.po_number} - No shipment exists`);
+      return; // Skip PO without shipment
+    }
 
     // Skip delivered shipments based on filter:
     // - If status filter = "DELIVERED" → show only delivered
@@ -1965,26 +2081,20 @@ export async function getGDCInventoryByOrderSeries(
 
     console.log(`[GDC] Row ${index + 1} - PO: ${po.po_number} (${po.id}), SO: ${linkedSO?.order_number || 'None'}, Customer: ${customerName}, Status: ${po.status}, OrderSeries: ${po.order_series}`);
 
-    // 🆕 Extract fulfillment allocation data from first PO item
-    const firstPoItem = poItems?.find(item => item.purchase_order_id === po.id);
-    const soItemData = firstPoItem?.sales_order_items ? toOne(firstPoItem.sales_order_items) : null;
-    const allocationsRaw = (soItemData as any)?.fulfillment_allocations as Array<{
-      fulfillment_source: string;
-      quantity: number;
-      status: string;
-      location?: { name: string } | { name: string }[];
-      platinum_dealer?: { dealer_name: string; code: string } | { dealer_name: string; code: string }[];
-      dealer_location?: { location_name: string } | { location_name: string }[];
-    }> | undefined;
+    // 🆕 Get fulfillment allocations from the direct query (allocationsByPO map)
+    // This works even when PO items don't have sales_order_item_id linked
+    const allocationsForThisPO = allocationsByPO.get(po.id) || [];
+
+    const allocationsRaw = allocationsForThisPO.length > 0 ? allocationsForThisPO : undefined;
     const primaryAllocation = allocationsRaw?.[0]; // Get first allocation as primary
+
+    // Log allocation count for debugging
+    if (allocationsRaw && allocationsRaw.length > 1) {
+      console.log(`[GDC] PO ${po.po_number} has ${allocationsRaw.length} fulfillment allocations (direct query)`);
+    }
 
     // Get supplier name for this PO
     const poSupplierName = supplierNameByPO.get(po.id) || null;
-
-    // DEBUG: Log allocations raw data for SO2600023
-    if (linkedSO?.order_number === 'SO2600023') {
-      console.log('[DEBUG] SO2600023 Allocations Raw:', JSON.stringify(allocationsRaw, null, 2));
-    }
 
     // Map allocations to FulfillmentAllocationDetail array
     const allocationDetails: import('../types').FulfillmentAllocationDetail[] | undefined = allocationsRaw?.map(alloc => {
@@ -2100,7 +2210,7 @@ export async function getGDCInventoryByOrderSeries(
 
   const soStartIndex = result.length;
 
-  salesOrdersWithoutPOs?.forEach((so, index) => {
+  salesOrdersWithAllocations?.forEach((so, index) => {
     const customerData = so.customers ? toOne(so.customers) : null;
 
     // Get shipment data for this SO (for filtering and status)
@@ -2146,16 +2256,36 @@ export async function getGDCInventoryByOrderSeries(
 
     console.log(`[GDC] Row ${soStartIndex + index + 1} - SO: ${so.order_number} (${so.id}), No PO, Customer: ${customerName}`);
 
-    // Extract fulfillment allocations from first SO item
-    const firstSoItem = soItems?.find(item => item.sales_order_id === so.id);
-    const allocationsRaw = (firstSoItem as any)?.fulfillment_allocations as Array<{
+    // Extract fulfillment allocations from ALL SO items (not just first)
+    // This ensures we show ALL allocations when SO has multiple items
+    const soItemsForThisSO = soItems?.filter(item => item.sales_order_id === so.id) || [];
+
+    // Collect ALL allocations from ALL SO items
+    const allAllocationsRaw: Array<{
       fulfillment_source: string;
       quantity: number;
       status: string;
       location?: { name: string } | { name: string }[];
       platinum_dealer?: { dealer_name: string; code: string } | { dealer_name: string; code: string }[];
       dealer_location?: { location_name: string } | { location_name: string }[];
-    }> | undefined;
+    }> = [];
+
+    soItemsForThisSO.forEach(soItem => {
+      const itemAllocations = (soItem as any)?.fulfillment_allocations as Array<{
+        fulfillment_source: string;
+        quantity: number;
+        status: string;
+        location?: { name: string } | { name: string }[];
+        platinum_dealer?: { dealer_name: string; code: string } | { dealer_name: string; code: string }[];
+        dealer_location?: { location_name: string } | { location_name: string }[];
+      }> | undefined;
+
+      if (itemAllocations && Array.isArray(itemAllocations)) {
+        allAllocationsRaw.push(...itemAllocations);
+      }
+    });
+
+    const allocationsRaw = allAllocationsRaw.length > 0 ? allAllocationsRaw : undefined;
     const primaryAllocation = allocationsRaw?.[0];
 
     // Map allocations to FulfillmentAllocationDetail array
@@ -2231,7 +2361,7 @@ export async function getGDCInventoryByOrderSeries(
   });
   uniqueSkus.sort((a, b) => a.sku.localeCompare(b.sku));
 
-  console.log(`[GDC] ========== Finished fetching ${orderSeries} (${purchaseOrders?.length || 0} POs + ${salesOrdersWithoutPOs?.length || 0} SOs = ${result.length} rows, ${uniqueSkus.length} SKUs) ==========`);
+  console.log(`[GDC] ========== Finished fetching ${orderSeries} (${result.length} rows displayed from ${purchaseOrders?.length || 0} POs + ${salesOrdersWithAllocations?.length || 0} SOs, ${uniqueSkus.length} SKUs) ==========`);
 
   return { orderSeries, items: result, uniqueSkus };
 }

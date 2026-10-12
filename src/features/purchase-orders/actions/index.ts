@@ -619,14 +619,38 @@ export async function getUnallocatedPurchaseOrders(): Promise<ActionResult<any[]
       // Continue execution - logging should not break the function
     }
 
-    const { data, error } = await supabase
+    // First, get PO IDs that are already used in fulfillment_allocations
+    const { data: allocatedPOs, error: allocError } = await supabase
+      .from('fulfillment_allocations')
+      .select('purchase_order_id')
+      .not('purchase_order_id', 'is', null);
+
+    if (allocError) {
+      console.warn('[getUnallocatedPurchaseOrders] Error fetching allocated POs:', allocError);
+    }
+
+    // Get the list of allocated PO IDs
+    const allocatedPOIds = (allocatedPOs || [])
+      .map(a => a.purchase_order_id)
+      .filter((id): id is string => id !== null);
+
+    console.log(`📊 [getUnallocatedPurchaseOrders] Already allocated PO IDs: ${allocatedPOIds.length}`);
+
+    // Build query for unallocated POs
+    let query = supabase
       .from('purchase_orders')
-      .select('id, po_number, po_date, expected_delivery_date, status, grand_total, order_series')
+      .select('id, po_number, po_date, expected_delivery_date, status, grand_total, order_series, warehouse_id, warehouse:locations!warehouse_id(name)')
       .is('sales_order_id', null)  // KEY FILTER: Only unallocated POs
-      .is('deleted_at', null)       // Not deleted
-      // Note: No status filter - any status is allowed (draft, sent, confirmed, etc.)
-      .order('created_at', { ascending: false })  // Use created_at instead of po_date
-      .limit(100);  // Reasonable limit
+      .is('deleted_at', null);      // Not deleted
+
+    // Exclude POs that are already in fulfillment_allocations
+    if (allocatedPOIds.length > 0) {
+      query = query.not('id', 'in', `(${allocatedPOIds.join(',')})`);
+    }
+
+    const { data, error } = await query
+      .order('created_at', { ascending: false })
+      .limit(100);
 
     if (error) {
       console.error('[getUnallocatedPurchaseOrders] Database Error:', error);
@@ -636,14 +660,20 @@ export async function getUnallocatedPurchaseOrders(): Promise<ActionResult<any[]
       };
     }
 
-    console.log(`✅ [getUnallocatedPurchaseOrders] Found ${data?.length || 0} unallocated POs (any status)`);
-    if (data && data.length > 0) {
-      console.log('  POs:', data.map(po => `${po.po_number} (${po.status})`).join(', '));
+    // Map location name
+    const result = (data || []).map(po => ({
+      ...po,
+      location_name: (po as any).warehouse?.name || null,
+    }));
+
+    console.log(`✅ [getUnallocatedPurchaseOrders] Found ${result.length} truly unallocated POs`);
+    if (result.length > 0) {
+      console.log('  POs:', result.map(po => `${po.po_number} (${po.status})`).join(', '));
     }
 
     return {
       success: true,
-      data: data || [],
+      data: result,
     };
   } catch (err) {
     console.error('[getUnallocatedPurchaseOrders] Error:', err);

@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState, useTransition } from 'react';
-import { Loader2, MapPin, Package, FileText, Calendar, User, Building2, Truck, AlertTriangle, ShieldCheck, CheckCircle, XCircle, ClipboardList, Receipt, Pencil, Layers } from 'lucide-react';
+import { Loader2, MapPin, Package, FileText, Calendar, User, Building2, Truck, AlertTriangle, ShieldCheck, CheckCircle, XCircle, ClipboardList, Receipt, Pencil, Layers, Eye } from 'lucide-react';
 
 import { Button } from '@/shared/components/ui/button';
 import { useAuthStore } from '@/shared/stores';
@@ -53,7 +53,8 @@ import {
 
 import { getSalesOrder, releaseSalesOrderHold, confirmSalesOrder, cancelSalesOrder, updateSalesOrderSeries } from '../actions';
 import { ORDER_SERIES } from '@/shared/lib/global-data';
-import { createInvoiceFromSalesOrder } from '@/features/invoices/actions';
+import { createInvoiceFromSalesOrder, getInvoiceBySalesOrder } from '@/features/invoices/actions';
+import type { InvoiceListItem } from '@/features/invoices/types';
 import type { SalesOrderWithItems } from '../types';
 import {
   ORDER_STATUS_LABELS,
@@ -207,6 +208,8 @@ const [isReleasingHold, setIsReleasingHold] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
   const [showPdfModal, setShowPdfModal] = useState(false);
+  const [showInvoicePdfModal, setShowInvoicePdfModal] = useState(false);
+  const [existingInvoice, setExistingInvoice] = useState<InvoiceListItem | null>(null);
 
   // Order Series inline edit
   const [isEditingOrderSeries, setIsEditingOrderSeries] = useState(false);
@@ -222,6 +225,7 @@ const [isReleasingHold, setIsReleasingHold] = useState(false);
     } else {
       setOrder(null);
       setError(null);
+      setExistingInvoice(null);
     }
   }, [open, orderId]);
 
@@ -235,11 +239,18 @@ const [isReleasingHold, setIsReleasingHold] = useState(false);
 
     setIsLoading(true);
     setError(null);
+    setExistingInvoice(null);
 
     try {
       const result = await getSalesOrder(orderId);
       if (result.success && result.data) {
         setOrder(result.data);
+
+        // Check if invoice already exists for this order
+        const invoiceResult = await getInvoiceBySalesOrder(orderId);
+        if (invoiceResult.success && invoiceResult.data) {
+          setExistingInvoice(invoiceResult.data);
+        }
       } else {
         setError(result.error || 'Failed to load order');
       }
@@ -316,13 +327,7 @@ const handleReleaseHold = async () => {
     setIsValidating(true);
 
     try {
-      // Validation 1: Check Order Series is set
-      if (!order.orderSeries || order.orderSeries.trim() === '') {
-        toast.error('Order Series is required. Please set the Order Series before confirming.');
-        return;
-      }
-
-      // Validation 2: Check all items are fully allocated
+      // Validation: Check all items are fully allocated
       const { validateOrderFullyAllocatedAction } = await import('@/features/sales-orders/actions/fulfillment-allocation.actions');
       const validationResult = await validateOrderFullyAllocatedAction(order.id);
 
@@ -848,7 +853,17 @@ const handleReleaseHold = async () => {
                     Edit Order
                   </Button>
                 )}
-                {canCreateInvoice && (
+                {canCreateInvoice && existingInvoice && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowInvoicePdfModal(true)}
+                  >
+                    <Eye className="mr-2 h-4 w-4" />
+                    View Invoice
+                  </Button>
+                )}
+                {canCreateInvoice && !existingInvoice && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -973,6 +988,17 @@ const handleReleaseHold = async () => {
             pdfUrl={`/api/sales-orders/${order.id}/pdf`}
             title={`Sales Order - ${order.orderNumber}`}
             fileName={`SalesOrder-${order.orderNumber}.pdf`}
+          />
+        )}
+
+        {/* Invoice PDF Viewer Modal */}
+        {existingInvoice && (
+          <PdfViewerModal
+            open={showInvoicePdfModal}
+            onClose={() => setShowInvoicePdfModal(false)}
+            pdfUrl={`/api/invoices/${existingInvoice.id}/pdf`}
+            title={`Invoice - ${existingInvoice.invoiceNumber}`}
+            fileName={`Invoice-${existingInvoice.invoiceNumber}.pdf`}
           />
         )}
       </SheetContent>

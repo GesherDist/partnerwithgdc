@@ -960,6 +960,11 @@ export async function getAllocationsForItem(salesOrderItemId: string): Promise<{
           address_city,
           address_state,
           address_postal_code
+        ),
+        purchaseOrder:purchase_orders!fulfillment_allocations_purchase_order_id_fkey(
+          id,
+          po_number,
+          status
         )
       `)
       .eq('sales_order_item_id', salesOrderItemId)
@@ -1016,6 +1021,11 @@ export async function getAllocationsForItem(salesOrderItemId: string): Promise<{
         addressCity: a.dealerLocation.address_city,
         addressState: a.dealerLocation.address_state,
         addressPostalCode: a.dealerLocation.address_postal_code,
+      } : undefined,
+      purchaseOrder: a.purchaseOrder ? {
+        id: a.purchaseOrder.id,
+        poNumber: a.purchaseOrder.po_number,
+        status: a.purchaseOrder.status,
       } : undefined,
     }));
 

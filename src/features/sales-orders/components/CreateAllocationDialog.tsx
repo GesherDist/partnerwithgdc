@@ -96,7 +96,6 @@ interface UnallocatedPurchaseOrder {
   grand_total: number;
   order_series: string | null;
   location_name: string | null;
-  eta_to_us_port: string | null;
 }
 
 // ============================================
@@ -194,10 +193,14 @@ export function CreateAllocationDialog({
       const result = await getAllLocationsAction({ type: 'warehouse' });
 
       if (result.success && result.data) {
-        const locs = result.data.map((loc) => ({
-          id: loc.id,
-          name: `${loc.locationCode} - ${loc.name}`,
-        }));
+        // Filter out GDC-INV (virtual location for GDC Inventory tracking)
+        // Only show actual warehouses like Kansas, Nebraska
+        const locs = result.data
+          .filter((loc) => loc.locationCode !== 'GDC-INV')
+          .map((loc) => ({
+            id: loc.id,
+            name: `${loc.locationCode} - ${loc.name}`,
+          }));
         setLocations(locs);
 
         // Prefetch inventory for all locations (async, don't await)
@@ -877,12 +880,11 @@ export function CreateAllocationDialog({
                           >
                             {/* Table Header */}
                             <div className="bg-slate-100 border-b">
-                              <div className="grid grid-cols-[40px_100px_80px_75px_85px_65px_90px] gap-1.5 px-2 py-2 text-[11px] font-semibold text-slate-700">
+                              <div className="grid grid-cols-[40px_110px_100px_80px_70px_100px] gap-1.5 px-2 py-2 text-[11px] font-semibold text-slate-700">
                                 <div>Select</div>
                                 <div>PO Number</div>
                                 <div>Location</div>
                                 <div>Status</div>
-                                <div>ETA Port</div>
                                 <div>Series</div>
                                 <div>Exp. Del.</div>
                               </div>
@@ -901,7 +903,7 @@ export function CreateAllocationDialog({
                                 {unallocatedPOs.map((po) => (
                                   <div
                                     key={po.id}
-                                    className={`grid grid-cols-[40px_100px_80px_75px_85px_65px_90px] gap-1.5 px-2 py-2 cursor-pointer hover:bg-slate-50 transition-colors ${
+                                    className={`grid grid-cols-[40px_110px_100px_80px_70px_100px] gap-1.5 px-2 py-2 cursor-pointer hover:bg-slate-50 transition-colors ${
                                       field.value === po.id
                                         ? 'bg-blue-50 border-l-4 border-l-blue-500'
                                         : ''
@@ -935,21 +937,6 @@ export function CreateAllocationDialog({
                                       <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-medium bg-green-100 text-green-800 capitalize">
                                         {po.status}
                                       </span>
-                                    </div>
-
-                                    {/* ETA to US Port */}
-                                    <div className="flex items-center text-[11px] text-slate-600">
-                                      {po.eta_to_us_port ? (
-                                        <span className="truncate">
-                                          {new Date(po.eta_to_us_port).toLocaleDateString('en-US', {
-                                            month: '2-digit',
-                                            day: '2-digit',
-                                            year: 'numeric',
-                                          })}
-                                        </span>
-                                      ) : (
-                                        <span className="text-muted-foreground text-xs">-</span>
-                                      )}
                                     </div>
 
                                     {/* Order Series */}
