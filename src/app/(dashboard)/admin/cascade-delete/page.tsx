@@ -281,7 +281,7 @@ export default function CascadeDeletePage() {
           {/* Entity Type Selector */}
           <div className="space-y-2">
             <Label htmlFor="entity-type">Entity Type</Label>
-            <Select value={entityType} onValueChange={handleEntityTypeChange}>
+            <Select value={entityType} onValueChange={(value) => handleEntityTypeChange(value as EntityType)}>
               <SelectTrigger id="entity-type">
                 <SelectValue />
               </SelectTrigger>
