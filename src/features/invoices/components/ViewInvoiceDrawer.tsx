@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-// import { toast } from 'sonner'; // QuickBooks integration - commented out
+import { toast } from 'sonner';
 import {
   Sheet,
   SheetContent,
@@ -12,11 +12,11 @@ import { Badge } from '@/shared/components/ui/badge';
 import { Button } from '@/shared/components/ui/button';
 import { Separator } from '@/shared/components/ui/separator';
 import { Skeleton } from '@/shared/components/ui/skeleton';
-import { Pencil, CreditCard, Building2, MapPin, Package, Calendar, FileText, User, Truck, FileDown } from 'lucide-react';
+import { Pencil, CreditCard, Building2, MapPin, Package, Calendar, FileText, User, Truck, FileDown, Loader2, ExternalLink, CheckCircle2 } from 'lucide-react';
 import { PdfViewerModal } from '@/shared/components/pdf-viewer/PdfViewerModal';
 import { cn } from '@/shared/lib/utils';
 import { useInvoice } from '../hooks/useInvoice';
-// import { pushInvoiceToQuickBooks } from '../actions'; // QuickBooks integration - commented out
+import { pushInvoiceToQuickBooks } from '../actions';
 import { INVOICE_STATUS_COLORS, INVOICE_STATUS_LABELS, INVOICE_TYPE_LABELS } from '../types';
 import type { ViewInvoiceDrawerProps } from '../types';
 
@@ -35,33 +35,32 @@ export function ViewInvoiceDrawer({
   onEdit,
   onRecordPayment,
 }: ViewInvoiceDrawerProps) {
-  const { data: invoice, isLoading } = useInvoice(open ? invoiceId : null);
+  const { data: invoice, isLoading, refetch } = useInvoice(open ? invoiceId : null);
   const [showPdfModal, setShowPdfModal] = useState(false);
+  const [isPushingToQbo, setIsPushingToQbo] = useState(false);
 
   const handleViewPdf = () => {
     if (!invoiceId || !invoice) return;
     setShowPdfModal(true);
   };
 
-  // QuickBooks integration - commented out for now
-  // const [isPushingToQbo, setIsPushingToQbo] = useState(false);
-  // const handlePushToQuickBooks = async () => {
-  //   if (!invoiceId) return;
-  //   setIsPushingToQbo(true);
-  //   try {
-  //     const result = await pushInvoiceToQuickBooks(invoiceId);
-  //     if (result.success) {
-  //       toast.success('Invoice pushed to QuickBooks successfully');
-  //       refetch();
-  //     } else {
-  //       toast.error(result.error || 'Failed to push invoice to QuickBooks');
-  //     }
-  //   } catch (error) {
-  //     toast.error('Failed to push invoice to QuickBooks');
-  //   } finally {
-  //     setIsPushingToQbo(false);
-  //   }
-  // };
+  const handlePushToQuickBooks = async () => {
+    if (!invoiceId) return;
+    setIsPushingToQbo(true);
+    try {
+      const result = await pushInvoiceToQuickBooks(invoiceId);
+      if (result.success) {
+        toast.success('Invoice pushed to QuickBooks successfully');
+        refetch();
+      } else {
+        toast.error(result.error || 'Failed to push invoice to QuickBooks');
+      }
+    } catch {
+      toast.error('Failed to push invoice to QuickBooks');
+    } finally {
+      setIsPushingToQbo(false);
+    }
+  };
 
   return (
     <Sheet open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
@@ -429,19 +428,14 @@ export function ViewInvoiceDrawer({
               </>
             )}
 
-            {/* QuickBooks Status - Hidden for now */}
-            {/* {invoice.quickbooksInvoiceId && (
+            {/* QuickBooks Status */}
+            {invoice.quickbooksInvoiceId && (
               <>
                 <Separator />
-                <a
-                  href={`https://app.qbo.intuit.com/app/invoice?txnId=${invoice.quickbooksInvoiceId}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-2 p-3 bg-emerald-50 hover:bg-emerald-100 rounded-lg text-sm transition-colors cursor-pointer"
-                >
+                <div className="flex items-center gap-2 p-3 bg-emerald-50 rounded-lg text-sm">
                   <CheckCircle2 className="h-4 w-4 text-emerald-600" />
                   <div className="flex-1">
-                    <p className="font-medium text-emerald-700">Invoice shared in QuickBooks</p>
+                    <p className="font-medium text-emerald-700">Invoice synced to QuickBooks</p>
                     <p className="text-xs text-muted-foreground">
                       ID: {invoice.quickbooksInvoiceId}
                       {invoice.quickbooksLastSync && (
@@ -449,10 +443,9 @@ export function ViewInvoiceDrawer({
                       )}
                     </p>
                   </div>
-                  <ExternalLink className="h-4 w-4 text-emerald-600" />
-                </a>
+                </div>
               </>
-            )} */}
+            )}
 
             {/* Actions */}
             <Separator />
@@ -479,8 +472,8 @@ export function ViewInvoiceDrawer({
                   View PDF
                 </Button>
 
-                {/* QuickBooks Push Button - Hidden for now */}
-                {/* {!invoice.quickbooksInvoiceId && invoice.status !== 'cancelled' ? (
+                {/* QuickBooks Push Button */}
+                {!invoice.quickbooksInvoiceId && invoice.status !== 'cancelled' ? (
                   <Button
                     onClick={handlePushToQuickBooks}
                     variant="outline"
@@ -498,8 +491,7 @@ export function ViewInvoiceDrawer({
                   </Button>
                 ) : (
                   <div />
-                )} */}
-                <div />
+                )}
               </div>
 
               {/* Row 2: Record Payment (full width) */}
