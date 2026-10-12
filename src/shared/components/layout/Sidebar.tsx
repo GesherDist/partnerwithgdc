@@ -79,6 +79,13 @@ const NAV_SECTIONS = [
         icon: Inbox,
         permission: 'quotes.view_module',
       },
+      {
+        id: 'shipping',
+        label: 'Shipping Tracking',
+        href: '/shipping',
+        icon: Ship,
+        permission: 'dashboard.view_module',
+      },
     ],
   },
   // ============================================
@@ -145,6 +152,13 @@ const NAV_SECTIONS = [
         icon: ClipboardList,
         permission: 'purchase_orders.view_module',
       },
+      {
+        id: 'shipments',
+        label: 'Shipment Orders',
+        href: '/shipments',
+        icon: Truck,
+        permission: 'shipments.view_module',
+      },
     ],
   },
   // ============================================
@@ -195,20 +209,6 @@ const NAV_SECTIONS = [
         href: '/packing-lists',
         icon: PackageCheck,
         permission: 'pick_tickets.view_module',
-      },
-      {
-        id: 'shipments',
-        label: 'Shipments',
-        href: '/shipments',
-        icon: Truck,
-        permission: 'shipments.view_module',
-      },
-      {
-        id: 'shipping',
-        label: 'Shipping Tracking',
-        href: '/shipping',
-        icon: Ship,
-        permission: 'dashboard.view_module',
       },
     ],
   },

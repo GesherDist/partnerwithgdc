@@ -414,35 +414,37 @@ export function EditLeadDialog({ open, onClose, lead, onSuccess }: EditLeadDialo
               </div>
 
               {/* Pipedrive Labels */}
-              {availableLabels.length > 0 && (
-                <div className="space-y-2">
-                  <Label>Labels (Pipedrive)</Label>
-                  <div className="flex flex-wrap gap-3 p-3 border rounded-md bg-muted/30">
-                    {labelsLoading ? (
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Loading labels...
+              <div className="space-y-2">
+                <Label>Labels (Pipedrive)</Label>
+                <div className="flex flex-wrap gap-3 p-3 border rounded-md bg-muted/30">
+                  {labelsLoading ? (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Loading labels...
+                    </div>
+                  ) : availableLabels.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      Pipedrive labels could not be loaded. Check the Pipedrive connection.
+                    </p>
+                  ) : (
+                    availableLabels.map((label) => (
+                      <div key={label.id} className="flex items-center space-x-2">
+                        <Checkbox
+                          id={`edit-label-${label.id}`}
+                          checked={formState.selectedLabelIds.includes(label.id)}
+                          onCheckedChange={() => handleLabelToggle(label.id)}
+                        />
+                        <label
+                          htmlFor={`edit-label-${label.id}`}
+                          className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+                        >
+                          {label.name}
+                        </label>
                       </div>
-                    ) : (
-                      availableLabels.map((label) => (
-                        <div key={label.id} className="flex items-center space-x-2">
-                          <Checkbox
-                            id={`edit-label-${label.id}`}
-                            checked={formState.selectedLabelIds.includes(label.id)}
-                            onCheckedChange={() => handleLabelToggle(label.id)}
-                          />
-                          <label
-                            htmlFor={`edit-label-${label.id}`}
-                            className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
-                          >
-                            {label.name}
-                          </label>
-                        </div>
-                      ))
-                    )}
-                  </div>
+                    ))
+                  )}
                 </div>
-              )}
+              </div>
             </div>
 
             {/* Notes */}

@@ -96,7 +96,7 @@ export async function processFreightUpdate(
         },
         extraction_confidence: matchingResults.overallConfidence,
         extraction_status: updated ? 'processed' : 'extracted',
-        status: updated ? 'processed' : 'received',
+        status: updated ? 'processed' : 'extracted',
       })
       .eq('id', emailId);
 

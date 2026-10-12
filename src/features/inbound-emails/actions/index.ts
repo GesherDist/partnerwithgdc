@@ -64,7 +64,13 @@ export async function getInboundEmails(
       .order('received_at', { ascending: false });
 
     // Apply filters
-    if (status) {
+    // Supplier/freight emails stored before they were marked 'extracted' kept
+    // status 'received' with extraction_status 'extracted': count them as AI Extracted.
+    if (status === 'extracted') {
+      query = query.or('status.eq.extracted,and(status.eq.received,extraction_status.eq.extracted)');
+    } else if (status === 'received') {
+      query = query.eq('status', 'received').or('extraction_status.is.null,extraction_status.neq.extracted');
+    } else if (status) {
       query = query.eq('status', status);
     }
 

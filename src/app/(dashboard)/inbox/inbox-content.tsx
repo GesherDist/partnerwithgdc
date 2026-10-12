@@ -18,6 +18,8 @@ import {
   Clock,
   CheckCircle,
   AlertCircle,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -56,6 +58,68 @@ import type { InboundEmail } from '@/features/inbound-emails/types';
 import { ViewEmailDrawer } from '@/features/inbound-emails/components/ViewEmailDrawer';
 import { formatDistanceToNow } from 'date-fns';
 import { toast } from 'sonner';
+
+const INBOUND_ADDRESSES = [
+  { address: 'customer@inbound.ops.partnerwithgdc.com', purpose: 'Customer PO (AI extraction from email text)' },
+  { address: 'shipping@inbound.ops.partnerwithgdc.com', purpose: 'SEAIR shipping tracking (shows in Shipping Tracking)' },
+];
+
+// Inbound address (part before @) -> email type handled by an AI processor
+const EMAIL_TYPES: Record<string, { label: string; className: string }> = {
+  customer: { label: 'Customer PO', className: 'bg-blue-50 text-blue-700 border-blue-200' },
+  supplier: { label: 'Supplier PO', className: 'bg-purple-50 text-purple-700 border-purple-200' },
+  freight: { label: 'Freight', className: 'bg-teal-50 text-teal-700 border-teal-200' },
+};
+
+function getEmailType(email: InboundEmail) {
+  return EMAIL_TYPES[(email.to_local_part || '').toLowerCase()] ?? null;
+}
+
+function EmailTypeBadge({ email }: { email: InboundEmail }) {
+  const type = getEmailType(email);
+  return (
+    <Badge variant="outline" className={type?.className}>
+      {type?.label ?? 'PO (PDF)'}
+    </Badge>
+  );
+}
+
+/** Status for emails handled by the AI processors (customer@, supplier@, freight@) */
+function ExtractionStatusBadge({ email }: { email: InboundEmail }) {
+  if (email.status === 'failed') {
+    return (
+      <Badge variant="destructive" className="gap-1">
+        <AlertCircle className="h-3 w-3" />
+        Failed
+      </Badge>
+    );
+  }
+  if (email.status === 'ignored') {
+    return <Badge variant="outline">Rejected</Badge>;
+  }
+  if (email.status === 'processed') {
+    return (
+      <Badge variant="default" className="gap-1">
+        <CheckCircle className="h-3 w-3" />
+        Processed
+      </Badge>
+    );
+  }
+  if (email.extracted_data) {
+    return (
+      <Badge variant="secondary" className="gap-1 bg-amber-100 text-amber-800 border-amber-200">
+        <Clock className="h-3 w-3" />
+        AI Extracted
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="secondary" className="gap-1">
+      <Clock className="h-3 w-3" />
+      Pending
+    </Badge>
+  );
+}
 
 // ============================================
 // STATUS BADGE COMPONENT
@@ -117,6 +181,7 @@ export function InboxContent() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
   const [selectedEmail, setSelectedEmail] = useState<InboundEmail | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
@@ -196,6 +261,17 @@ export function InboxContent() {
   };
 
   // Handle search
+  const handleCopyAddress = async (address: string) => {
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopiedAddress(address);
+      toast.success('Email address copied');
+      setTimeout(() => setCopiedAddress((current) => (current === address ? null : current)), 2000);
+    } catch {
+      toast.error('Could not copy. Please select the address and copy it manually.');
+    }
+  };
+
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     setMeta((prev) => ({ ...prev, page: 1 }));
@@ -232,6 +308,48 @@ export function InboxContent() {
           Refresh
         </Button>
       </div>
+
+      {/* Inbound Addresses */}
+      <Card className="border-blue-200 bg-blue-50">
+        <CardContent className="pt-6">
+          <div className="flex items-start gap-4">
+            <Mail className="h-8 w-8 text-blue-600 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <h3 className="font-semibold text-blue-900">Send Emails Here</h3>
+              <p className="text-sm text-blue-700 mt-1">
+                Send or forward emails to the address that matches the email type:
+              </p>
+              <div className="mt-3 grid gap-2 md:grid-cols-2">
+                {INBOUND_ADDRESSES.map(({ address, purpose }) => (
+                  <div
+                    key={address}
+                    className="flex items-center gap-2 bg-white px-3 py-2 rounded border border-blue-200"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <code className="block truncate text-blue-900 font-mono text-sm" title={address}>{address}</code>
+                      <p className="text-xs text-muted-foreground">{purpose}</p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="shrink-0"
+                      onClick={() => handleCopyAddress(address)}
+                      aria-label={`Copy ${address}`}
+                    >
+                      {copiedAddress === address ? (
+                        <Check className="h-4 w-4 text-green-600" />
+                      ) : (
+                        <Copy className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Filters */}
       <Card>
@@ -284,7 +402,7 @@ export function InboxContent() {
                 Send an email to your inbound address to get started
               </p>
               <code className="mt-4 px-4 py-2 bg-muted rounded-md text-sm">
-                gesher_dev@inbound.gesher.dev-build.in
+                customer@inbound.ops.partnerwithgdc.com
               </code>
             </div>
           ) : (
@@ -293,6 +411,7 @@ export function InboxContent() {
                 <TableRow>
                   <TableHead className="w-[300px]">From</TableHead>
                   <TableHead>Subject</TableHead>
+                  <TableHead className="w-[130px]">Type</TableHead>
                   <TableHead className="w-[100px]">Attachments</TableHead>
                   <TableHead className="w-[120px]">Status</TableHead>
                   <TableHead className="w-[150px]">Received</TableHead>
@@ -324,6 +443,9 @@ export function InboxContent() {
                       </span>
                     </TableCell>
                     <TableCell>
+                      <EmailTypeBadge email={email} />
+                    </TableCell>
+                    <TableCell>
                       {email.has_attachments ? (
                         <Badge variant="outline" className="gap-1">
                           <Paperclip className="h-3 w-3" />
@@ -334,10 +456,14 @@ export function InboxContent() {
                       )}
                     </TableCell>
                     <TableCell>
-                      <StatusBadge
-                        totalPdfAttachments={email.total_pdf_attachments}
-                        processedPdfAttachments={email.processed_pdf_attachments}
-                      />
+                      {getEmailType(email) ? (
+                        <ExtractionStatusBadge email={email} />
+                      ) : (
+                        <StatusBadge
+                          totalPdfAttachments={email.total_pdf_attachments}
+                          processedPdfAttachments={email.processed_pdf_attachments}
+                        />
+                      )}
                     </TableCell>
                     <TableCell>
                       <span className="text-sm text-muted-foreground">

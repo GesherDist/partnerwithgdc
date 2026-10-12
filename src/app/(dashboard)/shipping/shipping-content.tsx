@@ -252,7 +252,7 @@ export function ShippingContent() {
                 Forward shipping tracking emails from SEAIR/logistics providers to:
               </p>
               <code className="mt-2 block bg-white px-3 py-2 rounded border border-blue-200 text-blue-900 font-mono text-sm">
-                shipping@inbound.gesher.dev-build.in
+                shipping@inbound.ops.partnerwithgdc.com
               </code>
             </div>
           </div>
