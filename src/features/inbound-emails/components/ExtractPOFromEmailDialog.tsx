@@ -1143,8 +1143,8 @@ export function ExtractPOFromEmailDialog({
                                           <Label className="text-xs text-muted-foreground">Item Type</Label>
                                           <Select
                                             value={newProductForm.itemType}
-                                            onValueChange={(value: 'inventory' | 'non_inventory' | 'service') => {
-                                              setNewProductForm(prev => ({ ...prev, itemType: value }));
+                                            onValueChange={(value) => {
+                                              setNewProductForm(prev => ({ ...prev, itemType: value as 'inventory' | 'non_inventory' | 'service' }));
                                               if (formErrors.itemType) { setFormErrors(prev => ({ ...prev, itemType: '' })); }
                                             }}
                                           >
