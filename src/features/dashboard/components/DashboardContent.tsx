@@ -82,8 +82,8 @@ export function DashboardContent({
   initialRevenueData,
 }: DashboardContentProps) {
   // Date range state
-  const [datePreset, setDatePreset] = useState<DateRangePreset>('this_month');
-  const [currentDateRange, setCurrentDateRange] = useState<DateRange>(() => getDateRangeFromPreset('this_month'));
+  const [datePreset, setDatePreset] = useState<DateRangePreset>('last_6_months');
+  const [currentDateRange, setCurrentDateRange] = useState<DateRange>(() => getDateRangeFromPreset('last_6_months'));
   const [isLoading, setIsLoading] = useState(false);
 
   // Data state

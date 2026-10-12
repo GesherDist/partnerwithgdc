@@ -8,13 +8,11 @@
  * - Number of loads
  * - Outstanding quantity
  * - Invoice amount
- * - In Transit / Next 7 Days count
  */
 
 import { Users } from 'lucide-react';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/shared/components/ui/card';
-import { Badge } from '@/shared/components/ui/badge';
 import {
   Table,
   TableBody,
@@ -60,7 +58,6 @@ export function CustomerCommitments({ data, onViewCustomer: _onViewCustomer }: C
   const totalLoads = data.reduce((sum, item) => sum + item.loads, 0);
   const totalQty = data.reduce((sum, item) => sum + item.outstandingQty, 0);
   const totalInvoice = data.reduce((sum, item) => sum + item.invoiceAmount, 0);
-  const totalInTransit = data.reduce((sum, item) => sum + item.inTransitNext7Days, 0);
 
   return (
     <Card>
@@ -85,18 +82,18 @@ export function CustomerCommitments({ data, onViewCustomer: _onViewCustomer }: C
       </CardHeader>
       <CardContent className="p-0">
         <div className="overflow-x-auto">
-          <Table className="min-w-[1000px]">
+          <Table className="min-w-[600px]">
           <TableHeader>
             <TableRow className="bg-muted/50">
               <TableHead>Customer</TableHead>
               <TableHead className="text-right">Loads</TableHead>
               <TableHead className="text-right">Outstanding Qty</TableHead>
+              {/* GDC Qty, Dealer Qty, Direct Qty columns - commented out for now
               <TableHead className="text-right">GDC Qty</TableHead>
               <TableHead className="text-right">Dealer Qty</TableHead>
               <TableHead className="text-right">Direct Qty</TableHead>
+              */}
               <TableHead className="text-right">Invoice Amount</TableHead>
-              <TableHead className="text-right">In Transit / 7 Days</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -105,34 +102,15 @@ export function CustomerCommitments({ data, onViewCustomer: _onViewCustomer }: C
                 <TableCell className="font-medium">{item.customer}</TableCell>
                 <TableCell className="text-right">{item.loads}</TableCell>
                 <TableCell className="text-right">{formatNumber(item.outstandingQty)}</TableCell>
+                {/* GDC Qty, Dealer Qty, Direct Qty cells - commented out for now
                 <TableCell className="text-right">{formatNumber(item.gdcQty)}</TableCell>
                 <TableCell className="text-right">
                   {formatNumber(item.dealerInventoryQty + item.dealerFulfillmentQty)}
                 </TableCell>
                 <TableCell className="text-right">{formatNumber(item.manufacturerDirectQty)}</TableCell>
+                */}
                 <TableCell className="text-right font-medium text-emerald-600">
                   {formatCurrency(item.invoiceAmount)}
-                </TableCell>
-                <TableCell className="text-right">
-                  {item.inTransitNext7Days > 0 ? (
-                    <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200">
-                      {item.inTransitNext7Days}
-                    </Badge>
-                  ) : (
-                    <span className="text-muted-foreground">0</span>
-                  )}
-                </TableCell>
-                <TableCell className="text-right">
-                  {/* Action icon hidden for now
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7"
-                    onClick={() => onViewCustomer?.(item)}
-                  >
-                    <ExternalLink className="h-3.5 w-3.5" />
-                  </Button>
-                  */}
                 </TableCell>
               </TableRow>
             ))}
@@ -143,12 +121,6 @@ export function CustomerCommitments({ data, onViewCustomer: _onViewCustomer }: C
               <TableCell className="text-right font-bold text-emerald-600">
                 {formatCurrency(totalInvoice)}
               </TableCell>
-              <TableCell className="text-right">
-                <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200">
-                  {totalInTransit}
-                </Badge>
-              </TableCell>
-              <TableCell />
             </TableRow>
           </TableBody>
           </Table>

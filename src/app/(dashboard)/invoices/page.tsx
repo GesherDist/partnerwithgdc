@@ -34,6 +34,7 @@ import {
   InvoicesTable,
   ViewInvoiceDrawer,
   EditInvoiceDrawer,
+  CreateInvoiceDrawer,
   useInvoices,
 } from '@/features/invoices';
 import { deleteInvoice } from '@/features/invoices/actions';
@@ -48,6 +49,7 @@ export default function InvoicesPage() {
   // Drawer states
   const [isViewDrawerOpen, setIsViewDrawerOpen] = useState(false);
   const [isEditDrawerOpen, setIsEditDrawerOpen] = useState(false);
+  const [isCreateDrawerOpen, setIsCreateDrawerOpen] = useState(false);
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
 
   // Delete confirmation
@@ -87,8 +89,17 @@ export default function InvoicesPage() {
   // ----------------------------------------
 
   const handleCreateClick = () => {
-    toast.info('Create invoice functionality coming soon');
+    setIsCreateDrawerOpen(true);
   };
+
+  const handleCreateDrawerClose = useCallback(() => {
+    setIsCreateDrawerOpen(false);
+  }, []);
+
+  const handleCreateSuccess = useCallback(async () => {
+    setIsCreateDrawerOpen(false);
+    await refetchInvoices();
+  }, [refetchInvoices]);
 
   const handleView = useCallback((invoice: InvoiceListItem) => {
     setSelectedInvoiceId(invoice.id);
@@ -244,6 +255,13 @@ export default function InvoicesPage() {
         open={isEditDrawerOpen}
         onClose={handleEditDrawerClose}
         onSuccess={handleEditSuccess}
+      />
+
+      {/* Create Invoice Drawer */}
+      <CreateInvoiceDrawer
+        open={isCreateDrawerOpen}
+        onClose={handleCreateDrawerClose}
+        onSuccess={handleCreateSuccess}
       />
 
       {/* Delete Confirmation Dialog */}

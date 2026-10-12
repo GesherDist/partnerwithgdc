@@ -100,8 +100,8 @@ export default async function DashboardPage() {
   const canViewAnalytics = hasPermission(user, 'dashboard.view_analytics');
   const canViewInventory = hasPermission(user, 'dashboard.view_inventory');
 
-  // Default date range: This Month
-  const defaultDateRange = getDateRangeFromPreset('this_month');
+  // Default date range: Last 6 Months
+  const defaultDateRange = getDateRangeFromPreset('last_6_months');
 
   // Fetch real data from database with default date filter (no mock data fallback)
   const [unitsBySKUResult, channelResult, inventoryResult, statsResult, marginResult, revenueResult, commissionResult] = await Promise.all([

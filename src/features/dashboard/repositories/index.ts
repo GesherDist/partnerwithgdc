@@ -33,8 +33,9 @@ const PRODUCT_COLORS = [
 ];
 
 /**
- * Get units sold by ALL products grouped by month
- * Uses confirmed/processing/shipped/delivered orders from the specified date range
+ * Get units by SKU from shipments (inventory coming IN)
+ * Uses shipment_items with eta_to_port for date filtering
+ * Shows units arriving per SKU per month based on ETA to US port
  * @param dateRange - Optional date range filter. Defaults to last 6 months if not provided.
  */
 export async function getUnitsBySKU(dateRange?: DateRange): Promise<UnitsBySKUChartData> {
@@ -55,16 +56,18 @@ export async function getUnitsBySKU(dateRange?: DateRange): Promise<UnitsBySKUCh
     endDate = formatDateString(new Date());
   }
 
-  // Query sales_order_items joined with sales_orders and products
+  // Query shipment_items joined with shipments and products
+  // Filter by eta_to_port (ETA to US Port) - this is the key date for tracking incoming inventory
   // Only include inventory products (exclude service and non_inventory)
   const { data, error } = await supabase
-    .from('sales_order_items')
+    .from('shipment_items')
     .select(`
-      quantity,
+      quantity_shipped,
       product_id,
       sku,
-      sales_orders!inner (
-        order_date,
+      shipments!inner (
+        eta_to_port,
+        confirmed_eta,
         status,
         deleted_at
       ),
@@ -75,14 +78,13 @@ export async function getUnitsBySKU(dateRange?: DateRange): Promise<UnitsBySKUCh
         item_type
       )
     `)
-    .gte('sales_orders.requested_delivery_date', startDate)
-    .lte('sales_orders.requested_delivery_date', endDate)
-    .is('sales_orders.deleted_at', null)
-    .in('sales_orders.status', ['confirmed', 'processing', 'shipped', 'delivered'])
+    .gte('shipments.eta_to_port', startDate)
+    .lte('shipments.eta_to_port', endDate)
+    .is('shipments.deleted_at', null)
     .eq('products.item_type', 'inventory');
 
   if (error) {
-    console.error('Error fetching units by SKU:', error);
+    console.error('Error fetching units by SKU from shipments:', error);
     return { data: [], products: [] };
   }
 
@@ -92,23 +94,27 @@ export async function getUnitsBySKU(dateRange?: DateRange): Promise<UnitsBySKUCh
   const productMap = new Map<string, { id: string; sku: string; name: string }>();
   const monthlyData: Record<string, Record<string, number>> = {};
 
-  // Initialize last 6 months
-  for (let i = 5; i >= 0; i--) {
-    const d = new Date();
-    d.setMonth(d.getMonth() - i);
-    const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  // Initialize months based on actual date range (not hardcoded last 6 months)
+  const rangeStart = new Date(startDate);
+  const rangeEnd = new Date(endDate);
+
+  // Create month keys from start to end of date range
+  const currentMonth = new Date(rangeStart.getFullYear(), rangeStart.getMonth(), 1);
+  while (currentMonth <= rangeEnd) {
+    const monthKey = `${currentMonth.getFullYear()}-${String(currentMonth.getMonth() + 1).padStart(2, '0')}`;
     monthlyData[monthKey] = {};
+    currentMonth.setMonth(currentMonth.getMonth() + 1);
   }
 
   // Process results
   if (data) {
     for (const item of data) {
-      const salesOrder = item.sales_orders as unknown as { order_date: string } | null;
+      const shipment = item.shipments as unknown as { eta_to_port: string } | null;
       const product = item.products as unknown as { id: string; sku: string; name: string } | null;
 
-      if (!salesOrder?.order_date) continue;
+      if (!shipment?.eta_to_port) continue;
 
-      const date = new Date(salesOrder.order_date);
+      const date = new Date(shipment.eta_to_port);
       const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 
       if (!monthlyData[monthKey]) continue;
@@ -123,9 +129,9 @@ export async function getUnitsBySKU(dateRange?: DateRange): Promise<UnitsBySKUCh
         productMap.set(productId, { id: productId, sku: productSku, name: productName });
       }
 
-      // Add quantity
+      // Add quantity (use quantity_shipped from shipment_items)
       const dataKey = `units_${productId}`;
-      monthlyData[monthKey][dataKey] = (monthlyData[monthKey][dataKey] || 0) + item.quantity;
+      monthlyData[monthKey][dataKey] = (monthlyData[monthKey][dataKey] || 0) + item.quantity_shipped;
     }
   }
 
@@ -185,6 +191,8 @@ export async function getChannelPerformance(dateRange?: DateRange): Promise<Chan
   }
 
   // Query sales_orders with customer channel
+  // Filter by order_date (when order was placed)
+  // Ankur's Definition: Only count RECOGNIZED revenue (delivered/invoiced orders)
   const { data: ordersData, error: ordersError } = await supabase
     .from('sales_orders')
     .select(`
@@ -195,10 +203,10 @@ export async function getChannelPerformance(dateRange?: DateRange): Promise<Chan
         channel
       )
     `)
-    .gte('requested_delivery_date', startDate)
-    .lte('requested_delivery_date', endDate)
+    .gte('order_date', startDate)
+    .lte('order_date', endDate)
     .is('deleted_at', null)
-    .in('status', ['confirmed', 'processing', 'shipped', 'delivered']);
+    .in('status', ['delivered']);
 
   if (ordersError) {
     console.error('Error fetching channel orders:', ordersError);
@@ -364,13 +372,12 @@ export async function getInventoryByLocation(): Promise<InventoryByLocation[]> {
       warehouse_id,
       sales_orders!inner (
         order_date,
-        requested_delivery_date,
         status,
         deleted_at,
         warehouse_id
       )
     `)
-    .gte('sales_orders.requested_delivery_date', thirtyDaysAgo)
+    .gte('sales_orders.order_date', thirtyDaysAgo)
     .is('sales_orders.deleted_at', null)
     .in('sales_orders.status', ['confirmed', 'processing', 'shipped', 'delivered']);
 
@@ -466,23 +473,22 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
   });
 
   // ===================================================================
-  // REVENUE CALCULATION (Ankur's Definition 3.1)
+  // REVENUE CALCULATION (Using Delivered Sales Orders)
   // ===================================================================
-  // Revenue = Gross Recognized Sales - Discounts - Returns and Credits
+  // Revenue = Sum of grand_total from DELIVERED sales orders
+  // This matches the Revenue Trend chart logic for consistency
   //
-  // Sources:
-  // - Gross Sales: invoices.subtotal WHERE status IN ('sent', 'partial', 'paid')
-  // - Discounts: invoices.discount_total
-  // - Returns: credit_notes.grand_total WHERE status = 'approved'
+  // Note: Using sales_orders because invoices table has limited data
+  // (most invoices are in 'draft' status, not 'sent'/'paid')
   // ===================================================================
 
-  // Fetch invoices for current period (using invoice_date)
-  const { data: currentPeriodInvoices, error: currentInvoicesError } = await supabase
-    .from('invoices')
-    .select('id, invoice_number, subtotal, discount_total, grand_total, invoice_date')
-    .in('status', ['sent', 'partial', 'paid'])
-    .gte('invoice_date', primaryStartDate)
-    .lte('invoice_date', primaryEndDate)
+  // Fetch current period delivered sales orders (using order_date)
+  const { data: currentPeriodOrders, error: currentOrdersError } = await supabase
+    .from('sales_orders')
+    .select('id, order_number, subtotal, discount_total, grand_total, order_date')
+    .eq('status', 'delivered')
+    .gte('order_date', primaryStartDate)
+    .lte('order_date', primaryEndDate)
     .is('deleted_at', null);
 
   // Fetch credit notes for current period (returns/credits)
@@ -495,31 +501,29 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
     .is('deleted_at', null);
 
   // Calculate current period revenue
-  const currentGrossSales = currentPeriodInvoices?.reduce((sum, inv) => sum + (inv.subtotal || 0), 0) || 0;
-  const currentDiscounts = currentPeriodInvoices?.reduce((sum, inv) => sum + (inv.discount_total || 0), 0) || 0;
+  const currentGrossSales = currentPeriodOrders?.reduce((sum, so) => sum + (so.grand_total || 0), 0) || 0;
   const currentReturns = currentPeriodCredits?.reduce((sum, cn) => sum + (cn.grand_total || 0), 0) || 0;
-  const currentRevenue = currentGrossSales - currentDiscounts - currentReturns;
+  const currentRevenue = currentGrossSales - currentReturns;
 
-  // DEBUG: Log current period invoice-based revenue calculation
-  console.log('📊 Current Period Revenue (Ankur Definition 3.1):', {
+  // DEBUG: Log current period revenue calculation
+  console.log('📊 Current Period Revenue (Delivered Sales Orders):', {
     period: { start: primaryStartDate, end: primaryEndDate },
-    invoiceCount: currentPeriodInvoices?.length || 0,
+    orderCount: currentPeriodOrders?.length || 0,
     creditNoteCount: currentPeriodCredits?.length || 0,
     grossSales: currentGrossSales / 100,
-    discounts: currentDiscounts / 100,
     returns: currentReturns / 100,
     netRevenue: currentRevenue / 100,
-    formula: 'Revenue = Gross Sales - Discounts - Returns',
-    error: currentInvoicesError,
+    formula: 'Revenue = Delivered SO grand_total - Credit Notes',
+    error: currentOrdersError,
   });
 
-  // Fetch last month invoices for comparison
-  const { data: lastMonthInvoices } = await supabase
-    .from('invoices')
-    .select('subtotal, discount_total')
-    .in('status', ['sent', 'partial', 'paid'])
-    .gte('invoice_date', formatDateString(lastMonthStart))
-    .lte('invoice_date', formatDateString(lastMonthEnd))
+  // Fetch last month delivered orders for comparison
+  const { data: lastMonthOrders } = await supabase
+    .from('sales_orders')
+    .select('grand_total')
+    .eq('status', 'delivered')
+    .gte('order_date', formatDateString(lastMonthStart))
+    .lte('order_date', formatDateString(lastMonthEnd))
     .is('deleted_at', null);
 
   const { data: lastMonthCredits } = await supabase
@@ -530,17 +534,16 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
     .lte('credit_note_date', formatDateString(lastMonthEnd))
     .is('deleted_at', null);
 
-  const lastGrossSales = lastMonthInvoices?.reduce((sum, inv) => sum + (inv.subtotal || 0), 0) || 0;
-  const lastDiscounts = lastMonthInvoices?.reduce((sum, inv) => sum + (inv.discount_total || 0), 0) || 0;
+  const lastGrossSales = lastMonthOrders?.reduce((sum, so) => sum + (so.grand_total || 0), 0) || 0;
   const lastReturns = lastMonthCredits?.reduce((sum, cn) => sum + (cn.grand_total || 0), 0) || 0;
-  const lastRevenue = lastGrossSales - lastDiscounts - lastReturns;
+  const lastRevenue = lastGrossSales - lastReturns;
 
-  // Fetch YTD invoices (Jan 1 to today)
-  const { data: ytdInvoices, error: ytdInvoicesError } = await supabase
-    .from('invoices')
-    .select('subtotal, discount_total')
-    .in('status', ['sent', 'partial', 'paid'])
-    .gte('invoice_date', formatDateString(currentYearStart))
+  // Fetch YTD delivered orders (Jan 1 to today)
+  const { data: ytdOrders, error: ytdOrdersError } = await supabase
+    .from('sales_orders')
+    .select('grand_total')
+    .eq('status', 'delivered')
+    .gte('order_date', formatDateString(currentYearStart))
     .is('deleted_at', null);
 
   const { data: ytdCredits } = await supabase
@@ -550,30 +553,28 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
     .gte('credit_note_date', formatDateString(currentYearStart))
     .is('deleted_at', null);
 
-  const ytdGrossSales = ytdInvoices?.reduce((sum, inv) => sum + (inv.subtotal || 0), 0) || 0;
-  const ytdDiscounts = ytdInvoices?.reduce((sum, inv) => sum + (inv.discount_total || 0), 0) || 0;
+  const ytdGrossSales = ytdOrders?.reduce((sum, so) => sum + (so.grand_total || 0), 0) || 0;
   const ytdReturnsAmount = ytdCredits?.reduce((sum, cn) => sum + (cn.grand_total || 0), 0) || 0;
-  const ytdNetRevenue = ytdGrossSales - ytdDiscounts - ytdReturnsAmount;
+  const ytdNetRevenue = ytdGrossSales - ytdReturnsAmount;
 
   // DEBUG: Log YTD revenue calculation
-  console.log('📊 YTD Revenue (Ankur Definition 3.1):', {
+  console.log('📊 YTD Revenue (Delivered Sales Orders):', {
     yearStart: formatDateString(currentYearStart),
-    invoiceCount: ytdInvoices?.length || 0,
+    orderCount: ytdOrders?.length || 0,
     creditNoteCount: ytdCredits?.length || 0,
     grossSales: ytdGrossSales / 100,
-    discounts: ytdDiscounts / 100,
     returns: ytdReturnsAmount / 100,
     netRevenue: ytdNetRevenue / 100,
-    error: ytdInvoicesError,
+    error: ytdOrdersError,
   });
 
-  // Fetch last year same period invoices for YTD comparison
-  const { data: lastYearYtdInvoices } = await supabase
-    .from('invoices')
-    .select('subtotal, discount_total')
-    .in('status', ['sent', 'partial', 'paid'])
-    .gte('invoice_date', formatDateString(lastYearStart))
-    .lte('invoice_date', formatDateString(lastYearSameDay))
+  // Fetch last year same period delivered orders for YTD comparison
+  const { data: lastYearYtdOrders } = await supabase
+    .from('sales_orders')
+    .select('grand_total')
+    .eq('status', 'delivered')
+    .gte('order_date', formatDateString(lastYearStart))
+    .lte('order_date', formatDateString(lastYearSameDay))
     .is('deleted_at', null);
 
   const { data: lastYearYtdCredits } = await supabase
@@ -584,10 +585,9 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
     .lte('credit_note_date', formatDateString(lastYearSameDay))
     .is('deleted_at', null);
 
-  const lastYearYtdGrossSales = lastYearYtdInvoices?.reduce((sum, inv) => sum + (inv.subtotal || 0), 0) || 0;
-  const lastYearYtdDiscounts = lastYearYtdInvoices?.reduce((sum, inv) => sum + (inv.discount_total || 0), 0) || 0;
+  const lastYearYtdGrossSales = lastYearYtdOrders?.reduce((sum, so) => sum + (so.grand_total || 0), 0) || 0;
   const lastYearYtdReturns = lastYearYtdCredits?.reduce((sum, cn) => sum + (cn.grand_total || 0), 0) || 0;
-  const lastYearYtdRevenue = lastYearYtdGrossSales - lastYearYtdDiscounts - lastYearYtdReturns;
+  const lastYearYtdRevenue = lastYearYtdGrossSales - lastYearYtdReturns;
 
   // Calculate YTD revenue change
   const ytdNetRevenueChange = lastYearYtdRevenue > 0
@@ -1016,6 +1016,8 @@ export async function getMarginAnalysis(dateRange?: DateRange): Promise<MarginDa
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
   // Query sales_order_items with products for cost data
+  // Ankur's Definition 3.2: Gross Profit = Revenue - COGS
+  // Only count RECOGNIZED revenue (delivered/invoiced orders)
   const { data, error } = await supabase
     .from('sales_order_items')
     .select(`
@@ -1034,10 +1036,10 @@ export async function getMarginAnalysis(dateRange?: DateRange): Promise<MarginDa
         name
       )
     `)
-    .gte('sales_orders.requested_delivery_date', startDate)
-    .lte('sales_orders.requested_delivery_date', endDate)
+    .gte('sales_orders.order_date', startDate)
+    .lte('sales_orders.order_date', endDate)
     .is('sales_orders.deleted_at', null)
-    .in('sales_orders.status', ['confirmed', 'processing', 'shipped', 'delivered']);
+    .in('sales_orders.status', ['delivered']);
 
   if (error) {
     console.error('Error fetching margin data:', error);
@@ -1187,14 +1189,15 @@ export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDat
     queryEndDate = formatDateString(now);
   }
 
-  // Query current year orders (using requested_delivery_date)
+  // Query current year orders (using order_date - when order was placed)
+  // Ankur's Definition 3.1: Only count RECOGNIZED revenue (delivered/invoiced orders)
   const { data: currentYearData, error: currentError } = await supabase
     .from('sales_orders')
     .select('order_date, grand_total, requested_delivery_date')
-    .gte('requested_delivery_date', queryStartDate)
-    .lte('requested_delivery_date', queryEndDate)
+    .gte('order_date', queryStartDate)
+    .lte('order_date', queryEndDate)
     .is('deleted_at', null)
-    .in('status', ['confirmed', 'processing', 'shipped', 'delivered']);
+    .in('status', ['delivered']);
 
   if (currentError) {
     console.error('Error fetching current year revenue:', currentError);
@@ -1206,14 +1209,15 @@ export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDat
   const lastYearStartDate = new Date(startDateObj.getFullYear() - 1, startDateObj.getMonth(), startDateObj.getDate());
   const lastYearEndDate = new Date(endDateObj.getFullYear() - 1, endDateObj.getMonth(), endDateObj.getDate());
 
-  // Query last year orders (same date range, one year ago, using requested_delivery_date)
+  // Query last year orders (same date range, one year ago, using order_date)
+  // Ankur's Definition: Only count RECOGNIZED revenue (delivered/invoiced orders)
   const { data: lastYearData, error: lastError } = await supabase
     .from('sales_orders')
     .select('order_date, grand_total, requested_delivery_date')
-    .gte('requested_delivery_date', formatDateString(lastYearStartDate))
-    .lte('requested_delivery_date', formatDateString(lastYearEndDate))
+    .gte('order_date', formatDateString(lastYearStartDate))
+    .lte('order_date', formatDateString(lastYearEndDate))
     .is('deleted_at', null)
-    .in('status', ['confirmed', 'processing', 'shipped', 'delivered']);
+    .in('status', ['delivered']);
 
   if (lastError) {
     console.error('Error fetching last year revenue:', lastError);
@@ -1306,6 +1310,7 @@ export async function getCommissionRevenue(): Promise<CommissionRevenueStats> {
   const lastYearSameDay = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate()); // Same day last year
 
   // Query YTD commission items (all statuses for "expected")
+  // Filter by order_date (when order was placed) instead of requested_delivery_date
   const { data: ytdCommissionItems, error: commError } = await supabase
     .from('sales_order_items')
     .select(`
@@ -1319,11 +1324,10 @@ export async function getCommissionRevenue(): Promise<CommissionRevenueStats> {
       sales_orders!inner (
         status,
         deleted_at,
-        order_date,
-        requested_delivery_date
+        order_date
       )
     `)
-    .gte('sales_orders.requested_delivery_date', formatDateString(currentYearStart))
+    .gte('sales_orders.order_date', formatDateString(currentYearStart))
     .is('sales_orders.deleted_at', null)
     .in('sales_orders.status', ['confirmed', 'processing', 'shipped', 'delivered']);
 
@@ -1348,11 +1352,10 @@ export async function getCommissionRevenue(): Promise<CommissionRevenueStats> {
       sales_orders!inner (
         status,
         deleted_at,
-        order_date,
-        requested_delivery_date
+        order_date
       )
     `)
-    .gte('sales_orders.requested_delivery_date', formatDateString(currentYearStart))
+    .gte('sales_orders.order_date', formatDateString(currentYearStart))
     .is('sales_orders.deleted_at', null)
     .eq('sales_orders.status', 'delivered');
 
@@ -1370,12 +1373,11 @@ export async function getCommissionRevenue(): Promise<CommissionRevenueStats> {
       sales_orders!inner (
         status,
         deleted_at,
-        order_date,
-        requested_delivery_date
+        order_date
       )
     `)
-    .gte('sales_orders.requested_delivery_date', formatDateString(lastYearStart))
-    .lte('sales_orders.requested_delivery_date', formatDateString(lastYearSameDay))
+    .gte('sales_orders.order_date', formatDateString(lastYearStart))
+    .lte('sales_orders.order_date', formatDateString(lastYearSameDay))
     .is('sales_orders.deleted_at', null)
     .eq('sales_orders.status', 'delivered');
 

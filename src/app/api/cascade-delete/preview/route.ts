@@ -4,12 +4,13 @@
  * POST /api/cascade-delete/preview
  *
  * Returns count of records that will be deleted without actually deleting them
+ * Accepts entity numbers (e.g., PO-2600064, CUST-GALILEO) instead of UUIDs
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import {
   previewCascadeDelete,
-  verifyEntityExists,
+  verifyEntityExistsByNumber,
   type EntityType,
 } from '@/features/shared/services/cascade-delete.service';
 
@@ -17,21 +18,27 @@ export async function POST(req: NextRequest) {
   try {
     // Parse request body
     const body = await req.json();
-    const { entityType, entityId } = body;
+    const { entityType, entityNumber } = body;
 
     // Validate inputs
-    if (!entityType || !entityId) {
+    if (!entityType || !entityNumber) {
       return NextResponse.json(
         {
           success: false,
-          error: 'Missing required fields: entityType, entityId',
+          error: 'Missing required fields: entityType, entityNumber',
         },
         { status: 400 }
       );
     }
 
     // Validate entity type
-    const validTypes: EntityType[] = ['customer', 'quote', 'sales_order'];
+    const validTypes: EntityType[] = [
+      'customer',
+      'quote',
+      'sales_order',
+      'purchase_order',
+      'shipment',
+    ];
     if (!validTypes.includes(entityType)) {
       return NextResponse.json(
         {
@@ -42,35 +49,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Validate UUID format
-    const uuidRegex =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!uuidRegex.test(entityId)) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: 'Invalid UUID format for entityId',
-        },
-        { status: 400 }
-      );
-    }
-
-    // Verify entity exists
-    const verification = await verifyEntityExists(entityType, entityId);
-    if (!verification.exists) {
+    // Verify entity exists by number and get UUID
+    const verification = await verifyEntityExistsByNumber(entityType, entityNumber);
+    if (!verification.exists || !verification.entityId) {
       return NextResponse.json(
         {
           success: false,
           error:
             verification.error ||
-            `${entityType.replace('_', ' ')} not found with ID: ${entityId}`,
+            `${entityType.replace('_', ' ')} not found with number: ${entityNumber}`,
         },
         { status: 404 }
       );
     }
 
-    // Get preview counts
-    const preview = await previewCascadeDelete(entityType, entityId);
+    // Get preview counts using UUID
+    const preview = await previewCascadeDelete(entityType, verification.entityId);
 
     if (!preview.success) {
       return NextResponse.json(
@@ -91,7 +85,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       entityType,
-      entityId,
+      entityNumber,
+      entityId: verification.entityId,
       entityData: verification.data,
       counts: preview.counts,
       totalRecords,

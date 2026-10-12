@@ -7,7 +7,7 @@
  */
 
 import { useState } from 'react';
-import { ArrowUpRight, ArrowDownRight, Info, X } from 'lucide-react';
+import { ArrowUpRight, ArrowDownRight, Eye, X } from 'lucide-react';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/shared/components/ui/card';
 import {
@@ -26,14 +26,14 @@ import { getIcon } from '../lib/icons';
 
 const CALCULATION_FORMULAS: Record<string, { title: string; formula: string; notes?: string }> = {
   'revenue-mtd': {
-    title: 'Revenue (MTD) Calculation - Definition 3.1',
-    formula: 'Revenue = Gross Recognized Sales - Discounts - Returns and Credits\n\nDatabase Sources:\n• Gross Sales: invoices.subtotal WHERE status IN (sent, partial, paid)\n• Discounts: invoices.discount_total\n• Returns: credit_notes.grand_total WHERE status = approved\n\nFiltered by: invoice_date (Invoice Date)',
-    notes: 'As per Ankur\'s Definition 3.1. Net recognized top-line revenue for the period. Amounts stored in cents.',
+    title: 'Revenue Calculation',
+    formula: 'Revenue = Delivered Sales Orders - Returns/Credits\n\nDatabase Sources:\n• Gross Sales: sales_orders.grand_total WHERE status = "delivered"\n• Returns: credit_notes.grand_total WHERE status = "approved"\n\nFiltered by: order_date (Order Date)',
+    notes: 'Based on delivered sales orders. Recognized revenue = orders that have been delivered to customer. Amounts stored in cents.',
   },
   'revenue-ytd': {
-    title: 'Revenue (YTD) Calculation - Definition 3.1',
-    formula: 'Revenue = Gross Recognized Sales - Discounts - Returns and Credits\n\nDatabase Sources:\n• Gross Sales: invoices.subtotal WHERE status IN (sent, partial, paid)\n• Discounts: invoices.discount_total\n• Returns: credit_notes.grand_total WHERE status = approved\n\nFiltered by: invoice_date (Jan 1 to today)',
-    notes: 'As per Ankur\'s Definition 3.1. Compared to same period last year (YTD).',
+    title: 'Revenue (YTD) Calculation',
+    formula: 'Revenue = Delivered Sales Orders - Returns/Credits\n\nDatabase Sources:\n• Gross Sales: sales_orders.grand_total WHERE status = "delivered"\n• Returns: credit_notes.grand_total WHERE status = "approved"\n\nFiltered by: order_date (Jan 1 to today)',
+    notes: 'Based on delivered sales orders (YTD). Compared to same period last year.',
   },
   'units-sold': {
     title: 'Units Sold (MTD) Calculation',
@@ -101,7 +101,7 @@ export function DashboardStatsCard({ stat }: DashboardStatsCardProps) {
                   className="h-5 w-5 rounded-full hover:bg-accent"
                   aria-label="Show calculation details"
                 >
-                  <Info className="h-3.5 w-3.5 text-muted-foreground hover:text-primary transition-colors" />
+                  <Eye className="h-3.5 w-3.5 text-muted-foreground hover:text-primary transition-colors" />
                 </Button>
               </PopoverTrigger>
               <PopoverContent
@@ -115,7 +115,7 @@ export function DashboardStatsCard({ stat }: DashboardStatsCardProps) {
                   <div className="flex items-start justify-between border-b bg-muted/30 px-4 py-3">
                     <div className="flex items-center gap-2">
                       <div className="rounded-md bg-primary/10 p-1.5">
-                        <Info className="h-4 w-4 text-primary" />
+                        <Eye className="h-4 w-4 text-primary" />
                       </div>
                       <h4 className="font-semibold text-sm leading-tight">
                         {calculationInfo.title}

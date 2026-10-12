@@ -481,11 +481,32 @@ export async function getCustomerCommitments(filters?: OperationsFilters): Promi
   // Important: EXCLUDE all AVAILABLE inventory (not committed to customer)
   // ============================================
 
+  const supabase = createAdminClient();
   const now = new Date();
   const next7Days = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
 
   // Get all GDC inventories (GDC 0, GDC 1, GDC 2, ...)
   const gdcInventories = await getAllGDCInventories(filters);
+
+  // Query dealer fulfillment allocations directly from database
+  const { data: dealerAllocations } = await supabase
+    .from('fulfillment_allocations')
+    .select(`
+      id,
+      quantity,
+      fulfillment_source,
+      status,
+      sales_order_items!inner(
+        quantity,
+        sales_orders!inner(
+          grand_total,
+          order_number
+        )
+      ),
+      platinum_dealer:platinum_dealers(dealer_name, code)
+    `)
+    .in('fulfillment_source', ['platinum_dealer_inventory', 'platinum_dealer_fulfillment'])
+    .not('platinum_dealer_id', 'is', null);
 
   // Aggregate by customer
   const customerMap = new Map<string, {
@@ -495,23 +516,126 @@ export async function getCustomerCommitments(filters?: OperationsFilters): Promi
     outstandingQty: number;
     invoiceAmount: number;
     inTransitNext7Days: number;
+    // Fulfillment breakdown
+    gdcQty: number;
+    dealerQty: number;
+    directQty: number;
   }>();
+
+  // Aggregate by dealer (for GDC/DealerName entries) - from direct database query
+  const dealerMap = new Map<string, {
+    id: string;
+    customer: string;  // Format: "GDC/{DealerName}"
+    loads: number;
+    outstandingQty: number;
+    invoiceAmount: number;
+    inTransitNext7Days: number;
+    totalQty: number;  // Total qty from dealer allocation
+  }>();
+
+  // Track SOs that have dealer fulfillment (to exclude from customer counts)
+  const dealerFulfilledSOs = new Set<string>();
+
+  // Process dealer allocations from direct query
+  if (dealerAllocations && dealerAllocations.length > 0) {
+    // Group by dealer and SO to avoid counting same SO multiple times
+    const processedSOs = new Set<string>();
+
+    dealerAllocations.forEach((alloc: any) => {
+      const dealer = toOne(alloc.platinum_dealer);
+      const dealerName = dealer?.dealer_name || dealer?.code;
+      if (!dealerName) return;
+
+      const soItem = toOne(alloc.sales_order_items);
+      const so = soItem ? toOne((soItem as any).sales_orders) : null;
+      const soNumber = so?.order_number || '';
+      const soKey = `${dealerName}-${soNumber}`;
+
+      // Track this SO as dealer-fulfilled (to exclude from customer counts)
+      // Normalize SO number (remove "C-" prefix if present)
+      if (soNumber) {
+        const normalizedSO = soNumber.replace(/^C-/i, '');
+        dealerFulfilledSOs.add(normalizedSO);
+        console.log(`[Dealer] Added SO to exclude: ${soNumber} -> ${normalizedSO}`);
+      }
+
+      // Skip if already processed this SO for this dealer
+      if (processedSOs.has(soKey)) return;
+      processedSOs.add(soKey);
+
+      const dealerKey = `GDC/${dealerName}`;
+
+      if (!dealerMap.has(dealerKey)) {
+        dealerMap.set(dealerKey, {
+          id: dealerKey,
+          customer: dealerKey,
+          loads: 0,
+          outstandingQty: 0,
+          invoiceAmount: 0,
+          inTransitNext7Days: 0,
+          totalQty: 0,
+        });
+      }
+
+      const dealerEntry = dealerMap.get(dealerKey)!;
+      dealerEntry.loads += 1;
+
+      // Use SO item quantity (GDC's full qty), not allocation quantity
+      const soItemQty = (soItem as any)?.quantity || 0;
+      const grandTotal = so?.grand_total ? so.grand_total / 100 : 0; // cents to dollars
+      // For dealer allocation, use full invoice amount
+      dealerEntry.invoiceAmount += grandTotal > 0 ? grandTotal : 0;
+
+      // Track total qty from SO item (GDC's qty, not allocation qty)
+      dealerEntry.totalQty += soItemQty;
+
+      // Outstanding qty for dealer fulfillments is typically 0 (already fulfilled)
+      // But if status is not 'fulfilled', count the qty as outstanding
+      if (alloc.status !== 'fulfilled') {
+        dealerEntry.outstandingQty += soItemQty;
+      }
+    });
+  }
 
   // Process all GDC inventories
   gdcInventories.forEach(gdcData => {
     gdcData.items.forEach(item => {
       const status = item.status.toUpperCase();
 
-      // CRITICAL: EXCLUDE AVAILABLE, INVOICED, SOLD (not outstanding)
-      // Outstanding Qty = GDC 0+1+2 where Status ≠ AVAILABLE AND ≠ INVOICED AND ≠ SOLD
-      if (status === 'AVAILABLE' || status === 'INVOICED' || status === 'SOLD') return;
+      // Only exclude AVAILABLE (unallocated stock)
+      // INVOICED and SOLD items ARE included (but their Outstanding Qty will be 0)
+      if (status === 'AVAILABLE') return;
+
+      // Skip items without a PO (SOs that don't have linked POs yet)
+      // Client's Excel only counts orders that have POs created
+      if (!item.poNumber) {
+        console.log(`[Customer] Skipping ${item.soNumber} - no linked PO`);
+        return;
+      }
+
+      // Skip items that have dealer fulfillment (already counted under GDC/{DealerName})
+      const soNumber = item.shipmentNumber || item.soNumber || '';
+      // Normalize SO number (remove "C-" prefix if present) for comparison
+      const normalizedSO = soNumber.replace(/^C-/i, '');
+      if (normalizedSO && dealerFulfilledSOs.has(normalizedSO)) {
+        console.log(`[Customer] Skipping ${normalizedSO} - dealer fulfilled`);
+        return; // Don't count under customer - already counted under dealer
+      }
 
       // Customer info
       const customerName = item.customer || 'Unknown';
       const customerId = item.customer || 'unknown'; // Use customer name as ID (temp solution)
 
-      // Skip "Unallocated" or "Gesher" entries (warehouse inventory)
-      if (customerName === 'Unallocated' || customerName === 'Gesher') return;
+      // Skip non-customer entries:
+      // - "Unallocated" or "Gesher" (internal inventory)
+      // - Warehouse names (e.g., "Kansas Warehouse", "Nebraska Warehouse")
+      // - "Unknown" customer
+      if (
+        customerName === 'Unallocated' ||
+        customerName === 'Gesher' ||
+        customerName === 'Unknown' ||
+        customerName.toLowerCase().includes('warehouse')
+      ) return;
 
       // Initialize customer if not exists
       if (!customerMap.has(customerId)) {
@@ -522,6 +646,9 @@ export async function getCustomerCommitments(filters?: OperationsFilters): Promi
           outstandingQty: 0,
           invoiceAmount: 0,
           inTransitNext7Days: 0,
+          gdcQty: 0,
+          dealerQty: 0,
+          directQty: 0,
         });
       }
 
@@ -531,6 +658,17 @@ export async function getCustomerCommitments(filters?: OperationsFilters): Promi
       current.loads += 1;
       current.outstandingQty += (item.outstandingQty || 0);
       current.invoiceAmount += (item.invoiceAmount || 0);
+
+      // Track fulfillment breakdown by source
+      const itemQty = item.totalQty || 0;
+      const fulfillmentSource = item.fulfillmentSource || 'gdc_inventory';
+      if (fulfillmentSource === 'gdc_inventory') {
+        current.gdcQty += itemQty;
+      } else if (fulfillmentSource === 'platinum_dealer_inventory' || fulfillmentSource === 'platinum_dealer_fulfillment') {
+        current.dealerQty += itemQty;
+      } else if (fulfillmentSource === 'direct') {
+        current.directQty += itemQty;
+      }
 
       // Check if ETA/delivery in next 7 days
       const etaDate = item.etaToUsPort || item.expectedDelivery;
@@ -545,11 +683,25 @@ export async function getCustomerCommitments(filters?: OperationsFilters): Promi
 
   // Convert to array
   const result: CustomerCommitment[] = [];
+
+  // Add customer entries
   customerMap.forEach((val) => {
     result.push({
       ...val,
-      // Fulfillment breakdown (keep as 0 for now - can be enhanced later)
-      gdcQty: 0,
+      // Fulfillment breakdown from tracked values
+      gdcQty: val.gdcQty,
+      dealerInventoryQty: val.dealerQty,
+      dealerFulfillmentQty: 0,
+      manufacturerDirectQty: val.directQty,
+    });
+  });
+
+  // Add dealer entries (GDC/DealerName format)
+  dealerMap.forEach((val) => {
+    result.push({
+      ...val,
+      // Fulfillment breakdown - GDC provides the qty to dealer
+      gdcQty: val.totalQty,  // GDC's qty (72)
       dealerInventoryQty: 0,
       dealerFulfillmentQty: 0,
       manufacturerDirectQty: 0,

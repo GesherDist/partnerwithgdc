@@ -16,6 +16,15 @@ export type InvoiceStatus =
   | 'overdue'
   | 'cancelled';
 
+export type InvoiceType = 'customer' | 'commission';
+
+export const INVOICE_TYPES: InvoiceType[] = ['customer', 'commission'];
+
+export const INVOICE_TYPE_LABELS: Record<InvoiceType, string> = {
+  customer: 'Customer Invoice',
+  commission: 'Commission Invoice',
+};
+
 export const INVOICE_STATUSES: InvoiceStatus[] = [
   'draft',
   'sent',
@@ -65,12 +74,21 @@ export interface Invoice {
   invoiceNumber: string;
   invoiceDate: Date;
   dueDate: Date | null;
-  customerId: string;
+  customerId: string | null;
+  supplierId: string | null;
   salesOrderId: string | null;
   shipmentId: string | null;
   currencyCode: string;
   status: InvoiceStatus;
+  invoiceType: InvoiceType;
   paymentTerms: string | null;
+
+  // Sales Rep
+  salesRepId: string | null;
+  salesRepName: string | null;
+
+  // Delivery
+  deliveryDate: Date | null;
 
   // Billing Address (denormalized)
   billingAddressStreet: string | null;
@@ -171,6 +189,13 @@ export interface CustomerSummary {
   name: string;
   email: string | null;
   phone: string | null;
+  // Address fields for billing address fallback
+  address1: string | null;
+  address2: string | null;
+  city: string | null;
+  state: string | null;
+  zip: string | null;
+  country: string | null;
 }
 
 export interface SalesOrderSummary {
@@ -226,7 +251,11 @@ export interface CreateInvoiceDTO {
   shipmentId?: string | null;
   currencyCode?: string;
   status?: InvoiceStatus;
+  invoiceType?: InvoiceType;
   paymentTerms?: string | null;
+  salesRepId?: string | null;
+  salesRepName?: string | null;
+  deliveryDate?: Date | null;
   billingAddress: AddressDTO;
   items: CreateInvoiceItemDTO[];
   customerNotes?: string | null;
@@ -238,7 +267,12 @@ export interface UpdateInvoiceDTO {
   dueDate?: Date | null;
   customerId?: string;
   currencyCode?: string;
+  status?: InvoiceStatus;
+  invoiceType?: InvoiceType;
   paymentTerms?: string | null;
+  salesRepId?: string | null;
+  salesRepName?: string | null;
+  deliveryDate?: Date | null;
   billingAddress?: AddressDTO;
   customerNotes?: string | null;
   internalNotes?: string | null;
@@ -279,11 +313,15 @@ export interface InvoiceListItem {
   customerName: string;
   invoiceDate: string;
   dueDate: string | null;
+  deliveryDate: string | null;
   status: InvoiceStatus;
+  invoiceType: InvoiceType;
+  salesRepName: string | null;
   grandTotal: number; // cents
   amountPaid: number; // cents
   balanceDue: number; // cents
   currencyCode: string;
+  quickbooksInvoiceId: string | null;
   itemCount: number;
   createdAt: Date;
 }

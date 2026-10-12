@@ -72,7 +72,7 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
 
   // Pagination state
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(20);
 
   // Sorting state
   type SortColumn = 'no' | 'soNumber' | 'customerPoNumber' | 'totalQty' | 'customer' | 'supplierName' | 'etaToUsPort' | 'confirmedEta' | 'expectedDelivery' | 'status';

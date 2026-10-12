@@ -115,7 +115,7 @@ class CustomerRepositoryImpl {
 
     const offset = (page - 1) * limit;
 
-    // Build query
+    // Build query - include customer_contacts for fallback email/phone
     let query = db
       .from('customers')
       .select(
@@ -132,7 +132,12 @@ class CustomerRepositoryImpl {
         credit_status,
         credit_limit,
         open_balance,
-        created_at
+        created_at,
+        customer_contacts (
+          email,
+          phone,
+          contact_type
+        )
       `,
         { count: 'exact' }
       )
@@ -424,11 +429,23 @@ class CustomerRepositoryImpl {
 
   /**
    * Get customers for dropdown/select
+   * Includes fallback to customer contacts' email/phone if customer's own info is empty
    */
   async findForDropdown(): Promise<CustomerDropdownItem[]> {
     const { data, error } = await db
       .from('customers')
-      .select('id, customer_code, name, email, phone')
+      .select(`
+        id,
+        customer_code,
+        name,
+        email,
+        phone,
+        customer_contacts (
+          email,
+          phone,
+          contact_type
+        )
+      `)
       .eq('status', 'active')
       .is('deleted_at', null)
       .neq('name', 'Company Legal Name') // Exclude placeholder record
@@ -438,13 +455,49 @@ class CustomerRepositoryImpl {
       throw new Error(`Failed to fetch customers for dropdown: ${error.message}`);
     }
 
-    return (data || []).map((row) => ({
-      id: row.id,
-      code: row.customer_code,
-      name: row.name,
-      email: row.email,
-      phone: row.phone,
-    }));
+    return (data || []).map((row) => {
+      // Fallback to contact info if customer's own info is empty
+      let fallbackEmail: string | null = null;
+      let fallbackPhone: string | null = null;
+
+      const contacts = row.customer_contacts as Array<{
+        email: string | null;
+        phone: string | null;
+        contact_type: string;
+      }> | null;
+
+      if (contacts && contacts.length > 0) {
+        const typePriority: Record<string, number> = {
+          purchasing: 1,
+          accounts_payable: 2,
+          receiving: 3,
+        };
+
+        const sortedContacts = [...contacts].sort((a, b) => {
+          const priorityA = typePriority[a.contact_type] ?? 99;
+          const priorityB = typePriority[b.contact_type] ?? 99;
+          return priorityA - priorityB;
+        });
+
+        for (const contact of sortedContacts) {
+          if (!fallbackEmail && contact.email) {
+            fallbackEmail = contact.email;
+          }
+          if (!fallbackPhone && contact.phone) {
+            fallbackPhone = contact.phone;
+          }
+          if (fallbackEmail && fallbackPhone) {break;}
+        }
+      }
+
+      return {
+        id: row.id,
+        code: row.customer_code,
+        name: row.name,
+        email: row.email || fallbackEmail,
+        phone: row.phone || fallbackPhone,
+      };
+    });
   }
 
   // ==========================================
@@ -819,13 +872,49 @@ class CustomerRepositoryImpl {
     credit_limit: number;
     open_balance: number;
     created_at: string;
+    customer_contacts?: Array<{
+      email: string | null;
+      phone: string | null;
+      contact_type: string;
+    }> | null;
   }): CustomerListItem {
+    // Fallback to first contact's email/phone if customer's own info is empty
+    // Priority order: purchasing > accounts_payable > receiving
+    let fallbackEmail: string | null = null;
+    let fallbackPhone: string | null = null;
+
+    if (data.customer_contacts && data.customer_contacts.length > 0) {
+      // Sort contacts by type priority
+      const typePriority: Record<string, number> = {
+        purchasing: 1,
+        accounts_payable: 2,
+        receiving: 3,
+      };
+
+      const sortedContacts = [...data.customer_contacts].sort((a, b) => {
+        const priorityA = typePriority[a.contact_type] ?? 99;
+        const priorityB = typePriority[b.contact_type] ?? 99;
+        return priorityA - priorityB;
+      });
+
+      // Find first contact with email/phone
+      for (const contact of sortedContacts) {
+        if (!fallbackEmail && contact.email) {
+          fallbackEmail = contact.email;
+        }
+        if (!fallbackPhone && contact.phone) {
+          fallbackPhone = contact.phone;
+        }
+        if (fallbackEmail && fallbackPhone) {break;}
+      }
+    }
+
     return {
       id: data.id,
       customerCode: data.customer_code,
       name: data.name,
-      email: data.email,
-      phone: data.phone,
+      email: data.email || fallbackEmail,
+      phone: data.phone || fallbackPhone,
       city: data.city,
       state: data.state,
       channel: data.channel as CustomerListItem['channel'],
