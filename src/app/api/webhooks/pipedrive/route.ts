@@ -169,14 +169,23 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({
-      success: result.success,
-      action: result.action,
-      entityType: result.entityType,
-      entityId: result.entityId,
-      message: result.message,
-      duration: `${duration}ms`,
-    });
+    // A failed deal event (e.g. Won → ERP quote hit a network or DB error)
+    // answers 5xx so Pipedrive redelivers it; the key was released above.
+    // Person/note failures only mirror data into Gesher leads, so they stay
+    // 200: a persistent bug there must not get the whole webhook banned.
+    const retry = !result.success && payload.meta.object === 'deal';
+
+    return NextResponse.json(
+      {
+        success: result.success,
+        action: result.action,
+        entityType: result.entityType,
+        entityId: result.entityId,
+        message: result.message,
+        duration: `${duration}ms`,
+      },
+      retry ? { status: 503 } : undefined
+    );
   } catch (error) {
     console.error('[Pipedrive Webhook] Error:', error);
 

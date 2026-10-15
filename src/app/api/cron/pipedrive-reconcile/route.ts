@@ -3,16 +3,22 @@
  *
  * GET/POST /api/cron/pipedrive-reconcile[?days=30]
  *
- * Retries ERP sales order number write-backs: every quote linked to a
- * Pipedrive deal and converted in the last `days` days must show its SO
- * number on the deal. Only writes when the deal is missing it, so it is safe
- * to run repeatedly. Creates no quotes and no sales orders.
+ * 1. Retries the Won → ERP quote flow for deals whose webhook failed in the
+ *    last `days` days (never for deals without a failed webhook, so a deal
+ *    handled by hand gets no second quote). Creates no sales orders.
+ * 2. Retries ERP sales order number write-backs: every quote linked to a
+ *    Pipedrive deal and converted in the last `days` days must show its SO
+ *    number on the deal. Only writes when the deal is missing it.
+ * Both steps are safe to run repeatedly.
  *
  * Authentication: `Authorization: Bearer <CRON_SECRET>`, fail closed.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { reconcileSalesOrderWriteBacks } from '@/features/pipedrive/gdc/deal-erp.service';
+import {
+  reconcileFailedWonDeals,
+  reconcileSalesOrderWriteBacks,
+} from '@/features/pipedrive/gdc/deal-erp.service';
 import { isCronAuthorized } from '@/features/pipedrive/lib/cron-auth';
 
 export const maxDuration = 300;
@@ -25,6 +31,8 @@ async function handle(request: NextRequest) {
   const days = Number(request.nextUrl.searchParams.get('days') ?? '30');
   const sinceDays = Number.isInteger(days) && days > 0 && days <= 365 ? days : 30;
   try {
+    // Won deals whose ERP quote failed first, so their SO numbers can follow later
+    const wonDeals = await reconcileFailedWonDeals({ sinceDays });
     const result = await reconcileSalesOrderWriteBacks({ sinceDays });
     return NextResponse.json({
       success: true,
@@ -32,6 +40,11 @@ async function handle(request: NextRequest) {
       checked: result.checked,
       written: result.written,
       failed: result.failed.length,
+      wonDeals: {
+        checked: wonDeals.checked,
+        quotesCreated: wonDeals.created,
+        failed: wonDeals.failed.length,
+      },
     });
   } catch (error) {
     console.error('[Pipedrive Reconcile] Failed:', error);

@@ -268,6 +268,59 @@ export async function addDealNoteOnce(connectionId: string, dealId: number, text
   );
 }
 
+/** Default pipeline per connection, cached briefly (pipelines rarely change) */
+const defaultPipelineCache = new Map<string, { id: number | null; at: number }>();
+const DEFAULT_PIPELINE_TTL_MS = 10 * 60_000;
+
+/**
+ * Pipedrive's default pipeline: the first one in the pipeline order. A lead
+ * converted to a deal in Pipedrive lands there unless the rep picks another.
+ */
+async function getDefaultPipelineId(connectionId: string): Promise<number | null> {
+  const cached = defaultPipelineCache.get(connectionId);
+  if (cached && Date.now() - cached.at < DEFAULT_PIPELINE_TTL_MS) {
+    return cached.id;
+  }
+  const { items } = await pipedriveProvider.fetchAllV2<Record<string, unknown>>(
+    connectionId,
+    'pipelines',
+    undefined,
+    runPipedriveRequest
+  );
+  const live = items
+    .map((p) => ({ id: Number(p.id), order: Number(p.order_nr ?? Number.MAX_SAFE_INTEGER), deleted: p.is_deleted === true }))
+    .filter((p) => Number.isInteger(p.id) && p.id > 0 && !p.deleted)
+    .sort((a, b) => a.order - b.order || a.id - b.id);
+  const id = live[0]?.id ?? null;
+  defaultPipelineCache.set(connectionId, { id, at: Date.now() });
+  return id;
+}
+
+/**
+ * Spec: one pipeline. A NEW open deal created in Pipedrive's default pipeline
+ * (typically a lead converted in Pipedrive) is moved to GDC Sales
+ * "Lead / Prospect". Deals in any other pipeline (e.g. a trade-show pipeline)
+ * are left alone. Called only for added.deal events. Returns true when moved.
+ */
+export async function moveDealToGdcPipeline(
+  connectionId: string,
+  config: GdcResolvedConfig,
+  deal: DealRecord
+): Promise<boolean> {
+  if (deal.status !== 'open' || deal.pipelineId === null || deal.pipelineId === config.pipelineId) {
+    return false;
+  }
+  const defaultPipelineId = await getDefaultPipelineId(connectionId);
+  if (defaultPipelineId === null || deal.pipelineId !== defaultPipelineId) {
+    return false;
+  }
+  await patchDeal(connectionId, deal.id, {
+    pipeline_id: config.pipelineId,
+    stage_id: config.stageIds.lead_prospect,
+  });
+  return true;
+}
+
 /**
  * Move a GDC deal forward to `target`. Never moves a deal backwards, never
  * touches deals outside the GDC Sales pipeline. Returns true when moved.
@@ -720,6 +773,61 @@ export async function reconcileSalesOrderWriteBacks(
     if (outcome.status === 'written') {result.written++;}
     if (outcome.status === 'failed' || outcome.status === 'not_connected') {
       result.failed.push({ quoteId: String(order.quote_id), message: outcome.message });
+    }
+  }
+  return result;
+}
+
+export interface WonDealReconcileResult {
+  checked: number;
+  created: number;
+  failed: Array<{ dealId: number; message: string }>;
+}
+
+/**
+ * Retries the Won → ERP quote flow for deals whose webhook processing failed
+ * (network/API/DB error) in the last `sinceDays` days. Only deals with a
+ * failed webhook in pipedrive_sync_log are considered, so a deal handled by
+ * hand in the ERP is never given a second quote. handleWonDeal itself skips
+ * deals that are not won, outside GDC Sales, or already have a live quote.
+ */
+export async function reconcileFailedWonDeals(
+  options: { sinceDays?: number; now?: Date } = {}
+): Promise<WonDealReconcileResult> {
+  const since = new Date((options.now ?? new Date()).getTime() - (options.sinceDays ?? 30) * 86_400_000).toISOString();
+  const result: WonDealReconcileResult = { checked: 0, created: 0, failed: [] };
+
+  const { data: logs, error } = await db
+    .from('pipedrive_sync_log')
+    .select('pipedrive_id')
+    .eq('event_type', 'webhook')
+    .eq('entity_type', 'deal')
+    .eq('status', 'failed')
+    // Only failures of a won deal (the stored payload is the normalized v1 shape)
+    .eq('payload->current->>status', 'won')
+    .not('pipedrive_id', 'is', null)
+    .gte('created_at', since)
+    .limit(1000);
+  if (error) {
+    throw new Error(`Failed to load failed deal webhooks: ${error.message}`);
+  }
+
+  const dealIds = [...new Set((logs ?? []).map((l) => Number(l.pipedrive_id)).filter((id) => id > 0))];
+  for (const dealId of dealIds) {
+    try {
+      // Cheap local check first: most failed deals got their quote on a redelivery
+      if (await findLiveQuoteForDeal(dealId)) {
+        continue;
+      }
+      result.checked++;
+      const outcome = await handleWonDeal(dealId);
+      if (outcome.status === 'quote_created') {
+        result.created++;
+      } else if (outcome.status === 'quote_failed' || outcome.status === 'not_connected') {
+        result.failed.push({ dealId, message: outcome.message });
+      }
+    } catch (err) {
+      result.failed.push({ dealId, message: err instanceof Error ? err.message : 'Unknown error' });
     }
   }
   return result;

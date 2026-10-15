@@ -82,6 +82,7 @@ interface ProductRef {
   rim_size: string | null;
   tire_size: string | null;
   name: string | null;
+  item_type: string | null;
 }
 
 // ============================================
@@ -148,7 +149,7 @@ export async function buildPurchaseHistory(customerId: string): Promise<Purchase
   const orders = await fetchAllRows<OrderRow>((from, to) =>
     db
       .from('sales_orders')
-      .select('order_number, order_date, status, sales_order_items(sku, quantity, unit_price, discount_percent, products(rim_size, tire_size, name))')
+      .select('order_number, order_date, status, sales_order_items(sku, quantity, unit_price, discount_percent, products(rim_size, tire_size, name, item_type))')
       .eq('customer_id', customerId)
       .in('status', [...PURCHASE_HISTORY_ORDER_STATUSES])
       .is('deleted_at', null)
@@ -173,6 +174,10 @@ export async function buildPurchaseHistory(customerId: string): Promise<Purchase
     for (const item of order.sales_order_items ?? []) {
       const quantity = item.quantity ?? 0;
       const product = Array.isArray(item.products) ? item.products[0] : item.products;
+      // Service and non-inventory lines (e.g. Sales Commission, freight) are not tires
+      if (product?.item_type && product.item_type !== 'inventory') {
+        continue;
+      }
       const size = classifyTireSize({
         rimSize: product?.rim_size,
         tireSize: product?.tire_size,

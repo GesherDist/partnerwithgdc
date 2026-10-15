@@ -254,7 +254,7 @@ function buildOrgBody(config: GdcResolvedConfig, input: OrganizationInput, exist
     }
   }
 
-  // Address and owner are only filled when missing, so rep edits in Pipedrive win
+  // Address is only filled when missing, so rep edits in Pipedrive win
   const address = input.address;
   if (address && (!existing || !existing.hasAddress)) {
     const parts = [address.street, address.city, address.state, address.postalCode, address.country]
@@ -272,7 +272,10 @@ function buildOrgBody(config: GdcResolvedConfig, input: OrganizationInput, exist
       };
     }
   }
-  if (input.ownerId && (!existing || !existing.ownerId)) {
+  // Owner (assigned rep) comes only from an explicit rep in the import CSV.
+  // Every Pipedrive org already has an owner (its creator), so "only when
+  // missing" would never apply: the given rep is written whenever it differs.
+  if (input.ownerId && input.ownerId !== existing?.ownerId) {
     body.owner_id = input.ownerId;
   }
 

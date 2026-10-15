@@ -14,7 +14,7 @@
 
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { Plus, RefreshCw, Download } from 'lucide-react';
+import { Plus, RefreshCw } from 'lucide-react';
 
 import { Button } from '@/shared/components/ui/button';
 import { PageHeader } from '@/shared/components/layout/PageHeader';
@@ -35,7 +35,6 @@ import {
 } from '@/features/customers';
 import type { CustomerTableRow, CustomerStatus } from '@/features/customers/types';
 import { CUSTOMER_STATUS_LABELS } from '@/features/customers/types';
-import { SyncFromPipedriveDialog } from '@/features/pipedrive/components';
 
 // ============================================
 // COMPONENT
@@ -71,7 +70,6 @@ export function CustomersPageContent() {
   const [isCreateDrawerOpen, setIsCreateDrawerOpen] = useState(false);
   const [editCustomerId, setEditCustomerId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<CustomerStatus | 'all'>('all');
-  const [isSyncDialogOpen, setIsSyncDialogOpen] = useState(false);
 
   // Pagination state
   const [page, setPage] = useState(1);
@@ -147,18 +145,6 @@ export function CustomersPageContent() {
     setStatusFilter(value as CustomerStatus | 'all');
   };
 
-  const handleSyncClick = () => {
-    setIsSyncDialogOpen(true);
-  };
-
-  const handleSyncClose = () => {
-    setIsSyncDialogOpen(false);
-  };
-
-  const handleSyncSuccess = () => {
-    refetchCustomers();
-  };
-
   // ----------------------------------------
   // RENDER
   // ----------------------------------------
@@ -179,13 +165,9 @@ export function CustomersPageContent() {
             >
               <RefreshCw className={`h-4 w-4 ${isCustomersLoading ? 'animate-spin' : ''}`} />
             </Button>
-            <Button
-              variant="outline"
-              onClick={handleSyncClick}
-            >
-              <Download className="mr-2 h-4 w-4" />
-              Sync from Pipedrive
-            </Button>
+            {/* "Sync from Pipedrive" removed: it imported Pipedrive leads into
+                Gesher, the opposite of the GDC flow (customers go ERP → Pipedrive
+                via "Sync to Pipedrive" on a customer and the CSV import). */}
             {canCreate && (
               <Button onClick={handleCreateClick}>
                 <Plus className="mr-2 h-4 w-4" />
@@ -244,14 +226,6 @@ export function CustomersPageContent() {
         open={!!editCustomerId}
         onClose={handleEditDrawerClose}
         onSuccess={handleEditSuccess}
-      />
-
-      {/* Sync from Pipedrive Dialog */}
-      <SyncFromPipedriveDialog
-        open={isSyncDialogOpen}
-        onClose={handleSyncClose}
-        onSuccess={handleSyncSuccess}
-        syncType="customers"
       />
     </div>
   );

@@ -115,6 +115,12 @@ interface ProcessResult {
 // WEBHOOK SERVICE
 // ============================================
 
+/**
+ * Old behaviour: every Pipedrive person became a Gesher lead. Off for the GDC
+ * flow (customers go ERP → Pipedrive); set to true to restore it.
+ */
+const MIRROR_PIPEDRIVE_PEOPLE_AS_LEADS = false;
+
 class PipedriveWebhookService {
   /**
    * Process incoming webhook event
@@ -178,9 +184,21 @@ class PipedriveWebhookService {
       };
     }
 
+    // GDC flow: people live in Pipedrive and customers flow ERP → Pipedrive,
+    // so a Pipedrive person no longer becomes a Gesher lead on its own (the
+    // customer import would otherwise fill Leads with customers' contacts).
+    // Leads that already exist in Gesher are still kept up to date.
     switch (action) {
       case 'added':
-        return await this.createLeadFromPerson(personData);
+        if (MIRROR_PIPEDRIVE_PEOPLE_AS_LEADS) {
+          return await this.createLeadFromPerson(personData);
+        }
+        return {
+          success: true,
+          action: 'skipped',
+          entityType: 'lead',
+          message: 'Pipedrive people are not mirrored as Gesher leads',
+        };
       case 'updated':
         return await this.updateLeadFromPerson(personData);
       case 'deleted':
@@ -252,8 +270,16 @@ class PipedriveWebhookService {
     const existingLead = await leadsRepository.getByPipedrivePersonId(person.id);
 
     if (!existingLead) {
-      // Lead doesn't exist, create it
-      return await this.createLeadFromPerson(person);
+      if (MIRROR_PIPEDRIVE_PEOPLE_AS_LEADS) {
+        return await this.createLeadFromPerson(person);
+      }
+      // Only leads already in Gesher are updated (see handlePersonEvent)
+      return {
+        success: true,
+        action: 'skipped',
+        entityType: 'lead',
+        message: 'No Gesher lead for this Pipedrive person',
+      };
     }
 
     // Extract email and phone
@@ -327,6 +353,9 @@ class PipedriveWebhookService {
 
     switch (action) {
       case 'added':
+        // Only a genuinely new deal may be moved into GDC Sales; the update
+        // path also falls back to handleDealAdded and must never move deals
+        await this.moveNewDealToGdcPipeline(dealData);
         return await this.handleDealAdded(dealData);
       case 'updated':
         return await this.handleDealUpdated(dealData, previousData);
@@ -396,6 +425,29 @@ class PipedriveWebhookService {
       entityId: lead.id,
       message: `Created lead from deal: ${deal.title}`,
     };
+  }
+
+  /**
+   * New open deals in Pipedrive's default pipeline (a lead converted in
+   * Pipedrive lands there) are moved to GDC Sales. Other pipelines are left
+   * alone. Failures are logged only, so the lead sync still runs.
+   */
+  private async moveNewDealToGdcPipeline(deal: PipedriveDealData): Promise<void> {
+    try {
+      const { getActivePipedriveConnectionId } = await import('../gdc/settings');
+      const { getGdcConfig } = await import('../gdc/setup.service');
+      const { moveDealToGdcPipeline, parseDeal } = await import('../gdc/deal-erp.service');
+
+      const connectionId = await getActivePipedriveConnectionId();
+      const record = parseDeal(deal);
+      if (!connectionId || !record) {return;}
+      const config = await getGdcConfig(connectionId);
+      if (await moveDealToGdcPipeline(connectionId, config, record)) {
+        console.log(`[PipedriveWebhook] Deal ${record.id} moved to the GDC Sales pipeline`);
+      }
+    } catch (error) {
+      console.error('[PipedriveWebhook] Could not move deal to GDC Sales:', error);
+    }
   }
 
   private async handleDealUpdated(

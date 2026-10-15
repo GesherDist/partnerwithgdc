@@ -97,10 +97,12 @@ class DealsService {
    *
    * Workflow:
    * 1. Mark deal as won
-   * 2. If deal has a linked lead, create customer from lead info
-   * 3. Link deal to customer
-   * 4. Mark lead as fully converted (to customer)
-   * 5. Sync to Pipedrive
+   * 2. Deal exists in Pipedrive: only push "won". Pipedrive's webhook then runs
+   *    the GDC flow (ERP quote for the ERP customer linked to the deal's
+   *    organization). No customer is created here - one made from the lead
+   *    would not be linked to the organization and would block that flow.
+   * 3. Gesher-only deal: create the customer from the linked lead, link it and
+   *    mark the lead converted (nothing is created in Pipedrive).
    */
   async markAsWon(id: string, userId?: string): Promise<Deal> {
     // Get the deal first to check if it has a lead
@@ -120,8 +122,10 @@ class DealsService {
       userId
     );
 
-    // If deal has a linked lead and no customer yet, create customer from lead
-    if (existingDeal.leadId && !existingDeal.customerId) {
+    const inPipedrive = Boolean(existingDeal.pipedriveDealId);
+
+    // Gesher-only deal with a linked lead and no customer yet: create customer from lead
+    if (!inPipedrive && existingDeal.leadId && !existingDeal.customerId) {
       try {
         const lead = await leadsRepository.getById(existingDeal.leadId);
         if (lead) {
@@ -159,21 +163,10 @@ class DealsService {
           await leadsRepository.markAsConverted(lead.id, customer.id, userId);
           console.log(`[DealsService] Lead ${lead.id} marked as converted to customer ${customer.id}`);
 
-          // Sync customer creation to Pipedrive (async, non-blocking)
-          pipedrivePushService.convertLeadInPipedrive(lead.id, {
-            name: lead.name,
-            company: lead.company,
-            email: lead.email,
-            phone: lead.phone,
-            dealTitle: lead.dealTitle,
-            dealValue: lead.dealValue,
-            pipedriveLeadId: lead.pipedriveLeadId,
-            pipedriveDealId: lead.pipedriveDealId || deal.pipedriveDealId,
-            pipedrivePersonId: lead.pipedrivePersonId,
-            pipedriveOrgId: lead.pipedriveOrgId,
-          }).catch((error) => {
-            console.error('[DealsService] Failed to sync lead conversion to Pipedrive:', error);
-          });
+          // Not pushed to Pipedrive: convertLeadInPipedrive would create an
+          // already-won deal outside the GDC Sales pipeline (no ERP quote,
+          // missing from the rep report). Customers reach Pipedrive through
+          // the ERP → Pipedrive customer sync instead.
         }
       } catch (customerError) {
         // Log but don't fail the deal won - customer creation is secondary
@@ -182,9 +175,11 @@ class DealsService {
     }
 
     // Push status change to Pipedrive (async, don't block)
-    pipedrivePushService.pushDealStatus(id, 'won').catch((error) => {
-      console.error('[DealsService] Failed to push deal won status to Pipedrive:', error);
-    });
+    if (inPipedrive) {
+      pipedrivePushService.pushDealStatus(id, 'won').catch((error) => {
+        console.error('[DealsService] Failed to push deal won status to Pipedrive:', error);
+      });
+    }
 
     return deal;
   }
