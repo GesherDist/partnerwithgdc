@@ -1,5 +1,7 @@
 'use client';
 
+import { useState } from 'react';
+import { toast } from 'sonner';
 import {
   Sheet,
   SheetContent,
@@ -20,9 +22,11 @@ import {
   User,
   FileText,
   Clock,
+  RefreshCw,
 } from 'lucide-react';
 import { cn } from '@/shared/lib/utils';
 import { useShipment } from '../hooks/useShipment';
+import { trackShipmentNow } from '../actions';
 import { SHIPMENT_STATUS_COLORS, SHIPMENT_STATUS_LABELS } from '../types';
 import type { ViewShipmentDrawerProps } from '../types';
 
@@ -40,8 +44,28 @@ export function ViewShipmentDrawer({
   onClose,
   shipmentId,
   onEdit,
+  canTrack,
 }: ViewShipmentDrawerProps) {
-  const { data: shipment, isLoading } = useShipment(open ? shipmentId : null);
+  const { data: shipment, isLoading, refetch } = useShipment(open ? shipmentId : null);
+  const [isTracking, setIsTracking] = useState(false);
+
+  const handleTrackNow = async () => {
+    if (!shipment) {return;}
+    setIsTracking(true);
+    try {
+      const result = await trackShipmentNow(shipment.id);
+      if (result.success) {
+        toast.success('Tracking updated', { description: result.message });
+        await refetch();
+      } else {
+        toast.error('Tracking failed', { description: result.error });
+      }
+    } catch {
+      toast.error('Tracking failed');
+    } finally {
+      setIsTracking(false);
+    }
+  };
 
   return (
     <Sheet open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
@@ -183,6 +207,18 @@ export function ViewShipmentDrawer({
                 <div className="bg-muted/30 rounded-md p-2">
                   <p className="text-muted-foreground text-xs mb-1">Container Number</p>
                   <p className="font-mono font-medium">{shipment.containerNumber || '-'}</p>
+                  {canTrack && shipment.containerNumber && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-2 h-7 text-xs"
+                      onClick={handleTrackNow}
+                      disabled={isTracking}
+                    >
+                      <RefreshCw className={cn('mr-1 h-3 w-3', isTracking && 'animate-spin')} />
+                      {isTracking ? 'Tracking...' : 'Track now'}
+                    </Button>
+                  )}
                 </div>
                 <div className="bg-muted/30 rounded-md p-2">
                   <p className="text-muted-foreground text-xs mb-1">Bill of Lading</p>

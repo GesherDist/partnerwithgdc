@@ -138,6 +138,7 @@ export interface ImmediateAttentionItem {
   // Last Updated fields (Client requirement: show when tracking was last updated)
   lastUpdated?: string | null;    // Timestamp when tracking was last updated
   lastUpdatedSource?: string | null; // Source of last update: 'CMA CGM API' or 'Email'
+  containerNumber?: string | null; // Container tracked via CMA CGM
   // 🆕 NEW: Fulfillment allocation fields
   fulfillmentSource: FulfillmentSource | null;       // Fulfillment source for this item
   allocatedToDealerName: string | null;              // Dealer name if allocated
@@ -287,6 +288,7 @@ export interface GDCInventoryItem {
   poNumber: string | null;    // Purchase Order Number
   soNumber: string | null;    // Linked SO Number (if any)
   shipmentNumber: string | null;  // Shipment number (e.g., SO2600063)
+  containerNumber?: string | null; // Container on the linked shipment (CMA CGM tracking)
   customerPoNumber: string | null; // Customer PO Number (from sales_orders.customer_po_number)
   orderSeries: string;        // GDC 1, GDC 2, GDC 3
   items: ShipmentItemDetail[];

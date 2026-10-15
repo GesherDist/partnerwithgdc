@@ -521,4 +521,6 @@ export interface ViewShipmentDrawerProps {
   onClose: () => void;
   shipmentId: string | null;
   onEdit?: (shipment: ShipmentListItem | ShipmentWithItems) => void;
+  /** Shows "Track now" (CMA CGM) when the shipment has a container number */
+  canTrack?: boolean;
 }

@@ -73,6 +73,8 @@ interface EditableShipment {
   qtyDelivered?: number;                        // Qty Delivered
   outstandingQty?: number;                      // Outstanding Qty
   totalQty?: number;                            // Total Qty
+  containerNumber?: string | null;              // Container (CMA CGM tracking)
+  hasShipment?: boolean;                        // Row has a shipment that can hold a container
 }
 
 // Empty data structure for initial state
@@ -251,6 +253,8 @@ export default function OperationsPage() {
       actionRequired: item.actionRequired,
       confirmedEta: item.etaPort,
       totalQty: item.qty,
+      containerNumber: item.containerNumber || null,
+      hasShipment: true, // Immediate Attention rows are shipments
     });
     setEditSource('shipment');
     setEditDialogOpen(true);
@@ -303,6 +307,9 @@ export default function OperationsPage() {
       qtyDelivered: item.qtyDelivered || 0,                   // Qty Delivered ← NEW
       outstandingQty: item.outstandingQty || 0,               // Outstanding PO Qty ← NEW
       totalQty: item.totalQty,
+      containerNumber: item.containerNumber || null,
+      // The save looks the shipment up by PO id, so only PO rows with a shipment can hold a container
+      hasShipment: Boolean(item.poNumber && item.shipmentNumber),
     });
 
     // Determine edit source based on order series

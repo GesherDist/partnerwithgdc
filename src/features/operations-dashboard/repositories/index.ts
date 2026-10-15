@@ -74,6 +74,19 @@ function mapLoadStatus(dbStatus: string | null): ShipmentStatus {
 // - Committed Customer = Supplier Schedule (with Load#) + GDC1 (status = SOLD)
 // ============================================
 
+/**
+ * Delivered according to any source: the shipment status (manual), the
+ * operations load status, or the tracking status written by CMA CGM and
+ * shipping emails.
+ */
+function isShipmentDelivered(s: {
+  status?: string | null;
+  load_status?: string | null;
+  tracking_status?: string | null;
+}): boolean {
+  return s.status === 'delivered' || s.load_status === 'delivered' || s.tracking_status === 'delivered';
+}
+
 export async function getOperationsStats(filters?: OperationsFilters): Promise<OperationsStats> {
   const supabase = createAdminClient();
 
@@ -126,6 +139,7 @@ export async function getOperationsStats(filters?: OperationsFilters): Promise<O
       estimated_arrival,
       is_delayed,
       status,
+      tracking_status,
       sales_order_id,
       sales_orders(grand_total)
     `)
@@ -267,17 +281,17 @@ export async function getOperationsStats(filters?: OperationsFilters): Promise<O
   // Count shipments that are delayed (is_delayed=true OR auto-calculated)
   // ============================================
   const delayedShipmentsCount = shipments?.filter(s => {
+    // A delivered shipment is never delayed, whichever source marked it delivered
+    if (isShipmentDelivered(s)) {return false;}
+
     // Check manual flag first
-    if (s.is_delayed === true) return true;
+    if (s.is_delayed === true) {return true;}
 
     // Auto-detect: ETA passed but not delivered
     const etaDate = s.eta_port_tracking || s.eta_to_port || s.estimated_arrival;
-    if (!etaDate) return false;
+    if (!etaDate) {return false;}
 
-    const eta = new Date(etaDate);
-    const isDelivered = s.status === 'delivered';
-
-    return eta < now && !isDelivered;
+    return new Date(etaDate) < now;
   }).length || 0;
 
   return {
@@ -805,6 +819,7 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
       customer_expected_delivery,
       status,
       load_status,
+      tracking_status,
       action_required,
       is_delayed,
       estimated_arrival,
@@ -813,6 +828,7 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
       lfd_date,
       cma_cgm_last_sync,
       last_tracking_update,
+      container_number,
       ship_to_name,
       ship_to_address_street,
       ship_to_address_city,
@@ -920,7 +936,6 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
     const isThisWeek = etaPort ? (etaPort >= now && etaPort <= next7Days) : false;
     const isOverdue = s.is_delayed || (customerDue ? customerDue < now : false);
     const status = s.load_status as string;
-    const shipmentStatus = s.status as string;
 
     // LFD (Last Free Day) Alert calculations
     const lfdDateStr = s.lfd_date as string | null;
@@ -936,12 +951,14 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
     // Check if shipment is delivered (either status column)
     // status = shipment_status enum (pending, in_transit, delivered, failed)
     // load_status = load_status enum (available, sold, open, hold, in_transit, invoiced)
-    const isDelivered = shipmentStatus === 'delivered' || status === 'invoiced';
+    // tracking_status = set by CMA CGM / shipping emails (they never touch status)
+    const isDelivered = isShipmentDelivered(s) || status === 'invoiced';
 
     // Delay Detection:
     // 1. Manual flag: is_delayed = true (set by AI from Seaair emails or manually)
     // 2. Auto-detect: ETA passed but shipment is not delivered
-    const isManuallyDelayed = s.is_delayed === true;
+    // A delivered shipment is never delayed.
+    const isManuallyDelayed = s.is_delayed === true && !isDelivered;
     const isAutoDelayed = etaPort && etaPort < now && !isDelivered;
     const isDelayed = isManuallyDelayed || isAutoDelayed;
 
@@ -1004,6 +1021,7 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
         // Last Updated fields (Client requirement)
         lastUpdated: s.cma_cgm_last_sync || s.last_tracking_update || null,
         lastUpdatedSource: s.cma_cgm_last_sync ? 'CMA CGM API' : (s.last_tracking_update ? 'Email' : null),
+        containerNumber: s.container_number || null,
         // 🆕 NEW: Fulfillment allocation fields
         fulfillmentSource: primaryAllocation?.fulfillment_source as import('../types').FulfillmentSource || null,
         allocatedToDealerName: toOne(primaryAllocation?.platinum_dealer)?.dealer_name || null,
@@ -1849,7 +1867,8 @@ export async function getGDCInventoryByOrderSeries(
       customer_expected_delivery,
       actual_arrival,
       qty_delivered,
-      outstanding_qty
+      outstanding_qty,
+      container_number
     `)
     .in('purchase_order_id', poIds) : { data: [] };
 
@@ -1867,7 +1886,8 @@ export async function getGDCInventoryByOrderSeries(
       customer_expected_delivery,
       actual_arrival,
       qty_delivered,
-      outstanding_qty
+      outstanding_qty,
+      container_number
     `)
     .in('sales_order_id', soIdsForShipments) : { data: [] };
 
@@ -2144,6 +2164,7 @@ export async function getGDCInventoryByOrderSeries(
       poNumber: linkedSO?.customer_po_number || po.po_number,
       soNumber: linkedSO?.order_number || null,
       shipmentNumber: shipment?.shipment_number || null, // Shipment number (SO2600063)
+      containerNumber: shipment?.container_number || null,
       customerPoNumber: linkedSO?.customer_po_number || null, // Customer PO Number
       orderSeries: po.order_series,
       items: poItemsList.map(item => ({
@@ -2319,6 +2340,7 @@ export async function getGDCInventoryByOrderSeries(
       poNumber: null, // No PO for this SO
       soNumber: so.order_number,
       shipmentNumber: shipment?.shipment_number || null, // Shipment number (SO2600063)
+      containerNumber: shipment?.container_number || null,
       customerPoNumber: so.customer_po_number || null,
       orderSeries: so.order_series,
       items: soItemsList.map(item => ({

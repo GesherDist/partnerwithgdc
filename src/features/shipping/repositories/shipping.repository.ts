@@ -722,6 +722,19 @@ const TRACKING_TO_LOAD_STATUS: Record<string, string> = {
   exception: 'hold',
 };
 
+/** Action Required texts written by tracking automation (safe to replace) */
+const AUTO_ACTION_MESSAGES = new Set([
+  'PO Confirmed - Awaiting Shipping Details', // set by the supplier portal
+  'In Transit - Awaiting Delivery',
+  'Arrived at Port - Awaiting Customs',
+  'Customs Clearance in Progress',
+  'On Rail - En Route to Ramp',
+  'At Ramp - Ready for Pickup',
+  'Out for Delivery',
+  'Delivered',
+  'Exception - Requires Attention',
+]);
+
 /**
  * Update shipment load_status based on tracking status
  * This updates the status shown in Operations Dashboard
@@ -738,7 +751,7 @@ export async function updateShipmentLoadStatus(
   // Get current load_status for regression check
   const { data: current, error: fetchError } = await supabase
     .from('shipments')
-    .select('load_status')
+    .select('load_status, action_required')
     .eq('id', shipmentId)
     .single();
 
@@ -785,11 +798,16 @@ export async function updateShipmentLoadStatus(
       break;
   }
 
+  // Only replace Action Required when it is empty or one of our own messages;
+  // a note typed by the operations team must survive tracking updates.
+  const currentAction = current?.action_required?.trim() || '';
+  const canReplaceAction = !currentAction || AUTO_ACTION_MESSAGES.has(currentAction);
+
   const { error } = await supabase
     .from('shipments')
     .update({
       load_status: loadStatus,
-      action_required: actionRequired,
+      ...(canReplaceAction ? { action_required: actionRequired } : {}),
       updated_at: new Date().toISOString(),
     })
     .eq('id', shipmentId);

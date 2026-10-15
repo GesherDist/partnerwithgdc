@@ -221,12 +221,28 @@ export async function updateShipmentAction(
     return { success: false, error: 'Permission denied' };
   }
 
+  // Container numbers are matched exactly by the CMA CGM API
+  if (input.containerNumber) {
+    input = { ...input, containerNumber: input.containerNumber.replace(/\s+/g, '').toUpperCase() };
+  }
+
   // Get shipment details for notification
   const shipment = await service.getShipmentById(input.shipmentId);
 
   const result = await service.updateShipmentDetails(input, user.id);
 
   if (result.success) {
+    // A new or changed container is tracked right away. Tracking problems
+    // never fail the supplier's save.
+    if (input.containerNumber && input.containerNumber !== shipment?.containerNumber) {
+      try {
+        const { syncShipmentContainer } = await import('@/features/shipping/services');
+        await syncShipmentContainer(input.shipmentId);
+      } catch (trackError) {
+        console.error('[updateShipmentAction] Container tracking failed:', trackError);
+      }
+    }
+
     // Revalidate supplier portal pages
     revalidatePath('/supplier-portal');
     revalidatePath('/supplier-portal/shipments');

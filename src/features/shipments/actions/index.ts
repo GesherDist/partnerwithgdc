@@ -107,14 +107,55 @@ export async function updateShipment(id: string, data: UpdateShipmentInput) {
   if (!auth.ok) return auth.result;
 
   const userId = auth.user.id;
+
+  // Container numbers are matched exactly by the CMA CGM API
+  if (data.containerNumber) {
+    data = { ...data, containerNumber: data.containerNumber.replace(/\s+/g, '').toUpperCase() };
+  }
+  const before = data.containerNumber ? await shipmentService.getById(id) : null;
+
   const result = await shipmentService.update(id, data, userId);
 
   if (result.success) {
+    // A new or changed container number is tracked right away instead of
+    // waiting for the daily sync. Tracking problems never fail the save.
+    if (data.containerNumber && before?.data?.containerNumber !== data.containerNumber) {
+      try {
+        const { syncShipmentContainer } = await import('@/features/shipping/services');
+        await syncShipmentContainer(id);
+      } catch (error) {
+        console.error('[updateShipment] Container tracking failed:', error);
+      }
+    }
+
     revalidatePath('/shipments');
     revalidatePath(`/shipments/${id}`);
   }
 
   return result;
+}
+
+// ============================================
+// TRACK CONTAINER NOW (CMA CGM)
+// ============================================
+
+export async function trackShipmentNow(
+  id: string
+): Promise<{ success: true; message: string } | { success: false; error: string }> {
+  const auth = await authorize('shipments.track');
+  if (!auth.ok) {return { success: false, error: auth.result.error || 'Not allowed' };}
+
+  const { syncShipmentContainer } = await import('@/features/shipping/services');
+  const result = await syncShipmentContainer(id);
+
+  if (result.success) {
+    revalidatePath('/shipments');
+    revalidatePath('/operations');
+  }
+
+  return result.success
+    ? { success: true as const, message: result.message }
+    : { success: false as const, error: result.message };
 }
 
 // ============================================
@@ -276,4 +317,112 @@ export async function updateShipmentTrackingStatus(
     console.error('updateShipmentTrackingStatus error:', error);
     return { success: false, error: 'Failed to update shipment status' };
   }
+}
+
+// ============================================
+// CREATE SHIPMENT FROM PURCHASE ORDER
+// ============================================
+
+/**
+ * Shipments normally appear automatically when a PO is confirmed. These
+ * actions back the "Create Shipment" button for POs that ended up without
+ * one, reusing the same creation logic as the automatic flow.
+ */
+
+/** PO statuses that come before supplier confirmation or are closed */
+const PO_STATUSES_WITHOUT_SHIPMENT = ['draft', 'sent', 'cancelled'];
+
+export interface PurchaseOrderWithoutShipment {
+  id: string;
+  poNumber: string;
+  status: string;
+  orderDate: string | null;
+}
+
+export async function listPurchaseOrdersWithoutShipment(): Promise<
+  { success: true; data: PurchaseOrderWithoutShipment[] } | { success: false; error: string }
+> {
+  const auth = await authorize('shipments.create');
+  if (!auth.ok) {return { success: false, error: auth.result.error || 'Not allowed' };}
+
+  const [{ data: pos, error: poError }, { data: shipments, error: shipmentError }] = await Promise.all([
+    db
+      .from('purchase_orders')
+      .select('id, po_number, status, po_date')
+      .is('deleted_at', null)
+      .not('status', 'in', `(${PO_STATUSES_WITHOUT_SHIPMENT.join(',')})`)
+      .order('created_at', { ascending: false }),
+    db
+      .from('shipments')
+      .select('purchase_order_id')
+      .not('purchase_order_id', 'is', null)
+      .is('deleted_at', null),
+  ]);
+
+  if (poError || shipmentError) {
+    console.error('[listPurchaseOrdersWithoutShipment]', poError || shipmentError);
+    return { success: false, error: 'Failed to load purchase orders' };
+  }
+
+  const withShipment = new Set((shipments || []).map((s) => s.purchase_order_id));
+
+  return {
+    success: true,
+    data: (pos || [])
+      .filter((po) => !withShipment.has(po.id))
+      .map((po) => ({
+        id: po.id,
+        poNumber: po.po_number,
+        status: po.status,
+        orderDate: po.po_date,
+      })),
+  };
+}
+
+export async function createShipmentFromPurchaseOrder(
+  purchaseOrderId: string
+): Promise<{ success: true; shipmentId: string; shipmentNumber: string } | { success: false; error: string }> {
+  const auth = await authorize('shipments.create');
+  if (!auth.ok) {return { success: false, error: auth.result.error || 'Not allowed' };}
+
+  const { data: po } = await db
+    .from('purchase_orders')
+    .select('id, status')
+    .eq('id', purchaseOrderId)
+    .is('deleted_at', null)
+    .maybeSingle();
+
+  if (!po) {
+    return { success: false, error: 'Purchase order not found' };
+  }
+  if (PO_STATUSES_WITHOUT_SHIPMENT.includes(po.status)) {
+    return { success: false, error: 'The supplier must confirm this PO before it can ship' };
+  }
+
+  try {
+    const { purchaseOrderService } = await import('@/features/purchase-orders/services');
+    // Returns early (no duplicate) when the PO already has a shipment
+    await purchaseOrderService.createSupplierShipment(purchaseOrderId, auth.user.id);
+  } catch (error) {
+    console.error('[createShipmentFromPurchaseOrder]', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Failed to create shipment' };
+  }
+
+  const { data: shipment } = await db
+    .from('shipments')
+    .select('id, shipment_number')
+    .eq('purchase_order_id', purchaseOrderId)
+    .is('deleted_at', null)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!shipment) {
+    return { success: false, error: 'Shipment could not be created' };
+  }
+
+  revalidatePath('/shipments');
+  revalidatePath('/operations');
+
+  return { success: true, shipmentId: shipment.id, shipmentNumber: shipment.shipment_number };
 }

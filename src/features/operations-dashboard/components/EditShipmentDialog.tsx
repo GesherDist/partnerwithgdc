@@ -8,7 +8,7 @@
  */
 
 import { useState, useEffect, useTransition } from 'react';
-import { Loader2, Save, Truck, Package, FileText, Calendar } from 'lucide-react';
+import { Loader2, Save, Truck, Package, FileText, Calendar, Container } from 'lucide-react';
 
 import {
   Dialog,
@@ -52,6 +52,9 @@ interface ShipmentData {
   qtyDelivered?: number;
   outstandingQty?: number;
   totalQty?: number;
+  /** Shown (and editable) only when the row has a shipment */
+  containerNumber?: string | null;
+  hasShipment?: boolean;
 }
 
 export type EditSource = 'supplier' | 'gdc1' | 'gdc' | 'shipment';
@@ -156,6 +159,7 @@ export function EditShipmentDialog({
   const [actualDeliveryDate, setActualDeliveryDate] = useState(shipment?.actualDeliveryDate || '');
   const [qtyDelivered, setQtyDelivered] = useState<number>(shipment?.qtyDelivered || 0);
   const [outstandingQty, setOutstandingQty] = useState<number>(shipment?.outstandingQty || 0);
+  const [containerNumber, setContainerNumber] = useState(shipment?.containerNumber || '');
 
   // Reset form when shipment changes
   useEffect(() => {
@@ -168,6 +172,7 @@ export function EditShipmentDialog({
       setActualDeliveryDate(shipment.actualDeliveryDate || '');
       setQtyDelivered(shipment.qtyDelivered || 0);
       setOutstandingQty(shipment.outstandingQty || 0);
+      setContainerNumber(shipment.containerNumber || '');
     }
   }, [shipment]);
 
@@ -176,17 +181,28 @@ export function EditShipmentDialog({
       return;
     }
 
+    // Send only the fields that were changed: a field this row did not load
+    // (e.g. dates on Immediate Attention rows) shows empty and must not wipe
+    // the saved value, such as an ETA written by CMA CGM tracking.
+    const changed = <T,>(value: T, initial: T): T | undefined =>
+      value !== initial ? value : undefined;
+    const changedText = (value: string, initial: string | null | undefined) =>
+      value !== (initial || '') ? value || null : undefined;
+
     startTransition(async () => {
       const result = await updateShipmentOrOrder({
         id: shipment.id,
         status: status,
-        etaToPort: etaToPort || null,
-        confirmedEta: confirmedEta || null,
-        customerExpectedDelivery: customerExpectedDelivery || null,
-        actualDeliveryDate: actualDeliveryDate || null,
-        actionRequired: actionRequired || null,
-        qtyDelivered: qtyDelivered,
-        outstandingQty: outstandingQty,
+        etaToPort: changedText(etaToPort, shipment.etaToPort),
+        confirmedEta: changedText(confirmedEta, shipment.confirmedEta),
+        customerExpectedDelivery: changedText(customerExpectedDelivery, shipment.customerExpectedDelivery),
+        actualDeliveryDate: changedText(actualDeliveryDate, shipment.actualDeliveryDate),
+        actionRequired: changedText(actionRequired, shipment.actionRequired),
+        qtyDelivered: changed(qtyDelivered, shipment.qtyDelivered || 0),
+        outstandingQty: changed(outstandingQty, shipment.outstandingQty || 0),
+        containerNumber: shipment.hasShipment
+          ? changedText(containerNumber.trim(), shipment.containerNumber)
+          : undefined,
       });
 
       if (result.success) {
@@ -260,6 +276,28 @@ export function EditShipmentDialog({
               </SelectContent>
             </Select>
           </div>
+
+          {/* Container Number (tracked via CMA CGM) */}
+          {shipment.hasShipment && (
+            <div className="space-y-2">
+              <Label htmlFor="containerNumber">
+                <span className="flex items-center gap-2">
+                  <Container className="h-4 w-4" />
+                  Container Number
+                </span>
+              </Label>
+              <Input
+                id="containerNumber"
+                value={containerNumber}
+                onChange={(e) => setContainerNumber(e.target.value.toUpperCase())}
+                placeholder="e.g. CMAU1234567"
+                className="font-mono"
+              />
+              <p className="text-xs text-muted-foreground">
+                Tracking starts as soon as you save.
+              </p>
+            </div>
+          )}
 
           {/* ETA to Port */}
           <div className="space-y-2">

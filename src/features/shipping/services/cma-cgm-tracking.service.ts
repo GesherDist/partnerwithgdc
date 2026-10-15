@@ -235,6 +235,21 @@ export function mapCmaCgmEventToStatus(event: CmaCgmEvent): CmaCgmMappedStatus {
 // ============================================
 
 /**
+ * Estimated arrival at the final port: the latest planned/estimated vessel
+ * arrival (ARRI) event. Returns YYYY-MM-DD, or undefined when there is none.
+ */
+function getEstimatedArrival(events: CmaCgmEvent[]): string | undefined {
+  const arrival = events.find(
+    (e) =>
+      isTransportEvent(e) &&
+      e.transportEventTypeCode === 'ARRI' &&
+      e.eventClassifierCode !== 'ACT' &&
+      Boolean(e.eventDateTime)
+  );
+  return arrival?.eventDateTime?.slice(0, 10);
+}
+
+/**
  * Fetch tracking events from CMA CGM API
  */
 export async function fetchContainerEvents(
@@ -268,10 +283,18 @@ export async function fetchContainerEvents(
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`[CMA-CGM] API error: ${response.status} - ${errorText}`);
+      // Surface CMA's reason (e.g. "Community Client Free Trial Expired")
+      let reason = '';
+      try {
+        const parsed = JSON.parse(errorText) as { description?: string; message?: string };
+        reason = parsed.description || parsed.message || '';
+      } catch {
+        // not JSON
+      }
       return {
         success: false,
         containerNumber,
-        error: `API error: ${response.status}`,
+        error: `API error: ${response.status}${reason ? ` - ${reason}` : ''}`,
       };
     }
 
@@ -298,11 +321,17 @@ export async function fetchContainerEvents(
       `[CMA-CGM] Found ${events.length} events for container: ${containerNumber}`
     );
 
+    // The feed also carries planned/estimated (future) events. Status must
+    // come from what actually happened: with no actual event yet (booking
+    // only) there is no status change, only the estimated arrival.
+    const latestActual = sortedEvents.find((e) => e.eventClassifierCode === 'ACT');
+
     return {
       success: true,
       containerNumber,
       events: sortedEvents,
-      latestEvent: sortedEvents[0],
+      latestEvent: latestActual,
+      estimatedArrival: getEstimatedArrival(sortedEvents),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
@@ -327,20 +356,23 @@ export async function updateShipmentFromCmaCgm(
   salesOrderId: string | null,
   purchaseOrderId: string | null,
   _containerNumber: string,
-  mappedStatus: CmaCgmMappedStatus
+  mappedStatus: CmaCgmMappedStatus,
+  estimatedArrival?: string
 ): Promise<boolean> {
   try {
-    // Update shipment tracking info
-    // Pass location as final_destination (current location from CMA-CGM tracking)
-    // Pass vessel_name which gets mapped to carrier in the repository
+    // Update shipment tracking info. The current location is kept in the
+    // status history only - final_destination is the real delivery destination.
+    // vessel_name gets mapped to carrier in the repository.
+    // The API is the current source of truth, so its ETA is stamped "now"
+    // (the repository skips ETAs from events older than the last update).
     const trackingUpdated = await updateShipmentTracking(
       shipmentId,
       {
         tracking_status: mappedStatus.trackingStatus,
         vessel_name: mappedStatus.vesselName,
-        final_destination: mappedStatus.location, // Current location from CMA-CGM
+        eta_port_tracking: estimatedArrival,
       },
-      mappedStatus.eventDateTime
+      estimatedArrival ? new Date().toISOString() : mappedStatus.eventDateTime
     );
 
     if (!trackingUpdated) {
@@ -462,6 +494,25 @@ function mapTrackingToPurchaseOrderStatus(trackingStatus: string): string | null
   }
 }
 
+/**
+ * Container known to CMA but nothing has actually happened yet (booking
+ * only): keep the status, just record the estimated arrival and sync time.
+ */
+async function saveEstimatedArrivalOnly(shipmentId: string, estimatedArrival?: string): Promise<void> {
+  if (estimatedArrival) {
+    await updateShipmentTracking(
+      shipmentId,
+      { eta_port_tracking: estimatedArrival },
+      new Date().toISOString()
+    );
+  }
+  const supabase = createAdminClient();
+  await supabase
+    .from('shipments')
+    .update({ cma_cgm_last_sync: new Date().toISOString() })
+    .eq('id', shipmentId);
+}
+
 // ============================================
 // CONTAINER SYNC
 // ============================================
@@ -484,7 +535,8 @@ export async function getActiveContainersForTracking(): Promise<
     .from('shipments')
     .select('id, sales_order_id, purchase_order_id, container_number, tracking_status')
     .not('container_number', 'is', null)
-    .not('tracking_status', 'eq', 'delivered')
+    // NULL = never tracked yet; a plain "<> delivered" filter would skip those
+    .or('tracking_status.is.null,tracking_status.neq.delivered')
     .is('deleted_at', null)
     .order('created_at', { ascending: false });
 
@@ -565,8 +617,10 @@ export async function syncAllContainers(): Promise<CmaCgmSyncResult> {
       }
 
       if (!result.latestEvent) {
-        console.log(`[CMA-CGM] No events for ${container.containerNumber}`);
+        console.log(`[CMA-CGM] No actual events yet for ${container.containerNumber}`);
+        await saveEstimatedArrivalOnly(container.shipmentId, result.estimatedArrival);
         skippedCount++;
+        await new Promise((resolve) => setTimeout(resolve, 1000));
         continue;
       }
 
@@ -579,7 +633,8 @@ export async function syncAllContainers(): Promise<CmaCgmSyncResult> {
         container.salesOrderId,
         container.purchaseOrderId,
         container.containerNumber,
-        mappedStatus
+        mappedStatus,
+        result.estimatedArrival
       );
 
       if (updated) {
@@ -639,4 +694,64 @@ export async function trackContainer(
     ...result,
     mappedStatus,
   };
+}
+
+/**
+ * Track one shipment's container now and apply the result to the shipment.
+ * Used by the "Track now" button and right after a container number is saved,
+ * so the operations team does not wait for the daily sync.
+ */
+export async function syncShipmentContainer(
+  shipmentId: string
+): Promise<{ success: boolean; message: string; trackingStatus?: string }> {
+  if (!isCmaCgmConfigured()) {
+    return { success: false, message: 'CMA CGM API key not configured' };
+  }
+
+  const supabase = createAdminClient();
+  const { data: shipment, error } = await supabase
+    .from('shipments')
+    .select('id, sales_order_id, purchase_order_id, container_number')
+    .eq('id', shipmentId)
+    .is('deleted_at', null)
+    .maybeSingle();
+
+  if (error || !shipment) {
+    return { success: false, message: 'Shipment not found' };
+  }
+  if (!shipment.container_number) {
+    return { success: false, message: 'Add a container number first' };
+  }
+
+  const result = await fetchContainerEvents(shipment.container_number);
+  if (!result.success) {
+    return { success: false, message: result.error || 'CMA CGM tracking failed' };
+  }
+  if (!result.latestEvent) {
+    await saveEstimatedArrivalOnly(shipment.id, result.estimatedArrival);
+    return {
+      success: true,
+      message: result.estimatedArrival
+        ? `Booked - no movement yet. Estimated arrival ${result.estimatedArrival}`
+        : `No CMA CGM events yet for ${shipment.container_number}`,
+    };
+  }
+
+  const mappedStatus = mapCmaCgmEventToStatus(result.latestEvent);
+  const updated = await updateShipmentFromCmaCgm(
+    shipment.id,
+    shipment.sales_order_id,
+    shipment.purchase_order_id,
+    shipment.container_number,
+    mappedStatus,
+    result.estimatedArrival
+  );
+
+  return updated
+    ? {
+        success: true,
+        message: `${mappedStatus.eventDescription}${mappedStatus.location ? ` - ${mappedStatus.location}` : ''}`,
+        trackingStatus: mappedStatus.trackingStatus,
+      }
+    : { success: false, message: 'Tracking received but the shipment could not be updated' };
 }

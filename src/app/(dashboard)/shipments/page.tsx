@@ -36,6 +36,7 @@ import {
   ShipmentsTable,
   ViewShipmentDrawer,
   EditShipmentDrawer,
+  CreateShipmentFromPODialog,
   EditShipmentStatusDialog,
   useShipments,
 } from '@/features/shipments';
@@ -51,6 +52,7 @@ export default function ShipmentsPage() {
   // ----------------------------------------
 
   const [hasMounted, setHasMounted] = useState(false);
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
 
   useEffect(() => {
     setHasMounted(true);
@@ -62,6 +64,7 @@ export default function ShipmentsPage() {
 
   const canCreate = hasMounted && hasPermission('shipments.create');
   const canEdit = hasMounted && hasPermission('shipments.edit');
+  const canTrack = hasMounted && hasPermission('shipments.track');
   const canDelete = hasMounted && hasPermission('shipments.delete');
   // These are available for future use when status update UI is added
   // const canUpdateStatus = hasMounted && hasPermission('shipments.update_status');
@@ -139,8 +142,17 @@ export default function ShipmentsPage() {
   // ----------------------------------------
 
   const handleCreateClick = () => {
-    toast.info('Create shipment functionality coming soon');
+    setIsCreateDialogOpen(true);
   };
+
+  // New shipment from a PO: refresh the list and open it for editing so the
+  // container number can be entered right away
+  const handleShipmentCreated = useCallback((shipmentId: string) => {
+    setIsCreateDialogOpen(false);
+    refetchShipments();
+    setSelectedShipmentId(shipmentId);
+    setIsEditDrawerOpen(true);
+  }, [refetchShipments]);
 
   const handleView = useCallback((shipment: ShipmentListItem) => {
     setSelectedShipmentId(shipment.id);
@@ -303,6 +315,14 @@ export default function ShipmentsPage() {
         open={isViewDrawerOpen}
         onClose={handleViewDrawerClose}
         onEdit={handleEdit}
+        canTrack={canTrack}
+      />
+
+      {/* Create Shipment (from a PO) */}
+      <CreateShipmentFromPODialog
+        open={isCreateDialogOpen}
+        onClose={() => setIsCreateDialogOpen(false)}
+        onCreated={handleShipmentCreated}
       />
 
       {/* Edit Shipment Drawer */}

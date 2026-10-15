@@ -242,6 +242,8 @@ export interface CmaCgmTrackingResult {
   containerNumber: string;
   events?: CmaCgmEvent[];
   latestEvent?: CmaCgmEvent;
+  /** Estimated/planned arrival at the final port (YYYY-MM-DD), when the API provides one */
+  estimatedArrival?: string;
   error?: string;
 }
 

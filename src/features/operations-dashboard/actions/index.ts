@@ -634,6 +634,8 @@ export interface UpdateShipmentOrOrderInput {
   qtyDelivered?: number;
   outstandingQty?: number;
   actionRequired?: string | null;
+  /** Container number on the shipment; a new value is tracked via CMA CGM right away */
+  containerNumber?: string | null;
 }
 
 /**
@@ -687,14 +689,14 @@ export async function updateShipmentOrOrder(
     // Try 1: Check if input.id is a shipment ID
     const { data: shipmentById, error: shipmentByIdError } = await supabase
       .from('shipments')
-      .select('id')
+      .select('id, container_number')
       .eq('id', input.id)
       .maybeSingle();
 
     // Try 2: Check if input.id is a purchase order ID
     const { data: shipmentByPO, error: shipmentByPOError } = await supabase
       .from('shipments')
-      .select('id')
+      .select('id, container_number')
       .eq('purchase_order_id', input.id)
       .maybeSingle();
 
@@ -741,6 +743,14 @@ export async function updateShipmentOrOrder(
       if (input.actionRequired !== undefined) {
         updateData.action_required = input.actionRequired || null;
       }
+      // Container numbers are matched exactly by the CMA CGM API
+      const containerNumber =
+        input.containerNumber !== undefined
+          ? input.containerNumber?.replace(/\s+/g, '').toUpperCase() || null
+          : undefined;
+      if (containerNumber !== undefined) {
+        updateData.container_number = containerNumber;
+      }
 
       const { error } = await supabase
         .from('shipments')
@@ -753,6 +763,17 @@ export async function updateShipmentOrOrder(
       }
 
       console.log('[updateShipmentOrOrder] ✅ Shipment updated successfully');
+
+      // A new or changed container is tracked right away instead of waiting
+      // for the daily sync. Tracking problems never fail the save.
+      if (containerNumber && containerNumber !== shipment.container_number) {
+        try {
+          const { syncShipmentContainer } = await import('@/features/shipping/services');
+          await syncShipmentContainer(shipment.id);
+        } catch (trackError) {
+          console.error('[updateShipmentOrOrder] Container tracking failed:', trackError);
+        }
+      }
 
       // ============================================
       // NEW: Also update related Purchase Order if it exists

@@ -7,6 +7,9 @@
  * Schedule: Daily at 6:00 AM UTC
  *
  * Authentication: CRON_SECRET header required
+ *
+ * GET and POST both run the sync: schedulers (Vercel cron, crontab + curl)
+ * send GET. Add ?status=1 to only check configuration.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -14,6 +17,9 @@ import {
   syncAllContainers,
   isCmaCgmConfigured,
 } from '@/features/shipping/services';
+
+// About 1 second per container (API rate limit)
+export const maxDuration = 300;
 
 /**
  * Verify cron secret to prevent unauthorized access
@@ -39,12 +45,7 @@ function verifyCronSecret(request: NextRequest): boolean {
   return token === cronSecret;
 }
 
-/**
- * POST /api/cron/cma-cgm-sync
- *
- * Sync all active containers with CMA CGM API
- */
-export async function POST(request: NextRequest) {
+async function handle(request: NextRequest) {
   try {
     // Verify authorization
     if (!verifyCronSecret(request)) {
@@ -53,6 +54,16 @@ export async function POST(request: NextRequest) {
         { error: 'Unauthorized' },
         { status: 401 }
       );
+    }
+
+    // Status check only (no sync)
+    if (request.nextUrl.searchParams.get('status') === '1') {
+      return NextResponse.json({
+        configured: isCmaCgmConfigured(),
+        endpoint: '/api/cron/cma-cgm-sync',
+        description: 'Sync all active containers with CMA CGM Track & Trace API',
+        schedule: 'Daily at 6:00 AM UTC (recommended)',
+      });
     }
 
     console.log('[CMA-CGM Cron] Starting scheduled container sync...');
@@ -91,36 +102,15 @@ export async function POST(request: NextRequest) {
 }
 
 /**
- * GET /api/cron/cma-cgm-sync
- *
- * Get sync status and configuration info
+ * GET /api/cron/cma-cgm-sync - run the sync (what cron schedulers call)
  */
 export async function GET(request: NextRequest) {
-  try {
-    // Verify authorization for status check too
-    if (!verifyCronSecret(request)) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
+  return handle(request);
+}
 
-    const configured = isCmaCgmConfigured();
-
-    return NextResponse.json({
-      configured,
-      endpoint: '/api/cron/cma-cgm-sync',
-      method: 'POST',
-      description: 'Sync all active containers with CMA CGM Track & Trace API',
-      schedule: 'Daily at 6:00 AM UTC (recommended)',
-    });
-  } catch (error) {
-    return NextResponse.json(
-      {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      },
-      { status: 500 }
-    );
-  }
+/**
+ * POST /api/cron/cma-cgm-sync - run the sync
+ */
+export async function POST(request: NextRequest) {
+  return handle(request);
 }
