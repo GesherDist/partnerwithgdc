@@ -6,9 +6,13 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { requirePermission } from '@/shared/lib/auth';
 
 export async function POST(request: NextRequest) {
   try {
+    const guard = await requirePermission('orders.create');
+    if (guard.response) {return guard.response;}
+
     const { customerNames } = await request.json();
 
     if (!Array.isArray(customerNames)) {

@@ -15,9 +15,13 @@ import {
   STATE_COOKIE_MAX_AGE,
   QBO_REDIRECT_PATHS,
 } from '@/modules/integrations/providers/accounting/quickbooks';
+import { requirePermission } from '@/shared/lib/auth';
 
 export async function GET(request: Request) {
   try {
+    const guard = await requirePermission('settings.view_module');
+    if (guard.response) {return guard.response;}
+
     // Debug: Log environment variable status
     console.log('QuickBooks Auth Debug:', {
       hasClientId: !!process.env.NEXT_QUICKBOOKS_CLIENT_ID,

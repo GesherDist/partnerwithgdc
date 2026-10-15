@@ -9,6 +9,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import { roleService } from '@/features/roles';
 import { ValidationError, AppError } from '@/shared/lib/errors';
 import { z } from 'zod';
+import {
+  requireAnyPermission,
+  requirePermission,
+  isSuperAdmin,
+  isSuperAdminRoleName,
+  forbiddenResponse,
+} from '@/shared/lib/auth';
+
+/** User dialogs list roles too, so viewing roles is not limited to the Roles screen */
+const ROLE_READ_PERMISSIONS = ['roles.view_module', 'users.create', 'users.edit', 'users.change_role'];
 
 // ============================================
 // VALIDATION SCHEMAS
@@ -35,6 +45,9 @@ const querySchema = z.object({
 
 export async function GET(request: NextRequest) {
   try {
+    const guard = await requireAnyPermission(ROLE_READ_PERMISSIONS);
+    if (guard.response) {return guard.response;}
+
     const { searchParams } = new URL(request.url);
     const query = querySchema.parse({
       search: searchParams.get('search') || undefined,
@@ -77,12 +90,19 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const guard = await requirePermission('roles.create');
+    if (guard.response) {return guard.response;}
+
     const body = await request.json();
     const data = createRoleSchema.parse(body);
 
-    // TODO: Get user ID from session
+    // A role named "Super Admin" bypasses every permission check
+    if (isSuperAdminRoleName(data.name) && !isSuperAdmin(guard.user)) {
+      return forbiddenResponse('Only Super Admin can create a Super Admin role');
+    }
+
     const ctx = {
-      userId: undefined,
+      userId: guard.user.id,
       requestId: crypto.randomUUID(),
     };
 

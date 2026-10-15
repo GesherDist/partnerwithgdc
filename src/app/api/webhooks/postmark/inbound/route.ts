@@ -18,12 +18,33 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/shared/lib/supabase/admin';
 import type { PostmarkInboundPayload } from '@/features/inbound-emails/types';
 import { processShippingEmail } from '@/features/shipping/services';
+import { timingSafeEqual } from 'crypto';
+
+/**
+ * Optional shared secret. When POSTMARK_INBOUND_TOKEN is set, the webhook URL
+ * configured in Postmark must carry it as ?token=... ; when unset, requests
+ * are accepted as before so existing forwarding keeps working.
+ */
+function isAuthorizedWebhook(request: NextRequest): boolean {
+  const expected = process.env.POSTMARK_INBOUND_TOKEN;
+  if (!expected) {
+    return true;
+  }
+  const given = request.nextUrl.searchParams.get('token') ?? '';
+  const a = Buffer.from(given);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 
 // ============================================
 // POST /api/webhooks/postmark/inbound
 // ============================================
 
 export async function POST(request: NextRequest) {
+  if (!isAuthorizedWebhook(request)) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
     // Parse the incoming webhook payload
     const payload: PostmarkInboundPayload = await request.json();

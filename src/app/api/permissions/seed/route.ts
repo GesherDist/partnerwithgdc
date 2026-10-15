@@ -6,6 +6,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { permissionService } from '@/features/roles';
+import { requireSuperAdmin } from '@/shared/lib/auth';
 
 // ============================================
 // POST /api/permissions/seed
@@ -13,9 +14,11 @@ import { permissionService } from '@/features/roles';
 
 export async function POST(_request: NextRequest) {
   try {
-    // TODO: Get user ID from session and check admin permission
+    const guard = await requireSuperAdmin();
+    if (guard.response) {return guard.response;}
+
     const ctx = {
-      userId: undefined,
+      userId: guard.user.id,
       requestId: crypto.randomUUID(),
     };
 

@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import ExcelJS from 'exceljs';
 import type { OperationsData, OperationsFilters, ShipmentStatus } from '@/features/operations-dashboard/types';
 import { getOperationsData } from '@/features/operations-dashboard/services';
+import { requirePermission } from '@/shared/lib/auth';
 
 // ============================================
 // STYLE DEFINITIONS
@@ -976,6 +977,9 @@ function createGDC1InventorySheet(workbook: ExcelJS.Workbook, data: OperationsDa
 
 export async function GET(request: NextRequest) {
   try {
+    const guard = await requirePermission('dashboard.view_module');
+    if (guard.response) {return guard.response;}
+
     const searchParams = request.nextUrl.searchParams;
     const exportType = searchParams.get('type') || 'all';
 

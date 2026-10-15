@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { permissionService } from '@/features/roles';
 import { z } from 'zod';
 import type { RoleScope } from '@/features/roles/types';
+import { requirePermission } from '@/shared/lib/auth';
 
 // ============================================
 // VALIDATION SCHEMAS
@@ -34,6 +35,9 @@ const querySchema = z.object({
 
 export async function GET(request: NextRequest) {
   try {
+    const guard = await requirePermission('roles.view_module');
+    if (guard.response) {return guard.response;}
+
     const { searchParams } = new URL(request.url);
     const query = querySchema.parse({
       search: searchParams.get('search') || undefined,

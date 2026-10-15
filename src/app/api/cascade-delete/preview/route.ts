@@ -13,9 +13,13 @@ import {
   verifyEntityExistsByNumber,
   type EntityType,
 } from '@/features/shared/services/cascade-delete.service';
+import { requireSuperAdmin } from '@/shared/lib/auth';
 
 export async function POST(req: NextRequest) {
   try {
+    const guard = await requireSuperAdmin();
+    if (guard.response) {return guard.response;}
+
     // Parse request body
     const body = await req.json();
     const { entityType, entityNumber } = body;

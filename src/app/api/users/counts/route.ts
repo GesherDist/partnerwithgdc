@@ -6,6 +6,7 @@
 
 import { userService } from '@/features/users/services/user.service';
 import { resolveActor } from '@/features/users/lib/require-actor';
+import { denyWithout } from '@/features/users/lib/user-guards';
 import {
   successResponse,
   internalErrorResponse,
@@ -26,7 +27,8 @@ export async function GET() {
         : unauthorizedResponse('Authentication required');
     }
 
-    // TODO: Check permission (users.view)
+    const denied = denyWithout(actor, 'users.view_module');
+    if (denied) {return denied;}
 
     const result = await userService.getStatusCounts();
 

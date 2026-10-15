@@ -12,6 +12,7 @@ import {
   createUserSchema,
 } from '@/features/users/lib/schemas';
 import { resolveActor } from '@/features/users/lib/require-actor';
+import { denyWithout, denyWithoutAny, denySuperAdminRoleGrant } from '@/features/users/lib/user-guards';
 import {
   successResponse,
   createdResponse,
@@ -37,7 +38,9 @@ export async function GET(request: NextRequest) {
         : unauthorizedResponse('Authentication required');
     }
 
-    // TODO: Check permission (users.view)
+    // Invoice editing also lists users (sales rep picker)
+    const denied = denyWithoutAny(actor, ['users.view_module', 'orders.view_module']);
+    if (denied) {return denied;}
 
     // Parse query parameters
     const { searchParams } = new URL(request.url);
@@ -93,7 +96,8 @@ export async function POST(request: NextRequest) {
         : unauthorizedResponse('Authentication required');
     }
 
-    // TODO: Check permission (users.create)
+    const denied = denyWithout(actor, 'users.create');
+    if (denied) {return denied;}
 
     // Parse request body
     const body = await request.json();
@@ -105,6 +109,9 @@ export async function POST(request: NextRequest) {
         validation.error.flatten().fieldErrors as Record<string, string[]>
       );
     }
+
+    const roleDenied = await denySuperAdminRoleGrant(actor, validation.data.roleId);
+    if (roleDenied) {return roleDenied;}
 
     // Create user
     const result = await userService.create(validation.data, actor.id);

@@ -10,6 +10,7 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import type { OperationsData, OperationsFilters, ShipmentStatus } from '@/features/operations-dashboard/types';
 import { getOperationsData } from '@/features/operations-dashboard/services';
+import { requirePermission } from '@/shared/lib/auth';
 
 // ============================================
 // COLOR DEFINITIONS - Exact Tailwind Colors
@@ -770,6 +771,9 @@ async function generatePDF(data: OperationsData): Promise<ArrayBuffer> {
 
 export async function GET(request: NextRequest) {
   try {
+    const guard = await requirePermission('dashboard.view_module');
+    if (guard.response) {return guard.response;}
+
     // Extract filters from query params
     const searchParams = request.nextUrl.searchParams;
     const filters: OperationsFilters = {};

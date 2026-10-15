@@ -1,8 +1,9 @@
+// Run with: node --env-file=.env scripts/check-permissions.mjs
 import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(
-  'https://oejfbxycppqxtsspnejr.supabase.co',
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9lamZieHljcHBxeHRzc3BuZWpyIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NTIwNzkzMywiZXhwIjoyMTAwNzgzOTMzfQ.KYpIKteReeKxJDXBGnZDzkHT1B9-01o-PMmEAFyQCuM'
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
 const { data, error } = await supabase

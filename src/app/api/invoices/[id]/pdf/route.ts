@@ -9,12 +9,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import { generateInvoicePdf, type InvoicePdfData } from '@/features/invoices/services/pdf.service';
 import { getAllocationsByItemId } from '@/features/sales-orders/repositories/fulfillment-allocations.repository';
 import { db } from '@/shared/lib/supabase/database';
+import { requirePermission } from '@/shared/lib/auth';
 
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const guard = await requirePermission('orders.view_module');
+    if (guard.response) {return guard.response;}
+
     const { id } = await params;
 
     // Fetch the invoice with items and sales order

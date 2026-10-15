@@ -12,6 +12,7 @@ import { NextRequest } from 'next/server';
 import { userService } from '@/features/users/services/user.service';
 import { changeUserRoleSchema } from '@/features/users/lib/schemas';
 import { resolveActor } from '@/features/users/lib/require-actor';
+import { denyWithout, denySuperAdminRoleGrant, denySuperAdminTarget } from '@/features/users/lib/user-guards';
 import {
   successResponse,
   notFoundResponse,
@@ -42,7 +43,8 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
         : unauthorizedResponse('Authentication required');
     }
 
-    // TODO: Check permission (roles.manage)
+    const denied = denyWithout(actor, 'users.change_role') ?? (await denySuperAdminTarget(actor, id));
+    if (denied) {return denied;}
 
     // Changing your own role is how an admin accidentally demotes themselves
     // out of the screen they are standing on.
@@ -58,6 +60,9 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
         validation.error.flatten().fieldErrors as Record<string, string[]>
       );
     }
+
+    const roleDenied = await denySuperAdminRoleGrant(actor, validation.data.roleId);
+    if (roleDenied) {return roleDenied;}
 
     const result = await userService.changeRole(id, validation.data, actor.id);
 

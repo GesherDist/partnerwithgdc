@@ -12,9 +12,13 @@ import {
   getConnections,
 } from '@/modules/integrations/core/repositories';
 import type { AvailableIntegration } from '@/modules/integrations/core';
+import { requirePermission } from '@/shared/lib/auth';
 
 export async function GET() {
   try {
+    const guard = await requirePermission('settings.view_module');
+    if (guard.response) {return guard.response;}
+
     // Get all active integrations
     const integrations = await getActiveIntegrations();
 

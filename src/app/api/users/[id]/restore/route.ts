@@ -7,6 +7,7 @@
 import { NextRequest } from 'next/server';
 import { userService } from '@/features/users/services/user.service';
 import { resolveActor } from '@/features/users/lib/require-actor';
+import { denyWithout, denySuperAdminTarget } from '@/features/users/lib/user-guards';
 import {
   successResponse,
   notFoundResponse,
@@ -36,7 +37,8 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
         : unauthorizedResponse('Authentication required');
     }
 
-    // TODO: Check permission (users.restore or users.delete)
+    const denied = denyWithout(actor, 'users.delete') ?? (await denySuperAdminTarget(actor, id));
+    if (denied) {return denied;}
 
     const result = await userService.restore(id, actor.id);
 

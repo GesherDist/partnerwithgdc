@@ -10,6 +10,17 @@ import { NextRequest, NextResponse } from 'next/server';
 import { roleService } from '@/features/roles';
 import { ValidationError, AppError, NotFoundError } from '@/shared/lib/errors';
 import { z } from 'zod';
+import {
+  requireAnyPermission,
+  requirePermission,
+  hasPermission,
+  isSuperAdmin,
+  isSuperAdminRoleName,
+  forbiddenResponse,
+} from '@/shared/lib/auth';
+
+/** User dialogs read roles too, so viewing is not limited to the Roles screen */
+const ROLE_READ_PERMISSIONS = ['roles.view_module', 'users.create', 'users.edit', 'users.change_role'];
 
 // ============================================
 // VALIDATION SCHEMAS
@@ -31,6 +42,9 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const guard = await requireAnyPermission(ROLE_READ_PERMISSIONS);
+    if (guard.response) {return guard.response;}
+
     const { id } = await params;
 
     const role = await roleService.getRoleById(id);
@@ -71,13 +85,27 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const guard = await requirePermission('roles.edit');
+    if (guard.response) {return guard.response;}
+
     const { id } = await params;
     const body = await request.json();
     const data = updateRoleSchema.parse(body);
 
-    // TODO: Get user ID from session
+    if (data.permissionIds && !hasPermission(guard.user, 'roles.update_permission')) {
+      return forbiddenResponse('Permission denied: roles.update_permission');
+    }
+
+    // Only Super Admin may touch the Super Admin role or rename a role into it
+    if (!isSuperAdmin(guard.user)) {
+      const existing = await roleService.getRoleById(id);
+      if (isSuperAdminRoleName(existing?.name) || isSuperAdminRoleName(data.name)) {
+        return forbiddenResponse('Only Super Admin can change the Super Admin role');
+      }
+    }
+
     const ctx = {
-      userId: undefined,
+      userId: guard.user.id,
       requestId: crypto.randomUUID(),
     };
 
@@ -162,11 +190,20 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const guard = await requirePermission('roles.delete');
+    if (guard.response) {return guard.response;}
+
     const { id } = await params;
 
-    // TODO: Get user ID from session
+    if (!isSuperAdmin(guard.user)) {
+      const existing = await roleService.getRoleById(id);
+      if (isSuperAdminRoleName(existing?.name)) {
+        return forbiddenResponse('Only Super Admin can delete the Super Admin role');
+      }
+    }
+
     const ctx = {
-      userId: undefined,
+      userId: guard.user.id,
       requestId: crypto.randomUUID(),
     };
 

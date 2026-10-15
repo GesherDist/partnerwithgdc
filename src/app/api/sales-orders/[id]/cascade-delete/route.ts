@@ -11,12 +11,16 @@ import {
   deleteSalesOrderCascade,
   verifyEntityExists,
 } from '@/features/shared/services/cascade-delete.service';
+import { requireSuperAdmin } from '@/shared/lib/auth';
 
 export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const guard = await requireSuperAdmin();
+    if (guard.response) {return guard.response;}
+
     const { id: salesOrderId } = await params;
 
     // Validate UUID format

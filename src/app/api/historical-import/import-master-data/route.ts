@@ -7,9 +7,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { parse } from 'csv-parse/sync';
+import { requirePermission } from '@/shared/lib/auth';
 
 export async function POST(request: NextRequest) {
   try {
+    const guard = await requirePermission('orders.create');
+    if (guard.response) {return guard.response;}
+
     const formData = await request.formData();
     const file = formData.get('file') as File;
     const type = formData.get('type') as string;

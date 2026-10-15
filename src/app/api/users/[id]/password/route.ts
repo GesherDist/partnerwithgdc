@@ -12,6 +12,7 @@ import { NextRequest } from 'next/server';
 import { userService } from '@/features/users/services/user.service';
 import { adminResetPasswordSchema } from '@/features/users/lib/schemas';
 import { resolveActor } from '@/features/users/lib/require-actor';
+import { denyWithout, denySuperAdminTarget } from '@/features/users/lib/user-guards';
 import {
   successResponse,
   notFoundResponse,
@@ -42,7 +43,8 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
         : unauthorizedResponse('Authentication required');
     }
 
-    // TODO: Check permission (users.edit)
+    const denied = denyWithout(actor, 'users.reset_password') ?? (await denySuperAdminTarget(actor, id));
+    if (denied) {return denied;}
 
     const result = await userService.sendPasswordReset(id);
 
@@ -78,7 +80,8 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
         : unauthorizedResponse('Authentication required');
     }
 
-    // TODO: Check permission (users.edit)
+    const denied = denyWithout(actor, 'users.reset_password') ?? (await denySuperAdminTarget(actor, id));
+    if (denied) {return denied;}
 
     const body = await request.json();
 

@@ -9,6 +9,7 @@ import {
   trackContainer,
   isCmaCgmConfigured,
 } from '@/features/shipping/services';
+import { requirePermission } from '@/shared/lib/auth';
 
 /**
  * GET /api/shipping/track?container=CMAU1234567
@@ -17,6 +18,9 @@ import {
  */
 export async function GET(request: NextRequest) {
   try {
+    const guard = await requirePermission('shipments.track');
+    if (guard.response) {return guard.response;}
+
     const { searchParams } = new URL(request.url);
     const containerNumber = searchParams.get('container');
 

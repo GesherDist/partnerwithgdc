@@ -10,6 +10,7 @@ import { NextRequest } from 'next/server';
 import { userService } from '@/features/users/services/user.service';
 import { updateUserSchema } from '@/features/users/lib/schemas';
 import { resolveActor } from '@/features/users/lib/require-actor';
+import { denyWithout, denySuperAdminRoleGrant, denySuperAdminTarget } from '@/features/users/lib/user-guards';
 import {
   successResponse,
   notFoundResponse,
@@ -40,7 +41,8 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
         : unauthorizedResponse('Authentication required');
     }
 
-    // TODO: Check permission (users.view)
+    const denied = denyWithout(actor, 'users.view_module');
+    if (denied) {return denied;}
 
     const result = await userService.getById(id);
 
@@ -71,7 +73,10 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
         : unauthorizedResponse('Authentication required');
     }
 
-    // TODO: Check permission (users.edit)
+    const denied = denyWithout(actor, 'users.edit');
+    if (denied) {return denied;}
+    const targetDenied = await denySuperAdminTarget(actor, id);
+    if (targetDenied) {return targetDenied;}
 
     const body = await request.json();
 
@@ -80,6 +85,22 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
       return validationErrorResponse(
         validation.error.flatten().fieldErrors as Record<string, string[]>
       );
+    }
+
+    // Changing the role or password through the general edit needs the same
+    // permission as the dedicated endpoints
+    const { roleId, password } = validation.data;
+    if (roleId) {
+      const current = await userService.getById(id);
+      if (current.data && current.data.roleId !== roleId) {
+        const roleDenied =
+          denyWithout(actor, 'users.change_role') ?? (await denySuperAdminRoleGrant(actor, roleId));
+        if (roleDenied) {return roleDenied;}
+      }
+    }
+    if (password) {
+      const passwordDenied = denyWithout(actor, 'users.reset_password');
+      if (passwordDenied) {return passwordDenied;}
     }
 
     const result = await userService.update(id, validation.data, actor.id);
@@ -117,7 +138,8 @@ export async function DELETE(_request: NextRequest, { params }: RouteParams) {
         : unauthorizedResponse('Authentication required');
     }
 
-    // TODO: Check permission (users.delete)
+    const denied = denyWithout(actor, 'users.delete') ?? (await denySuperAdminTarget(actor, id));
+    if (denied) {return denied;}
 
     const result = await userService.delete(id, actor.id);
 

@@ -14,9 +14,13 @@ import {
   getIntegrationByProvider,
   getConnectionByIntegrationId,
 } from '@/modules/integrations/core/repositories';
+import { requirePermission } from '@/shared/lib/auth';
 
 export async function POST() {
   try {
+    const guard = await requirePermission('settings.view_module');
+    if (guard.response) {return guard.response;}
+
     // Get the current QuickBooks connection
     const integration = await getIntegrationByProvider('quickbooks');
     if (!integration) {

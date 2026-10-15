@@ -12,6 +12,7 @@ export { refreshProfileCache } from './actions';
 export {
   // Check functions
   isSuperAdmin,
+  isSuperAdminRoleName,
   hasPermission,
   hasAnyPermission,
   hasAllPermissions,
@@ -24,6 +25,7 @@ export {
   requirePermission,
   requireAnyPermission,
   requireAllPermissions,
+  requireSuperAdmin,
   // Response helpers
   forbiddenResponse,
   unauthorizedResponse,

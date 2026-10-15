@@ -32,8 +32,16 @@ export interface PermissionCheckResult {
  */
 export function isSuperAdmin(user: AppUser | null): boolean {
   if (!user?.role) { return false; }
-  const roleName = user.role.name?.toLowerCase().replace(/[_\s]/g, '');
-  return roleName === 'superadmin';
+  return isSuperAdminRoleName(user.role.name);
+}
+
+/**
+ * Whether a role name is (or would be treated as) Super Admin.
+ * Used to stop non-super-admins from creating, renaming into, or assigning
+ * a role that bypasses every permission check.
+ */
+export function isSuperAdminRoleName(name: string | null | undefined): boolean {
+  return name?.toLowerCase().replace(/[_\s]/g, '') === 'superadmin';
 }
 
 // ============================================
@@ -295,6 +303,26 @@ export async function requireAllPermissions(
 
   if (!hasAccess) {
     return { response: forbiddenResponse(error) };
+  }
+
+  return { user };
+}
+
+/**
+ * Guard function for API routes that only Super Admin may call
+ * (destructive admin tools, permission seeding).
+ */
+export async function requireSuperAdmin(): Promise<
+  { user: AppUser; response?: never } | { user?: never; response: Response }
+> {
+  const user = await getCurrentUser();
+
+  if (!user) {
+    return { response: unauthorizedResponse() };
+  }
+
+  if (!isSuperAdmin(user)) {
+    return { response: forbiddenResponse('Super Admin access required') };
   }
 
   return { user };
