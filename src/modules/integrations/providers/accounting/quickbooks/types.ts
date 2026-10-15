@@ -126,6 +126,10 @@ export interface QuickBooksInvoiceLine {
     UnitPrice?: number;
     TaxCodeRef?: { value: string };
   };
+  DiscountLineDetail?: {
+    PercentBased: boolean;
+    DiscountPercent?: number;
+  };
 }
 
 /**

@@ -9,6 +9,7 @@
 import { revalidatePath } from 'next/cache';
 import { invoiceService } from '../services/invoice.service';
 import { createClient } from '@/shared/lib/supabase/server';
+import { getCurrentUser, hasAnyPermission } from '@/shared/lib/auth';
 import type {
   CreateInvoiceInput,
   UpdateInvoiceInput,
@@ -17,28 +18,31 @@ import type {
 import type { InvoiceListParams } from '../types';
 
 // ============================================
-// HELPER: Get current user ID
+// AUTHORIZATION
 // ============================================
 
-async function getCurrentUserId(): Promise<string | undefined> {
-  try {
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+/**
+ * Invoice screens are gated by orders.* today (sidebar: orders.view_module;
+ * "Create Invoice" on a sales order: orders.edit), while roles such as
+ * Finance hold the invoices.* permissions. Each action accepts either, so no
+ * current user loses access; users without them (e.g. supplier portal
+ * accounts) are refused. Pushing to QuickBooks needs invoices.push_qbo.
+ */
+const INVOICE_READ = ['invoices.view_module', 'orders.view_module'];
 
-    if (!user) {return undefined;}
+type AuthResult =
+  | { ok: true; userId: string }
+  | { ok: false; result: { success: false; error: string } };
 
-    const { data } = await supabase
-      .from('users')
-      .select('id')
-      .eq('auth_user_id', user.id)
-      .single();
-
-    return data?.id;
-  } catch {
-    return undefined;
+async function authorizeAny(permissions: string[]): Promise<AuthResult> {
+  const user = await getCurrentUser();
+  if (!user) {
+    return { ok: false, result: { success: false, error: 'Authentication required' } };
   }
+  if (!hasAnyPermission(user, permissions)) {
+    return { ok: false, result: { success: false, error: `Permission denied: requires one of ${permissions.join(', ')}` } };
+  }
+  return { ok: true, userId: user.id };
 }
 
 // ============================================
@@ -52,7 +56,11 @@ export async function createInvoiceFromSalesOrder(
     paymentTerms?: string;
   } = {}
 ) {
-  const userId = await getCurrentUserId();
+  const auth = await authorizeAny(['invoices.create', 'orders.edit']);
+  if (!auth.ok) {
+    return auth.result;
+  }
+  const userId = auth.userId;
   const result = await invoiceService.createFromSalesOrder(salesOrderId, options, userId);
 
   if (result.success) {
@@ -69,6 +77,10 @@ export async function createInvoiceFromSalesOrder(
 // ============================================
 
 export async function listInvoices(params: InvoiceListParams = {}) {
+  const auth = await authorizeAny(INVOICE_READ);
+  if (!auth.ok) {
+    return auth.result;
+  }
   const result = await invoiceService.list(params);
   return result;
 }
@@ -78,6 +90,10 @@ export async function listInvoices(params: InvoiceListParams = {}) {
 // ============================================
 
 export async function getInvoice(id: string) {
+  const auth = await authorizeAny(INVOICE_READ);
+  if (!auth.ok) {
+    return auth.result;
+  }
   const result = await invoiceService.getById(id);
   return result;
 }
@@ -87,6 +103,10 @@ export async function getInvoice(id: string) {
 // ============================================
 
 export async function getInvoiceBySalesOrder(salesOrderId: string) {
+  const auth = await authorizeAny(INVOICE_READ);
+  if (!auth.ok) {
+    return auth.result;
+  }
   const result = await invoiceService.list({ salesOrderId, limit: 1 });
   if (result.success && result.data && result.data.data.length > 0) {
     return {
@@ -105,7 +125,11 @@ export async function getInvoiceBySalesOrder(salesOrderId: string) {
 // ============================================
 
 export async function createInvoice(data: CreateInvoiceInput) {
-  const userId = await getCurrentUserId();
+  const auth = await authorizeAny(['invoices.create', 'orders.edit']);
+  if (!auth.ok) {
+    return auth.result;
+  }
+  const userId = auth.userId;
   const result = await invoiceService.create(data, userId);
 
   if (result.success) {
@@ -120,7 +144,11 @@ export async function createInvoice(data: CreateInvoiceInput) {
 // ============================================
 
 export async function updateInvoice(id: string, data: UpdateInvoiceInput) {
-  const userId = await getCurrentUserId();
+  const auth = await authorizeAny(['invoices.edit', 'orders.edit']);
+  if (!auth.ok) {
+    return auth.result;
+  }
+  const userId = auth.userId;
   const result = await invoiceService.update(id, data, userId);
 
   if (result.success) {
@@ -136,7 +164,11 @@ export async function updateInvoice(id: string, data: UpdateInvoiceInput) {
 // ============================================
 
 export async function deleteInvoice(id: string) {
-  const userId = await getCurrentUserId();
+  const auth = await authorizeAny(['invoices.void', 'orders.delete']);
+  if (!auth.ok) {
+    return auth.result;
+  }
+  const userId = auth.userId;
   const result = await invoiceService.delete(id, userId);
 
   if (result.success) {
@@ -151,7 +183,11 @@ export async function deleteInvoice(id: string) {
 // ============================================
 
 export async function recordInvoicePayment(id: string, data: RecordPaymentInput) {
-  const userId = await getCurrentUserId();
+  const auth = await authorizeAny(['invoices.record_payment', 'orders.edit']);
+  if (!auth.ok) {
+    return auth.result;
+  }
+  const userId = auth.userId;
   const result = await invoiceService.recordPayment(id, data, userId);
 
   if (result.success) {
@@ -167,7 +203,11 @@ export async function recordInvoicePayment(id: string, data: RecordPaymentInput)
 // ============================================
 
 export async function sendInvoice(id: string) {
-  const userId = await getCurrentUserId();
+  const auth = await authorizeAny(['invoices.send', 'orders.edit']);
+  if (!auth.ok) {
+    return auth.result;
+  }
+  const userId = auth.userId;
   const result = await invoiceService.send(id, userId);
 
   if (result.success) {
@@ -179,7 +219,11 @@ export async function sendInvoice(id: string) {
 }
 
 export async function markInvoiceOverdue(id: string) {
-  const userId = await getCurrentUserId();
+  const auth = await authorizeAny(['invoices.edit', 'orders.edit']);
+  if (!auth.ok) {
+    return auth.result;
+  }
+  const userId = auth.userId;
   const result = await invoiceService.markOverdue(id, userId);
 
   if (result.success) {
@@ -191,7 +235,11 @@ export async function markInvoiceOverdue(id: string) {
 }
 
 export async function cancelInvoice(id: string) {
-  const userId = await getCurrentUserId();
+  const auth = await authorizeAny(['invoices.void', 'orders.edit']);
+  if (!auth.ok) {
+    return auth.result;
+  }
+  const userId = auth.userId;
   const result = await invoiceService.cancel(id, userId);
 
   if (result.success) {
@@ -245,6 +293,10 @@ export async function getInvoiceMasterData(): Promise<{
   };
   error?: string;
 }> {
+  const auth = await authorizeAny(INVOICE_READ);
+  if (!auth.ok) {
+    return auth.result;
+  }
   try {
     const supabase = await createClient();
 
@@ -370,6 +422,10 @@ export async function getCustomerSalesOrders(customerId: string): Promise<{
   }>;
   error?: string;
 }> {
+  const auth = await authorizeAny(INVOICE_READ);
+  if (!auth.ok) {
+    return auth.result;
+  }
   try {
     const supabase = await createClient();
 
@@ -450,6 +506,10 @@ export async function getSalesOrderWithItems(salesOrderId: string): Promise<{
   };
   error?: string;
 }> {
+  const auth = await authorizeAny(INVOICE_READ);
+  if (!auth.ok) {
+    return auth.result;
+  }
   try {
     const supabase = await createClient();
 
@@ -544,6 +604,10 @@ export async function pushInvoiceToQuickBooks(invoiceId: string): Promise<{
   qboInvoiceId?: string;
   error?: string;
 }> {
+  const auth = await authorizeAny(['invoices.push_qbo']);
+  if (!auth.ok) {
+    return auth.result;
+  }
   try {
     // Dynamically import to avoid circular dependencies
     const { pushInvoiceToQbo } = await import(
@@ -575,6 +639,10 @@ export async function checkQuickBooksConnection(): Promise<{
   connected: boolean;
   error?: string;
 }> {
+  const auth = await authorizeAny(INVOICE_READ);
+  if (!auth.ok) {
+    return { ...auth.result, connected: false };
+  }
   try {
     const { isQuickBooksConnected } = await import(
       '@/modules/integrations/quickbooks/services/qbo-invoice-sync.service'

@@ -53,6 +53,7 @@ import type {
   QuickBooksConnectionMetadata,
   QuickBooksCustomer,
   QuickBooksInvoice,
+  QuickBooksInvoiceLine,
   QuickBooksPayment,
   QuickBooksItem,
   QuickBooksQueryResponse,
@@ -269,7 +270,20 @@ export class QuickBooksProvider implements IAccountingProvider {
     return status.connected;
   }
 
+  /** In-flight refreshes per connection: concurrent requests share one refresh */
+  private refreshes = new Map<string, Promise<void>>();
+
   async refreshTokenIfNeeded(connectionId: string): Promise<void> {
+    const running = this.refreshes.get(connectionId);
+    if (running) {
+      return running;
+    }
+    const refresh = this.doRefreshTokenIfNeeded(connectionId).finally(() => this.refreshes.delete(connectionId));
+    this.refreshes.set(connectionId, refresh);
+    return refresh;
+  }
+
+  private async doRefreshTokenIfNeeded(connectionId: string): Promise<void> {
     const connection = await this.getConnection(connectionId);
 
     if (!connection || !connection.token_expires_at || !connection.refresh_token) {
@@ -301,7 +315,15 @@ export class QuickBooksProvider implements IAccountingProvider {
       );
     } catch (error) {
       console.error('Token refresh failed:', error);
-      await updateConnectionStatus(connectionId, 'error', 'Token refresh failed');
+      // Only a revoked/expired refresh token disconnects; temporary failures
+      // keep the connection so the next request can try again
+      if ((error as { invalidGrant?: boolean })?.invalidGrant) {
+        await updateConnectionStatus(
+          connectionId,
+          'error',
+          'QuickBooks authorization expired or was revoked. Reconnect QuickBooks.'
+        );
+      }
       throw error;
     }
   }
@@ -315,10 +337,11 @@ export class QuickBooksProvider implements IAccountingProvider {
       return null;
     }
 
-    // Check if token is expired
+    // Refresh when the token expires within 5 minutes (a request must not
+    // start with a token that dies mid-way)
     if (connection.token_expires_at) {
       const expiresAt = new Date(connection.token_expires_at);
-      if (expiresAt <= new Date()) {
+      if (expiresAt.getTime() - Date.now() <= 5 * 60_000) {
         // Try to refresh
         await this.refreshTokenIfNeeded(connectionId);
         // Re-fetch connection after refresh
@@ -839,6 +862,27 @@ export class QuickBooksProvider implements IAccountingProvider {
     return this.mapQuickBooksInvoice(data.Invoice);
   }
 
+  /**
+   * QuickBooks invoice id with this DocNumber, or null. Used before creating
+   * an invoice so a retried push links the existing invoice instead of
+   * creating a duplicate.
+   */
+  async findInvoiceIdByDocNumber(connectionId: string, docNumber: string): Promise<string | null> {
+    const tokenInfo = await this.getAccessToken(connectionId);
+    if (!tokenInfo) {
+      throw new Error(QBO_ERRORS.NOT_CONNECTED);
+    }
+    const escaped = docNumber.slice(0, 21).replace(/'/g, "\\'");
+    const response = await this.executeQuery<QuickBooksInvoice>(
+      tokenInfo.accessToken,
+      tokenInfo.externalAccountId,
+      tokenInfo.environment,
+      `SELECT Id FROM Invoice WHERE DocNumber = '${escaped}' MAXRESULTS 1`
+    );
+    const found = (response.QueryResponse.Invoice || []) as QuickBooksInvoice[];
+    return found[0]?.Id ?? null;
+  }
+
   async createInvoice(
     connectionId: string,
     invoice: AccountingInvoice
@@ -848,28 +892,52 @@ export class QuickBooksProvider implements IAccountingProvider {
       throw new Error(QBO_ERRORS.NOT_CONNECTED);
     }
 
+    // QuickBooks requires Amount = Qty x UnitPrice on each line and has no
+    // line-level discount, so lines go out at their gross amount and the line
+    // discounts (amount = Gesher line total, net of discount) become one
+    // invoice discount line. Totals match Gesher to the cent (tax excluded).
+    const salesLines: QuickBooksInvoiceLine[] = invoice.lineItems.map((item, index) => ({
+      LineNum: index + 1,
+      Description: item.description,
+      Amount: Math.round(item.quantity * item.unitPrice) / 100, // cents -> dollars
+      DetailType: 'SalesItemLineDetail' as const,
+      SalesItemLineDetail: item.productExternalId
+        ? {
+            ItemRef: { value: item.productExternalId },
+            Qty: item.quantity,
+            UnitPrice: item.unitPrice / 100,
+          }
+        : {
+            Qty: item.quantity,
+            UnitPrice: item.unitPrice / 100,
+          },
+    }));
+    const discountCents = invoice.lineItems.reduce(
+      (sum, item) => sum + Math.round(item.quantity * item.unitPrice) - item.amount,
+      0
+    );
+    const lines: QuickBooksInvoiceLine[] =
+      discountCents > 0
+        ? [
+            ...salesLines,
+            {
+              Amount: discountCents / 100,
+              DetailType: 'DiscountLineDetail' as const,
+              DiscountLineDetail: { PercentBased: false },
+            },
+          ]
+        : salesLines;
+
     const qboInvoice: Partial<QuickBooksInvoice> = {
+      // Same number as in Gesher, so both systems show one invoice number
+      // (QuickBooks allows up to 21 characters)
+      ...(invoice.invoiceNumber ? { DocNumber: invoice.invoiceNumber.slice(0, 21) } : {}),
       CustomerRef: {
         value: invoice.customerExternalId || invoice.customerId,
       },
       TxnDate: invoice.invoiceDate,
       DueDate: invoice.dueDate,
-      Line: invoice.lineItems.map((item, index) => ({
-        LineNum: index + 1,
-        Description: item.description,
-        Amount: item.amount / 100, // Convert cents to dollars
-        DetailType: 'SalesItemLineDetail' as const,
-        SalesItemLineDetail: item.productExternalId
-          ? {
-              ItemRef: { value: item.productExternalId },
-              Qty: item.quantity,
-              UnitPrice: item.unitPrice / 100,
-            }
-          : {
-              Qty: item.quantity,
-              UnitPrice: item.unitPrice / 100,
-            },
-      })),
+      Line: lines,
       PrivateNote: invoice.memo,
     };
 

@@ -107,8 +107,9 @@ function mapInvoiceToQboFormat(invoice: InvoiceData): AccountingInvoice {
 }
 
 /**
- * Update invoice with QBO sync data
- * Also updates status to 'sent' when synced to QuickBooks
+ * Store the QuickBooks link on the invoice. The invoice status is not touched
+ * here (a paid or partial invoice must stay paid/partial); a draft is moved
+ * to "sent" through the invoice service by pushInvoiceToQbo.
  */
 async function updateInvoiceQboFields(
   invoiceId: string,
@@ -122,7 +123,6 @@ async function updateInvoiceQboFields(
       quickbooks_invoice_id: qboInvoiceId,
       quickbooks_sync_status: 'synced',
       quickbooks_last_sync: new Date().toISOString(),
-      status: 'sent', // Update status to 'sent' when shared to QuickBooks
     })
     .eq('id', invoiceId);
 
@@ -177,6 +177,7 @@ export async function pushInvoiceToQbo(invoiceId: string): Promise<PushInvoiceRe
       .from('invoices')
       .select(`
         id,
+        status,
         invoice_number,
         invoice_date,
         due_date,
@@ -221,6 +222,27 @@ export async function pushInvoiceToQbo(invoiceId: string): Promise<PushInvoiceRe
       };
     }
 
+    // 3b. Claim the push: a double click or a second user gets a clear
+    // message instead of a duplicate QuickBooks invoice. A claim older than
+    // 5 minutes (crashed run) can be taken over.
+    const staleBefore = new Date(Date.now() - 5 * 60_000).toISOString();
+    const { data: claimed, error: claimError } = await supabase
+      .from('invoices')
+      .update({ quickbooks_sync_status: 'pushing', quickbooks_last_sync: new Date().toISOString() })
+      .eq('id', invoiceId)
+      .is('quickbooks_invoice_id', null)
+      .or(`quickbooks_sync_status.is.null,quickbooks_sync_status.neq.pushing,quickbooks_last_sync.lt.${staleBefore}`)
+      .select('id');
+    if (claimError) {
+      throw new Error(`Failed to start the QuickBooks push: ${claimError.message}`);
+    }
+    if (!claimed || claimed.length === 0) {
+      return {
+        success: false,
+        error: 'This invoice is already being pushed to QuickBooks. Wait a moment and refresh.',
+      };
+    }
+
     // 4. Check if customer is synced to QBO, if not - auto-sync
     // Supabase returns the relation as an object for single() queries with FK relations
     let customer = invoice.customers as unknown as { id: string; qbo_customer_id: string | null } | null;
@@ -234,6 +256,7 @@ export async function pushInvoiceToQbo(invoiceId: string): Promise<PushInvoiceRe
         .single();
 
       if (customerError || !fullCustomer) {
+        await updateInvoiceSyncError(invoiceId);
         return {
           success: false,
           error: 'Customer not found',
@@ -275,6 +298,7 @@ export async function pushInvoiceToQbo(invoiceId: string): Promise<PushInvoiceRe
       });
 
       if (!customerSyncResult.success || !customerSyncResult.qboCustomerId) {
+        await updateInvoiceSyncError(invoiceId);
         return {
           success: false,
           error: `Failed to sync customer to QuickBooks: ${customerSyncResult.error}`,
@@ -393,13 +417,17 @@ export async function pushInvoiceToQbo(invoiceId: string): Promise<PushInvoiceRe
 
     const qboInvoice = mapInvoiceToQboFormat(invoiceData);
 
-    // 7. Create invoice in QBO
-    const result = await quickBooksProvider.createInvoice(
+    // 7. Create invoice in QBO - unless an earlier attempt already created it
+    // (same invoice number), in which case it is only linked
+    const existingQboId = await quickBooksProvider.findInvoiceIdByDocNumber(
       qboConnection.connectionId,
-      qboInvoice
+      invoice.invoice_number
     );
+    const qboInvoiceId =
+      existingQboId ??
+      (await quickBooksProvider.createInvoice(qboConnection.connectionId, qboInvoice)).externalId;
 
-    if (!result.externalId) {
+    if (!qboInvoiceId) {
       await updateInvoiceSyncError(invoiceId);
       return {
         success: false,
@@ -408,11 +436,21 @@ export async function pushInvoiceToQbo(invoiceId: string): Promise<PushInvoiceRe
     }
 
     // 8. Update invoice with QBO data
-    await updateInvoiceQboFields(invoiceId, result.externalId);
+    await updateInvoiceQboFields(invoiceId, qboInvoiceId);
+
+    // 9. A draft becomes "sent" through the normal transition (adds it to the
+    // customer's open balance); other statuses are left as they are
+    if (invoice.status === 'draft') {
+      const { invoiceService } = await import('@/features/invoices/services/invoice.service');
+      const sent = await invoiceService.send(invoiceId);
+      if (!sent.success) {
+        console.error(`Invoice ${invoice.invoice_number} pushed to QBO but could not be marked sent:`, sent.error);
+      }
+    }
 
     return {
       success: true,
-      qboInvoiceId: result.externalId,
+      qboInvoiceId,
     };
   } catch (error) {
     console.error('Error pushing invoice to QBO:', error);

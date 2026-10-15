@@ -25,21 +25,15 @@ import {
   getCommissionStatsData,
 } from '../actions';
 
-// Financial Metrics components
-import { LiquidityTable } from './financial-metrics/LiquidityTable';
-import { WorkingCapitalPosition } from './financial-metrics/WorkingCapitalPosition';
-import { WorkingCapitalEfficiency } from './financial-metrics/WorkingCapitalEfficiency';
-import { CashOperations } from './financial-metrics/CashOperations';
-
-// Profitability components
-import { ProfitabilityTable } from './profitability/ProfitabilityTable';
-import { PerTireEconomics } from './profitability/PerTireEconomics';
-import { OpexRunRate } from './profitability/OpexRunRate';
-import { BacklogSummary } from './profitability/BacklogSummary';
-
-// Supply Chain components
-import { IncomingSupply } from './supply-chain/IncomingSupply';
-import { CurrentInventory } from './supply-chain/CurrentInventory';
+// Live QuickBooks figures + executive dashboard tables (Ankur's spec).
+// The earlier sample-data tables (financial-metrics/*, profitability/*,
+// supply-chain/*) are no longer shown.
+import { QuickBooksFinancials } from './financial-metrics/QuickBooksFinancials';
+import {
+  FinancialMetricsTables,
+  ProfitabilityTables,
+  SupplyChainTables,
+} from './executive/ExecutiveTables';
 import type {
   DateRange,
   DateRangePreset,
@@ -251,31 +245,20 @@ export function DashboardContent({
         {/* Tab 2: Financial Metrics */}
         <TabsContent value="financial" className="space-y-6 mt-0">
           <div className="grid gap-6">
-            <LiquidityTable />
-            <WorkingCapitalPosition />
-            <WorkingCapitalEfficiency />
-            <CashOperations />
+            {/* Live figures from QuickBooks (Oct 12 call) */}
+            <QuickBooksFinancials />
+            <FinancialMetricsTables />
           </div>
         </TabsContent>
 
         {/* Tab 3: Profitability */}
         <TabsContent value="profitability" className="space-y-6 mt-0">
-          <div className="grid gap-6">
-            <ProfitabilityTable dateRange={currentDateRange} />
-            <PerTireEconomics dateRange={currentDateRange} />
-            <div className="grid gap-6 md:grid-cols-2">
-              <OpexRunRate />
-              <BacklogSummary />
-            </div>
-          </div>
+          <ProfitabilityTables />
         </TabsContent>
 
         {/* Tab 4: Supply Chain */}
         <TabsContent value="supply" className="space-y-6 mt-0">
-          <div className="grid gap-6">
-            <IncomingSupply />
-            <CurrentInventory />
-          </div>
+          <SupplyChainTables />
         </TabsContent>
       </Tabs>
     </div>

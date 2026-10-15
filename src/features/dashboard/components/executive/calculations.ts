@@ -1,0 +1,184 @@
+/**
+ * "How is this calculated?" content for the executive dashboard tables
+ * (eye icon next to each table title). Keep in sync with
+ * services/executive-erp.service.ts, lib/executive-model.ts and
+ * qbo-financials.service.ts.
+ */
+
+export type CalcStatus = 'live' | 'partial' | 'pending';
+
+export interface CalcItem {
+  kpi: string;
+  formula: string;
+  source: string;
+  status: CalcStatus;
+}
+
+const QB_COA = 'QuickBooks, using Settings › QuickBooks › Chart of Accounts';
+const NO_COST = 'Pending: ERP purchase-order prices are the customer sales prices, so the real Galileo purchase cost is not recorded yet';
+
+export const CALCULATIONS: Record<string, CalcItem[]> = {
+  '1.1': [
+    {
+      kpi: 'Cash Today',
+      formula: '= Σ balances of accounts mapped to "Cash" (bank accounts + undeposited funds) on today’s Balance Sheet',
+      source: `${QB_COA} · Balance Sheet`,
+      status: 'live',
+    },
+    { kpi: 'PY', formula: '= the same, on the date one year ago', source: 'QuickBooks Balance Sheet (past date)', status: 'live' },
+    {
+      kpi: 'Low Cash / High Cash',
+      formula: '= lowest / highest projected daily cash balance between today and the Projected Through Date',
+      source: 'Pending: needs the cash projection inputs below',
+      status: 'pending',
+    },
+    {
+      kpi: 'Projected Cash',
+      formula: '= Cash Today + expected inflows (AR, backlog) − expected outflows (AP, supplier payments, OPEX, debt, taxes, CapEx); Through Date = last modeled cash event',
+      source: 'Pending: supplier payment schedule, OPEX forecast, debt/tax/CapEx dates are not recorded',
+      status: 'pending',
+    },
+  ],
+  '1.2': [
+    {
+      kpi: 'Current',
+      formula: '= today’s Balance Sheet total of accounts mapped to AR / AP / Inventory',
+      source: `${QB_COA} · Balance Sheet`,
+      status: 'live',
+    },
+    {
+      kpi: 'Weighted Timing',
+      formula: '= Σ(open balance × days until due) ÷ Σ open balance; overdue items count as 0 days',
+      source: 'QuickBooks open invoices (AR) and open bills (AP)',
+      status: 'live',
+    },
+    {
+      kpi: 'T90 Avg / YTD Avg',
+      formula: '= average of the month-end balances inside the last 90 days / since Jan 1, plus today',
+      source: 'QuickBooks Balance Sheet at each month-end',
+      status: 'live',
+    },
+    { kpi: 'PY', formula: '= balance on the date one year ago', source: 'QuickBooks Balance Sheet (past date)', status: 'live' },
+  ],
+  '1.3': [
+    {
+      kpi: 'DSO',
+      formula: '= average AR ÷ net credit sales × days in the period',
+      source: 'Average AR: QuickBooks month-end balances · Credit sales: ERP invoices (not draft/cancelled) − credit notes. PY pending (prior-year month-ends not loaded)',
+      status: 'partial',
+    },
+    { kpi: 'DPO', formula: '= average AP ÷ credit purchases × days in the period', source: NO_COST, status: 'pending' },
+    { kpi: 'DIO', formula: '= average inventory at cost ÷ COGS × days in the period', source: NO_COST, status: 'pending' },
+    { kpi: 'CCC', formula: '= DIO + DSO − DPO', source: 'Pending: needs DIO and DPO', status: 'pending' },
+  ],
+  '1.4': [
+    {
+      kpi: 'Operating Cash Flow',
+      formula: '= "Net cash provided by operating activities" for the period',
+      source: 'QuickBooks Statement of Cash Flows',
+      status: 'live',
+    },
+    {
+      kpi: 'CapEx',
+      formula: '= net cash spent in investing activities for the period (shown as a cost)',
+      source: 'QuickBooks Statement of Cash Flows · investing section',
+      status: 'live',
+    },
+    { kpi: 'Free Cash Flow', formula: '= Operating Cash Flow − CapEx', source: 'Calculated', status: 'live' },
+  ],
+  '2.1': [
+    {
+      kpi: 'Revenue',
+      formula: '= Σ tire line totals on customer invoices (not draft/cancelled) dated in the period, net of line discounts, excl. tax − credit notes (issued/applied) in the period',
+      source: 'ERP invoices · tires = products of type Inventory; commission invoices excluded',
+      status: 'live',
+    },
+    { kpi: 'COGS', formula: '= FIFO purchase cost of the same invoiced tires', source: NO_COST, status: 'pending' },
+    { kpi: 'Gross Profit', formula: '= Revenue − COGS; % = Gross Profit ÷ Revenue', source: 'Pending: needs COGS', status: 'pending' },
+    {
+      kpi: 'OPEX',
+      formula: '= Profit & Loss total of accounts mapped to OPEX for the period; % = OPEX ÷ Revenue',
+      source: `${QB_COA} · Profit and Loss`,
+      status: 'live',
+    },
+    { kpi: 'Operating Profit', formula: '= Gross Profit − OPEX', source: 'Pending: needs COGS', status: 'pending' },
+    {
+      kpi: 'Columns',
+      formula: 'MTD = 1st of month → today · T90 = last 90 days · YTD = Jan 1 → today · PY = Jan 1 → same date last year',
+      source: 'Dates in America/New_York',
+      status: 'live',
+    },
+  ],
+  '2.2': [
+    { kpi: 'Tires Sold', formula: '= Σ quantity of the same invoiced tire lines used for Revenue', source: 'ERP invoices', status: 'live' },
+    { kpi: 'Revenue / Tire', formula: '= Revenue ÷ Tires Sold', source: 'Calculated', status: 'live' },
+    { kpi: 'OPEX / Tire', formula: '= OPEX ÷ Tires Sold', source: 'QuickBooks OPEX ÷ ERP tires', status: 'live' },
+    { kpi: 'COGS / GP / OP per Tire', formula: '= each line ÷ Tires Sold', source: 'Pending: needs COGS', status: 'pending' },
+  ],
+  '2.3': [
+    {
+      kpi: 'OPEX / Month – Current Month Est.',
+      formula: '= actual OPEX month to date + forecast for the rest of the month',
+      source: 'Pending: forecast method to be agreed (the note shows the MTD actual)',
+      status: 'pending',
+    },
+    { kpi: 'OPEX / Month – T90 Avg', formula: '= OPEX of the last 90 days ÷ 3', source: 'QuickBooks Profit and Loss (OPEX accounts)', status: 'live' },
+    { kpi: 'OPEX / Month – PY', formula: '= OPEX of the same 90 days last year ÷ 3', source: 'QuickBooks Profit and Loss', status: 'live' },
+    { kpi: 'Annualized OPEX', formula: '= OPEX per month × 12', source: 'Calculated', status: 'live' },
+  ],
+  '3.1': [
+    {
+      kpi: 'Backlog Tires',
+      formula: '= Σ (tires ordered − tires already invoiced) on firm sales orders (confirmed, processing, shipped, delivered)',
+      source: 'ERP sales orders + invoices · no quotes or pipeline',
+      status: 'live',
+    },
+    { kpi: 'Backlog Revenue', formula: '= remaining tires × net unit price of the sales order line', source: 'ERP sales orders', status: 'live' },
+    { kpi: 'Revenue / Tire', formula: '= Backlog Revenue ÷ Backlog Tires', source: 'Calculated', status: 'live' },
+    { kpi: 'Backlog GP, GP / Tire, GP %', formula: '= Backlog Revenue − expected cost of the remaining tires', source: NO_COST, status: 'pending' },
+    { kpi: 'T90 Avg / YTD Avg / PY', formula: '= averages of past backlog values', source: 'Pending: backlog history is not recorded yet', status: 'pending' },
+  ],
+  '4.1': [
+    { kpi: 'Order Cycle', formula: '= purchase order "order series" (GDC 0, 1, 2, 3)', source: 'ERP purchase orders', status: 'live' },
+    { kpi: 'Tires Ordered', formula: '= Σ tire quantities on the cycle’s purchase orders (not draft/cancelled)', source: 'ERP purchase orders', status: 'live' },
+    { kpi: 'Containers', formula: '= containers on the cycle’s purchase orders', source: 'Pending: container numbers are on 1 of 60 shipments', status: 'pending' },
+    {
+      kpi: 'Arrival Window',
+      formula: '= earliest – latest ETA of the cycle’s shipments (tracking ETA, else confirmed ETA, else ETA to port; PO date if no shipment)',
+      source: 'ERP shipments / CMA tracking',
+      status: 'live',
+    },
+    { kpi: 'Weeks Left', formula: '= (window start − today) ÷ 7; 0 once the window has started', source: 'Calculated', status: 'live' },
+    {
+      kpi: 'Sold / Unsold / Forward Commit %',
+      formula: 'Sold = tires on sales orders (not draft/cancelled) of the same cycle · Unsold = Ordered − Sold · Commit % = Sold ÷ Ordered',
+      source: 'ERP sales orders',
+      status: 'live',
+    },
+    {
+      kpi: 'Velocity',
+      formula: 'Actual = tires on the cycle’s sales orders dated in the last 4 weeks ÷ 4 · Required = Unsold ÷ Weeks Left · Gap = Actual − Required',
+      source: 'ERP sales orders',
+      status: 'live',
+    },
+    { kpi: 'Projected Uncommitted at Arrival', formula: '= max(0, Unsold − Actual Velocity × Weeks Left)', source: 'Calculated', status: 'live' },
+  ],
+  '4.2': [
+    {
+      kpi: 'Inventory at Cost',
+      formula: '= Balance Sheet total of accounts mapped to Inventory (current, month-end averages, PY)',
+      source: `${QB_COA} · Balance Sheet`,
+      status: 'live',
+    },
+    { kpi: 'Tires On Hand', formula: '= Σ on hand of tire products', source: 'ERP inventory', status: 'live' },
+    { kpi: 'Cost / Tire', formula: '= Inventory at Cost ÷ Tires On Hand', source: 'QuickBooks ÷ ERP', status: 'live' },
+    { kpi: 'Uncommitted Inventory', formula: '= max(0, tires on hand − tires allocated to orders)', source: 'ERP inventory', status: 'live' },
+    {
+      kpi: 'Uncommitted Months of Supply',
+      formula: '= Uncommitted ÷ average monthly invoiced tires over the last 3 completed months',
+      source: 'ERP inventory + invoices',
+      status: 'live',
+    },
+    { kpi: 'Unit averages / PY', formula: '= averages of past on-hand values', source: 'Pending: inventory history is not recorded yet', status: 'pending' },
+  ],
+};

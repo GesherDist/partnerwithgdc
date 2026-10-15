@@ -14,6 +14,7 @@ import { memo, useEffect, useState, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { format } from 'date-fns';
 import {
+  BookOpen,
   ExternalLink,
   Landmark,
   Loader2,
@@ -41,6 +42,7 @@ import {
   IntegrationToggle,
 } from './IntegrationCard';
 import type { QuickBooksConnection } from '../types';
+import { ChartOfAccountsSheet } from './ChartOfAccountsSheet';
 
 // ============================================
 // TYPES
@@ -75,12 +77,15 @@ function QuickBooksCardComponent() {
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [disconnectOpen, setDisconnectOpen] = useState(false);
+  const [accountsOpen, setAccountsOpen] = useState(false);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
 
   // Fetch connection status
   const fetchStatus = useCallback(async () => {
     try {
       const response = await fetch('/api/quickbooks/status');
       const data: QuickBooksStatusResponse = await response.json();
+      setConnectionError(data.status === 'error' ? data.errorMessage || 'QuickBooks connection failed' : null);
 
       if (data.connected && data.companyName && data.realmId) {
         setConnection({
@@ -266,6 +271,12 @@ function QuickBooksCardComponent() {
           </Button>
         }
       >
+        {connectionError && (
+          <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-900">
+            <b>QuickBooks needs to be reconnected.</b> {connectionError} Invoices cannot be pushed and
+            figures are not synced until you connect again.
+          </div>
+        )}
         <div className="flex gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
           <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
           <p className="text-sm text-amber-900">
@@ -291,6 +302,10 @@ function QuickBooksCardComponent() {
         status="connected"
         footer={
           <>
+            <Button variant="outline" onClick={() => setAccountsOpen(true)}>
+              <BookOpen className="mr-2 h-4 w-4" />
+              Chart of Accounts
+            </Button>
             <Button variant="outline" onClick={handleReconnect} disabled={connecting}>
               {connecting ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -356,6 +371,8 @@ function QuickBooksCardComponent() {
           />
         </div>
       </IntegrationCard>
+
+      <ChartOfAccountsSheet open={accountsOpen} onClose={() => setAccountsOpen(false)} />
 
       <AlertDialog open={disconnectOpen} onOpenChange={setDisconnectOpen}>
         <AlertDialogContent className="bg-white">

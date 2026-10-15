@@ -164,7 +164,11 @@ export async function refreshAccessToken(refreshToken: string): Promise<IntuitTo
   if (!response.ok) {
     const errorBody = await response.text();
     console.error('Token refresh failed:', response.status, errorBody);
-    throw new Error(QBO_ERRORS.TOKEN_REFRESH_FAILED);
+    const error = new Error(QBO_ERRORS.TOKEN_REFRESH_FAILED) as Error & { invalidGrant?: boolean };
+    // invalid_grant = the refresh token expired or was revoked: only a reconnect helps.
+    // Anything else (network, 5xx) is temporary and must not disconnect the integration.
+    error.invalidGrant = /invalid_grant/i.test(errorBody);
+    throw error;
   }
 
   return response.json() as Promise<IntuitTokenResponse>;
