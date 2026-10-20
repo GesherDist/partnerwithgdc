@@ -19,6 +19,9 @@ const PUBLIC_ROUTES = [
   '/login',
   '/forgot-password',
   '/reset-password',
+  // Legal pages: registered with Intuit (QuickBooks app) as EULA / Privacy Policy URLs
+  '/terms',
+  '/privacy',
 ];
 
 /**
