@@ -47,6 +47,8 @@ export interface SalesFigures {
 export interface SupplyCycle {
   cycle: string;
   tiresOrdered: number;
+  /** Distinct container numbers on the cycle's shipments (entered by Jenny / supplier) */
+  containerCount: number;
   arrivalStart: string | null;
   arrivalEnd: string | null;
   weeksLeft: number | null;
@@ -165,7 +167,10 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
       .select('order_number, order_date, status, order_series, sales_order_items(id, product_id, quantity, customer_qty, line_total)')
       .is('deleted_at', null)
       .not('status', 'in', '(draft,cancelled)'),
-    db.from('shipments').select('purchase_order_id, eta_port_tracking, confirmed_eta, eta_to_port, estimated_arrival').is('deleted_at', null),
+    db
+      .from('shipments')
+      .select('purchase_order_id, container_number, eta_port_tracking, confirmed_eta, eta_to_port, estimated_arrival')
+      .is('deleted_at', null),
     db.from('inventory').select('product_id, on_hand, allocated'),
   ]);
   for (const r of [productsRes, invoicesRes, creditsRes, poRes, soRes, shipmentsRes, inventoryRes]) {
@@ -310,7 +315,14 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
   const etaOf = (s: Record<string, unknown>) =>
     (s.eta_port_tracking ?? s.confirmed_eta ?? s.eta_to_port ?? s.estimated_arrival ?? null) as string | null;
   const shipmentEtas = new Map<string, string[]>();
+  const shipmentContainers = new Map<string, string[]>();
   for (const s of shipmentsRes.data ?? []) {
+    const container = String((s as Record<string, unknown>).container_number ?? '').trim().toUpperCase();
+    if (s.purchase_order_id && container) {
+      const list = shipmentContainers.get(String(s.purchase_order_id)) ?? [];
+      list.push(container);
+      shipmentContainers.set(String(s.purchase_order_id), list);
+    }
     const eta = etaOf(s as Record<string, unknown>);
     if (s.purchase_order_id && eta) {
       const list = shipmentEtas.get(String(s.purchase_order_id)) ?? [];
@@ -319,10 +331,13 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
     }
   }
   const velocityFrom = addDays(asOf, -27); // last 4 weeks
-  const cycles = new Map<string, { ordered: number; etas: string[]; sold: number; recent: number }>();
+  const cycles = new Map<string, { ordered: number; etas: string[]; containers: Set<string>; sold: number; recent: number }>();
   const cycleOf = (series: unknown) => (series ? String(series) : 'Unassigned');
   for (const po of pos) {
-    const c = cycles.get(cycleOf(po.order_series)) ?? { ordered: 0, etas: [], sold: 0, recent: 0 };
+    const c = cycles.get(cycleOf(po.order_series)) ?? { ordered: 0, etas: [], containers: new Set<string>(), sold: 0, recent: 0 };
+    for (const container of shipmentContainers.get(String(po.id)) ?? []) {
+      c.containers.add(container);
+    }
     for (const item of (po.purchase_order_items ?? []) as Array<Record<string, unknown>>) {
       if (item.product_id && tireIds.has(String(item.product_id))) {
         c.ordered += Number(item.quantity_ordered ?? 0);
@@ -361,6 +376,7 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
       return {
         cycle,
         tiresOrdered: c.ordered,
+        containerCount: c.containers.size,
         arrivalStart: start,
         arrivalEnd: end,
         weeksLeft,

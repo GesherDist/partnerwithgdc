@@ -64,10 +64,15 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
     {
       kpi: 'DSO',
       formula: '= average AR ÷ net credit sales × days in the period',
-      source: 'Average AR: QuickBooks month-end balances · Credit sales: ERP invoices (not draft/cancelled) − credit notes. PY pending (prior-year month-ends not loaded)',
-      status: 'partial',
+      source: 'Average AR: QuickBooks month-end balances (PY: prior-year month-ends) · Credit sales: ERP invoices (not draft/cancelled) − credit notes',
+      status: 'live',
     },
-    { kpi: 'DPO', formula: '= average AP ÷ credit purchases × days in the period', source: NO_COST, status: 'pending' },
+    {
+      kpi: 'DPO',
+      formula: '= average AP ÷ credit purchases × days in the period',
+      source: 'Average AP: QuickBooks month-end balances · Credit purchases: QuickBooks vendor bills − vendor credits, by transaction date',
+      status: 'live',
+    },
     { kpi: 'DIO', formula: '= average inventory at cost ÷ COGS × days in the period', source: NO_COST, status: 'pending' },
     { kpi: 'CCC', formula: '= DIO + DSO − DPO', source: 'Pending: needs DIO and DPO', status: 'pending' },
   ],
@@ -136,12 +141,22 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
     { kpi: 'Backlog Revenue', formula: '= remaining tires × net unit price of the sales order line', source: 'ERP sales orders', status: 'live' },
     { kpi: 'Revenue / Tire', formula: '= Backlog Revenue ÷ Backlog Tires', source: 'Calculated', status: 'live' },
     { kpi: 'Backlog GP, GP / Tire, GP %', formula: '= Backlog Revenue − expected cost of the remaining tires', source: NO_COST, status: 'pending' },
-    { kpi: 'T90 Avg / YTD Avg / PY', formula: '= averages of past backlog values', source: 'Pending: backlog history is not recorded yet', status: 'pending' },
+    {
+      kpi: 'T90 Avg / YTD Avg / PY',
+      formula: '= average of the daily backlog values in the last 90 days / since Jan 1; PY = the value one year ago',
+      source: 'Recorded daily from Oct 20, 2026 (the note shows how many days are recorded so far); PY after one year',
+      status: 'partial',
+    },
   ],
   '4.1': [
     { kpi: 'Order Cycle', formula: '= purchase order "order series" (GDC 0, 1, 2, 3)', source: 'ERP purchase orders', status: 'live' },
     { kpi: 'Tires Ordered', formula: '= Σ tire quantities on the cycle’s purchase orders (not draft/cancelled)', source: 'ERP purchase orders', status: 'live' },
-    { kpi: 'Containers', formula: '= containers on the cycle’s purchase orders', source: 'Pending: container numbers are on 1 of 60 shipments', status: 'pending' },
+    {
+      kpi: 'Containers',
+      formula: '= number of distinct container numbers on the shipments of the cycle’s purchase orders',
+      source: 'ERP shipments (container numbers entered by Jenny or the supplier); "—" until one is entered',
+      status: 'live',
+    },
     {
       kpi: 'Arrival Window',
       formula: '= earliest – latest ETA of the cycle’s shipments (tracking ETA, else confirmed ETA, else ETA to port; PO date if no shipment)',
@@ -179,6 +194,11 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
       source: 'ERP inventory + invoices',
       status: 'live',
     },
-    { kpi: 'Unit averages / PY', formula: '= averages of past on-hand values', source: 'Pending: inventory history is not recorded yet', status: 'pending' },
+    {
+      kpi: 'Unit averages / PY',
+      formula: '= average of the daily values (tires on hand, cost per tire, uncommitted, months of supply) in the last 90 days / since Jan 1; PY = the value one year ago',
+      source: 'Recorded daily from Oct 20, 2026 (the note shows how many days are recorded so far); PY after one year',
+      status: 'partial',
+    },
   ],
 };

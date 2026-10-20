@@ -7,8 +7,9 @@
  */
 
 import type { ErpExecutiveFigures, SupplyCycle } from '../services/executive-erp.service';
+import type { DailySnapshot } from '../services/executive-history.service';
 import type { QboBalances, QboFinancials } from '@/modules/integrations/quickbooks/services/qbo-financials.service';
-import type { PeriodKey } from './periods';
+import { addYears, type PeriodKey } from './periods';
 
 export interface Cell {
   value: number | null;
@@ -25,6 +26,7 @@ export const REASON = {
   noSales: 'No sales in period',
   noContainers: 'Needs container data',
   noUnits: 'No tires on hand',
+  noPurchases: 'No purchases in period',
 } as const;
 
 type Cols4 = 'mtd' | 't90' | 'ytd' | 'py';
@@ -53,7 +55,12 @@ const div = (a: number | null | undefined, b: number | null | undefined) =>
   a === null || a === undefined || b === null || b === undefined || b === 0 ? null : a / b;
 const avg = (values: number[]) => (values.length ? values.reduce((s, x) => s + x, 0) / values.length : null);
 
-export function buildExecutiveModel(erp: ErpExecutiveFigures, qbo: QboFinancials | null, qboConnected: boolean): ExecutiveDashboardModel {
+export function buildExecutiveModel(
+  erp: ErpExecutiveFigures,
+  qbo: QboFinancials | null,
+  qboConnected: boolean,
+  history: DailySnapshot[] = []
+): ExecutiveDashboardModel {
   const p = erp.periods;
   const q = qbo?.periods ?? null;
   const qNote = REASON.noQuickBooks;
@@ -83,7 +90,9 @@ export function buildExecutiveModel(erp: ErpExecutiveFigures, qbo: QboFinancials
       return end ? avg([...(before ? [before[key]] : []), end[key]]) : null;
     }
     if (period === 'py') {
-      return null; // prior-year month-end history not fetched yet
+      // Prior-year YTD: its month-ends plus the closing value on the prior-year date
+      const pts = q.balances.filter((b) => b.date >= p.py.from && b.date < p.py.to).map((b) => b[key]);
+      return pyBal ? avg([...pts, pyBal[key]]) : null;
     }
     return avgOver(key, p[period].from, p[period].to);
   };
@@ -106,8 +115,17 @@ export function buildExecutiveModel(erp: ErpExecutiveFigures, qbo: QboFinancials
     const ar = avgFor('accountsReceivable', c);
     const sales = erp.creditSales[c];
     dso[c] = !q ? none(qNote) : ar === null ? none(REASON.noHistory) : sales === 0 ? none(REASON.noSales) : v(Math.round(((ar / sales) * p[c].days) * 10) / 10);
-    // Purchases need the real purchase cost (PO prices are sales prices today)
-    dpo[c] = none(REASON.noCost);
+    // DPO = average trade AP ÷ credit purchases (QuickBooks bills less vendor credits) × days (2.8)
+    const ap = avgFor('accountsPayable', c);
+    const purchases = q?.creditPurchases?.[c];
+    dpo[c] = !q || purchases === undefined
+      ? none(qNote)
+      : ap === null
+        ? none(REASON.noHistory)
+        : purchases === 0
+          ? none(REASON.noPurchases)
+          : v(Math.round(((ap / purchases) * p[c].days) * 10) / 10);
+    // DIO needs COGS, so CCC (DIO + DSO − DPO) is not available either
     dio[c] = none(REASON.noCost);
     ccc[c] = none(REASON.noCost);
   }
@@ -185,17 +203,53 @@ export function buildExecutiveModel(erp: ErpExecutiveFigures, qbo: QboFinancials
     },
   };
 
+  // ---------- daily history (backlog / inventory units, migration 163) ----------
+  // Spec: T90 Avg / YTD Avg = average of daily values; PY = value one year earlier
+  const pyDate = addYears(erp.asOf, -1);
+  const histAvg = (pick: (d: DailySnapshot) => number | null, from: string, days: number): Cell => {
+    const values = history
+      .filter((d) => d.date >= from && d.date <= erp.asOf)
+      .map(pick)
+      .filter((x): x is number => x !== null && Number.isFinite(x));
+    if (values.length === 0) {
+      return none(REASON.noHistory);
+    }
+    const value = Math.round(avg(values)! * 100) / 100;
+    return values.length < days ? v(value, `${values.length} of ${days} days`) : v(value);
+  };
+  const histRow = (pick: (d: DailySnapshot) => number | null) => {
+    const py = history.find((d) => d.date === pyDate);
+    const pyValue = py ? pick(py) : null;
+    return {
+      t90Avg: histAvg(pick, p.t90.from, p.t90.days),
+      ytdAvg: histAvg(pick, p.ytd.from, p.ytd.days),
+      py: pyValue === null ? none(REASON.noHistory) : v(pyValue),
+    };
+  };
+  const perTireOf = (amount: (d: DailySnapshot) => number | null, units: (d: DailySnapshot) => number) => (d: DailySnapshot) => {
+    const a = amount(d);
+    const u = units(d);
+    return a === null || u === 0 ? null : a / u;
+  };
+
   // ---------- backlog ----------
   const b = erp.backlog;
   const bGp = b.cogs === null ? null : b.revenue - b.cogs;
   const histNone = { t90Avg: none(REASON.noHistory), ytdAvg: none(REASON.noHistory), py: none(REASON.noHistory) };
+  const costNone = { t90Avg: none(REASON.noCost), ytdAvg: none(REASON.noCost), py: none(REASON.noCost) };
   const backlog: ExecutiveDashboardModel['backlog'] = {
-    tires: { current: v(b.tires), ...histNone },
-    revenue: { current: v(b.revenue), ...histNone },
-    revenuePerTire: { current: b.tires ? v(Math.round((b.revenue / b.tires) * 100) / 100) : none(REASON.noSales), ...histNone },
-    grossProfit: { current: bGp === null ? none(REASON.noCost) : v(bGp), ...histNone },
-    gpPerTire: { current: bGp === null ? none(REASON.noCost) : v(div(bGp, b.tires)), ...histNone },
-    gpPct: { current: bGp === null ? none(REASON.noCost) : v(div(bGp, b.revenue) === null ? null : Math.round((bGp / b.revenue) * 1000) / 10), ...histNone },
+    tires: { current: v(b.tires), ...histRow((d) => d.backlogTires) },
+    revenue: { current: v(b.revenue), ...histRow((d) => d.backlogRevenue) },
+    revenuePerTire: {
+      current: b.tires ? v(Math.round((b.revenue / b.tires) * 100) / 100) : none(REASON.noSales),
+      ...histRow(perTireOf((d) => d.backlogRevenue, (d) => d.backlogTires)),
+    },
+    grossProfit: { current: bGp === null ? none(REASON.noCost) : v(bGp), ...(bGp === null ? costNone : histNone) },
+    gpPerTire: { current: bGp === null ? none(REASON.noCost) : v(div(bGp, b.tires)), ...(bGp === null ? costNone : histNone) },
+    gpPct: {
+      current: bGp === null ? none(REASON.noCost) : v(div(bGp, b.revenue) === null ? null : Math.round((bGp / b.revenue) * 1000) / 10),
+      ...(bGp === null ? costNone : histNone),
+    },
   };
 
   // ---------- inventory ----------
@@ -208,15 +262,15 @@ export function buildExecutiveModel(erp: ErpExecutiveFigures, qbo: QboFinancials
       ytdAvg: q ? v(avgOver('inventory', p.ytd.from, p.ytd.to)) : none(qNote),
       py: pyBal ? v(pyBal.inventory) : none(q ? REASON.noHistory : qNote),
     },
-    tiresOnHand: { current: v(inv.tiresOnHand), ...histNone },
+    tiresOnHand: { current: v(inv.tiresOnHand), ...histRow((d) => d.tiresOnHand) },
     costPerTire: {
       current: !current ? none(qNote) : inv.tiresOnHand === 0 ? none(REASON.noUnits) : v(Math.round((invCost! / inv.tiresOnHand) * 100) / 100),
-      ...histNone,
+      ...histRow(perTireOf((d) => d.inventoryAtCost, (d) => d.tiresOnHand)),
     },
-    uncommitted: { current: v(inv.uncommitted), ...histNone },
+    uncommitted: { current: v(inv.uncommitted), ...histRow((d) => d.uncommitted) },
     monthsOfSupply: {
       current: inv.monthsOfSupply === null ? none('No tires sold in the last 3 completed months') : v(inv.monthsOfSupply),
-      ...histNone,
+      ...histRow((d) => d.monthsOfSupply),
     },
   };
 
@@ -242,7 +296,7 @@ export function buildExecutiveModel(erp: ErpExecutiveFigures, qbo: QboFinancials
     perTire: tire,
     opexRunRate,
     backlog,
-    supply: erp.supply.map((s) => ({ ...s, containers: none(REASON.noContainers) })),
+    supply: erp.supply.map((s) => ({ ...s, containers: s.containerCount > 0 ? v(s.containerCount) : none(REASON.noContainers) })),
     inventory,
   };
 }

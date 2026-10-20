@@ -119,6 +119,11 @@ export interface QboPeriodFigures {
   arWeightedDays: number | null;
   /** Dollar-weighted days until open bills are due (overdue counts as 0) */
   apWeightedDays: number | null;
+  /**
+   * Credit purchases per period (DPO denominator): vendor bills less vendor
+   * credits, by transaction date. Missing in snapshots taken before Oct 20, 2026.
+   */
+  creditPurchases?: Record<'pm' | 't90' | 'ytd' | 'py', number>;
 }
 
 interface ReportRow {
@@ -384,21 +389,42 @@ const round2 = (n: number | undefined) => Math.round((n ?? 0) * 100) / 100;
 
 async function fetchQuery(access: QboAccess, sql: string): Promise<Record<string, unknown>> {
   const url = `${getApiBaseUrl(access.environment as QuickBooksEnvironment)}/v3/company/${access.realmId}/query?query=${encodeURIComponent(sql)}&minorversion=${QBO_API_MINOR_VERSION}`;
-  const response = await fetch(url, {
-    headers: { Accept: 'application/json', Authorization: `Bearer ${access.accessToken}` },
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!response.ok) {
-    throw new Error(`QuickBooks query failed (${response.status})`);
+  let response: Response | null = null;
+  // Same throttling back-off as fetchReport
+  for (let attempt = 0; attempt < 4; attempt++) {
+    response = await fetch(url, {
+      headers: { Accept: 'application/json', Authorization: `Bearer ${access.accessToken}` },
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (response.status !== 429) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000 * (attempt + 1)));
+  }
+  if (!response || !response.ok) {
+    throw new Error(`QuickBooks query failed (${response?.status ?? 'no response'})`);
   }
   const json = (await response.json()) as { QueryResponse?: Record<string, unknown> };
   return json.QueryResponse ?? {};
 }
 
+/** All rows of a query, 1,000 per page (QuickBooks maximum) */
+async function fetchQueryAll<T>(access: QboAccess, entity: string, select: string, where: string): Promise<T[]> {
+  const rows: T[] = [];
+  for (let start = 1; start < 100_000; start += 1000) {
+    const page = await fetchQuery(access, `SELECT ${select} FROM ${entity} WHERE ${where} STARTPOSITION ${start} MAXRESULTS 1000`);
+    const batch = (page[entity] ?? []) as T[];
+    rows.push(...batch);
+    if (batch.length < 1000) {
+      break;
+    }
+  }
+  return rows;
+}
+
 /** Dollar-weighted days until due for open invoices or bills (overdue = 0 days) */
 async function weightedDaysUntilDue(access: QboAccess, entity: 'Invoice' | 'Bill', today: string): Promise<number | null> {
-  const result = await fetchQuery(access, `SELECT Id, DueDate, Balance FROM ${entity} WHERE Balance > '0' MAXRESULTS 1000`);
-  const rows = (result[entity] ?? []) as Array<{ DueDate?: string; Balance?: number }>;
+  const rows = await fetchQueryAll<{ DueDate?: string; Balance?: number }>(access, entity, 'Id, DueDate, Balance', "Balance > '0'");
   let weighted = 0;
   let total = 0;
   for (const row of rows) {
@@ -411,6 +437,29 @@ async function weightedDaysUntilDue(access: QboAccess, entity: 'Invoice' | 'Bill
     total += balance;
   }
   return total > 0 ? Math.round((weighted / total) * 10) / 10 : null;
+}
+
+/**
+ * Credit purchases per period (spec 2.8, DPO): vendor bills less vendor
+ * credits, by transaction date.
+ */
+async function creditPurchasesByPeriod(
+  access: QboAccess,
+  ranges: Array<['pm' | 't90' | 'ytd' | 'py', { from: string; to: string }]>
+): Promise<Record<'pm' | 't90' | 'ytd' | 'py', number>> {
+  const from = ranges.reduce((min, [, r]) => (r.from < min ? r.from : min), ranges[0]![1].from);
+  const to = ranges.reduce((max, [, r]) => (r.to > max ? r.to : max), ranges[0]![1].to);
+  const where = `TxnDate >= '${from}' AND TxnDate <= '${to}'`;
+  type Txn = { TxnDate?: string; TotalAmt?: number };
+  const bills = await fetchQueryAll<Txn>(access, 'Bill', 'TxnDate, TotalAmt', where);
+  const credits = await fetchQueryAll<Txn>(access, 'VendorCredit', 'TxnDate, TotalAmt', where);
+  const totals = {} as Record<'pm' | 't90' | 'ytd' | 'py', number>;
+  for (const [key, r] of ranges) {
+    const sum = (list: Txn[]) =>
+      list.filter((t) => t.TxnDate && t.TxnDate >= r.from && t.TxnDate <= r.to).reduce((s, t) => s + Number(t.TotalAmt ?? 0), 0);
+    totals[key] = round2(sum(bills) - sum(credits));
+  }
+  return totals;
 }
 
 /** Run async jobs with a small concurrency limit (QuickBooks allows ~10 parallel calls) */
@@ -450,9 +499,15 @@ async function buildPeriodFigures(
     ['py', periods.py],
   ];
   const priorYearDate = addYears(today, -1);
-  // Month-ends for the T90 and YTD averages, plus the prior-year date
+  // Month-ends for the T90 and YTD averages, the prior-year YTD month-ends
+  // (PY averages for DSO/DPO) and the prior-year date
   const balanceDates = [
-    ...new Set([...monthEndsBetween(periods.t90.from, today), ...monthEndsBetween(periods.ytd.from, today), priorYearDate]),
+    ...new Set([
+      ...monthEndsBetween(periods.t90.from, today),
+      ...monthEndsBetween(periods.ytd.from, today),
+      ...monthEndsBetween(periods.py.from, priorYearDate),
+      priorYearDate,
+    ]),
   ].sort();
 
   const pnlJobs = pnlRanges.map(([, r]) => () =>
@@ -473,6 +528,15 @@ async function buildPeriodFigures(
   const balanceSheets = all.slice(pnlJobs.length + cashJobs.length);
   const arDays = await weightedDaysUntilDue(access, 'Invoice', today).catch(() => null);
   const apDays = await weightedDaysUntilDue(access, 'Bill', today).catch(() => null);
+  const creditPurchases = await creditPurchasesByPeriod(access, [
+    ['pm', periods.pm],
+    ['t90', periods.t90],
+    ['ytd', periods.ytd],
+    ['py', periods.py],
+  ]).catch((error) => {
+    console.error('[QboFinancials] Credit purchases failed:', error);
+    return undefined;
+  });
 
   const opex = {} as Record<PeriodKey | 't90py', number>;
   pnlRanges.forEach(([key], i) => {
@@ -497,7 +561,16 @@ async function buildPeriodFigures(
     };
   });
 
-  return { opex, operatingCashFlow, investingCashFlow, balances, priorYearDate, arWeightedDays: arDays, apWeightedDays: apDays };
+  return {
+    opex,
+    operatingCashFlow,
+    investingCashFlow,
+    balances,
+    priorYearDate,
+    arWeightedDays: arDays,
+    apWeightedDays: apDays,
+    ...(creditPurchases ? { creditPurchases } : {}),
+  };
 }
 
 // ============================================
