@@ -16,7 +16,6 @@ import { db } from '@/shared/lib/supabase/database';
 import { fetchAllRows } from '@/shared/lib/supabase/paginate';
 import { pipedriveProvider, isPipedriveApiError } from '@/modules/integrations/providers/crm/pipedrive';
 import { runPipedriveRequest, runPipedriveWrite } from '../lib/rate-limiter';
-import { classifyTireSize } from './purchase-history.service';
 import {
   GDC_ACTIVITY_TYPES,
   GDC_CUSTOM_FIELDS,
@@ -425,7 +424,7 @@ export async function ensureGdcSetup(
     }
   }
 
-  // ---------- Products (24s / 38s, code = ERP SKU) ----------
+  // ---------- Products (active ERP products, code = ERP SKU) ----------
   // Not required for the config: a missing product only blocks won deals that use it
   if (!options.skipProducts) {
     steps.push(...(await ensureGdcProducts(connectionId, dryRun || !canWriteProducts)));
@@ -496,10 +495,11 @@ interface ErpTireProduct {
 }
 
 /**
- * Every active ERP 24" / 38" tire product needs a Pipedrive product whose code
- * is the ERP SKU (won deals map deal products to ERP lines by that code).
- * Missing products are created with the ERP name and base price (USD); reps
- * still set the deal price per deal. Existing products are never changed.
+ * Every active ERP product needs a Pipedrive product whose code is the ERP SKU
+ * (won deals map deal products to ERP lines by that code). Missing products
+ * are created with the ERP name and base price (USD); reps still set the deal
+ * price per deal. Existing products are not changed here: product saves keep
+ * them up to date (product-sync.service).
  */
 export async function ensureGdcProducts(connectionId: string, dryRun: boolean): Promise<SetupStep[]> {
   const steps: SetupStep[] = [];
@@ -512,11 +512,9 @@ export async function ensureGdcProducts(connectionId: string, dryRun: boolean): 
       .order('sku', { ascending: true })
       .range(from, to)
   );
-  const tires = erpProducts.filter(
-    (p) => p.sku && classifyTireSize({ rimSize: p.rim_size, tireSize: p.tire_size, sku: p.sku, name: p.name }) !== 'other'
-  );
+  const tires = erpProducts.filter((p) => p.sku?.trim());
   if (tires.length === 0) {
-    return [{ entity: 'product', name: '24s / 38s', action: 'warning', detail: 'no active ERP products with a 24" or 38" size were found' }];
+    return [{ entity: 'product', name: 'Products', action: 'warning', detail: 'no active ERP products were found' }];
   }
 
   const pipedriveProducts = await pipedriveProvider.fetchAllV2<{ id?: number; code?: string | null; name?: string }>(
@@ -571,7 +569,7 @@ export async function ensureGdcProducts(connectionId: string, dryRun: boolean): 
 
 const SCOPE_PURPOSE: Record<string, string> = {
   admin: 'create the GDC Sales pipeline, stages, custom fields and activity types',
-  'products:full': 'create the 24s / 38s products',
+  'products:full': 'create the ERP products',
 };
 
 /** Scope names as shown in Pipedrive Developer Hub (OAuth & access scopes) */

@@ -27,11 +27,14 @@ import {
   User,
   ArrowRight,
   Loader2,
+  Ship,
 } from 'lucide-react';
 import {
   getInboundEmail,
   getAttachmentUrl,
+  reprocessAsShippingEmail,
 } from '@/features/inbound-emails/actions';
+import { isSeairEmail, describeShippingResult } from '@/features/inbound-emails/lib/shipping-email';
 import type {
   InboundEmail,
   InboundEmailWithAttachments,
@@ -53,6 +56,7 @@ interface ViewEmailDrawerProps {
   open: boolean;
   onClose: () => void;
   onQuoteCreated?: () => void;
+  onShippingProcessed?: () => void;
 }
 
 // ============================================
@@ -161,12 +165,14 @@ export function ViewEmailDrawer({
   open,
   onClose,
   onQuoteCreated,
+  onShippingProcessed,
 }: ViewEmailDrawerProps) {
   const [loading, setLoading] = useState(false);
   const [emailDetails, setEmailDetails] = useState<InboundEmailWithAttachments | null>(null);
   const [extractDialogOpen, setExtractDialogOpen] = useState(false);
   const [selectedAttachment, setSelectedAttachment] = useState<InboundEmailAttachment | null>(null);
   const [attachmentUrl, setAttachmentUrl] = useState<string | null>(null);
+  const [processingShipping, setProcessingShipping] = useState(false);
 
   // Fetch email details when opened
   useEffect(() => {
@@ -221,6 +227,33 @@ export function ViewEmailDrawer({
 
     // Notify parent (to refresh list if needed)
     onQuoteCreated?.();
+  };
+
+  // Process a SEAIR email as a shipping update (moves it to Shipping Tracking)
+  const handleProcessShipping = async () => {
+    if (!emailDetails) {
+      return;
+    }
+    setProcessingShipping(true);
+    try {
+      const result = await reprocessAsShippingEmail(emailDetails.id);
+      if (result.success && result.data) {
+        const { ok, message } = describeShippingResult(result.data);
+        if (ok) {
+          toast.success(message);
+        } else {
+          toast.warning(message);
+        }
+        onShippingProcessed?.();
+      } else {
+        toast.error(result.error || 'Failed to process shipping email');
+      }
+    } catch (error) {
+      console.error('Process shipping email error:', error);
+      toast.error('Failed to process shipping email');
+    } finally {
+      setProcessingShipping(false);
+    }
   };
 
   if (!email) {
@@ -279,6 +312,23 @@ export function ViewEmailDrawer({
                   <Clock className="h-4 w-4" />
                   {format(new Date(emailDetails.received_at), 'PPpp')}
                 </div>
+
+                {/* SEAIR emails that reached the Inbox can be run as shipping updates */}
+                {isSeairEmail(emailDetails.from_email) && emailDetails.to_local_part !== 'shipping' && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleProcessShipping}
+                    disabled={processingShipping}
+                  >
+                    {processingShipping ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <Ship className="h-4 w-4 mr-2" />
+                    )}
+                    {processingShipping ? 'Processing...' : 'Process as Shipping Update'}
+                  </Button>
+                )}
               </div>
 
               <Separator />

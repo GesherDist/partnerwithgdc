@@ -98,6 +98,16 @@ export async function createShipment(data: CreateShipmentInput) {
   return result;
 }
 
+/**
+ * Pipedrive deal of the shipment's sales order: ERP Order Status, Shipment ETA
+ * and Container Status (gdc/order-status.service). Background; never fails.
+ */
+function syncShipmentToPipedrive(shipmentId: string): void {
+  void import('@/features/pipedrive/gdc/order-status.service')
+    .then(({ syncShipmentDealInBackground }) => syncShipmentDealInBackground(shipmentId))
+    .catch((error) => console.error('[Pipedrive] Shipment sync could not start:', error));
+}
+
 // ============================================
 // UPDATE SHIPMENT
 // ============================================
@@ -130,6 +140,7 @@ export async function updateShipment(id: string, data: UpdateShipmentInput) {
 
     revalidatePath('/shipments');
     revalidatePath(`/shipments/${id}`);
+    syncShipmentToPipedrive(id);
   }
 
   return result;
@@ -151,6 +162,7 @@ export async function trackShipmentNow(
   if (result.success) {
     revalidatePath('/shipments');
     revalidatePath('/operations');
+    syncShipmentToPipedrive(id);
   }
 
   return result.success
@@ -190,6 +202,7 @@ export async function markShipmentInTransit(id: string) {
   if (result.success) {
     revalidatePath('/shipments');
     revalidatePath(`/shipments/${id}`);
+    syncShipmentToPipedrive(id);
   }
 
   return result;
@@ -205,6 +218,7 @@ export async function markShipmentDelivered(id: string) {
   if (result.success) {
     revalidatePath('/shipments');
     revalidatePath(`/shipments/${id}`);
+    syncShipmentToPipedrive(id);
   }
 
   return result;
@@ -220,6 +234,7 @@ export async function markShipmentFailed(id: string) {
   if (result.success) {
     revalidatePath('/shipments');
     revalidatePath(`/shipments/${id}`);
+    syncShipmentToPipedrive(id);
   }
 
   return result;
@@ -311,6 +326,7 @@ export async function updateShipmentTrackingStatus(
     revalidatePath('/shipments');
     revalidatePath(`/shipments/${id}`);
     revalidatePath('/operations');
+    syncShipmentToPipedrive(id);
 
     return { success: true };
   } catch (error) {

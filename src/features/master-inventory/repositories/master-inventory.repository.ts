@@ -7,6 +7,7 @@
  */
 
 import { db } from '@/shared/lib/supabase/database';
+import { getPipelineQuantities } from '@/features/inventory/services/pipeline-quantities';
 import type {
   MasterInventoryItem,
   MasterInventoryFilters,
@@ -451,41 +452,13 @@ class MasterInventoryRepositoryImpl {
    * Get on order and in transit quantities
    */
   private async getOnOrderAndInTransit(): Promise<{ onOrder: number; inTransit: number }> {
-    // On Order: Sum of PO items where status is 'confirmed', 'in_production', 'ready_to_ship'
-    const { data: poData, error: poError } = await db
-      .from('purchase_order_items')
-      .select(
-        `
-        quantity,
-        purchase_orders!inner (
-          status
-        )
-      `
-      )
-      .in('purchase_orders.status', ['confirmed', 'in_production', 'ready_to_ship']);
-
-    const onOrder = poError
-      ? 0
-      : (poData || []).reduce((sum, row) => sum + (row.quantity || 0), 0);
-
-    // In Transit: Sum of shipment items where status is 'in_transit'
-    const { data: shipmentData, error: shipmentError } = await db
-      .from('shipment_items')
-      .select(
-        `
-        quantity,
-        shipments!inner (
-          status
-        )
-      `
-      )
-      .eq('shipments.status', 'in_transit');
-
-    const inTransit = shipmentError
-      ? 0
-      : (shipmentData || []).reduce((sum, row) => sum + (row.quantity || 0), 0);
-
-    return { onOrder, inTransit };
+    // Same calculation as the Inventory page (see pipeline-quantities.ts)
+    try {
+      return await getPipelineQuantities(db);
+    } catch (error) {
+      console.error('Error fetching on-order / in-transit quantities:', error);
+      return { onOrder: 0, inTransit: 0 };
+    }
   }
 
   /**

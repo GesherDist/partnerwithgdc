@@ -42,7 +42,14 @@ import {
   TableRow,
 } from '@/shared/components/ui/table';
 
-import { createInvoice, getInvoiceMasterData, getCustomerSalesOrders, getSalesOrderWithItems } from '../actions';
+import {
+  createInvoice,
+  getInvoiceMasterData,
+  getCustomerSalesOrders,
+  getSalesOrderWithItems,
+  getBillableCommissionOrders,
+} from '../actions';
+import type { BillableCommissionOrder } from '../services/invoice.service';
 import type { CreateInvoiceDrawerProps, InvoiceType } from '../types';
 import { INVOICE_TYPE_LABELS } from '../types';
 import { calculateInvoiceTotals } from '../lib/schemas';
@@ -140,10 +147,16 @@ export function CreateInvoiceDrawer({
     status: string;
     grandTotal: number;
     hasInvoice: boolean;
+    isCommissionOnly: boolean;
   }>>([]);
   const [selectedSalesOrderId, setSelectedSalesOrderId] = useState<string>('');
   const [isLoadingSalesOrders, setIsLoadingSalesOrders] = useState(false);
   const [salesOrderSearch, setSalesOrderSearch] = useState<string>('');
+
+  // Commission orders selection state (for commission invoices to Galileo)
+  const [commissionOrders, setCommissionOrders] = useState<BillableCommissionOrder[]>([]);
+  const [selectedCommissionOrderIds, setSelectedCommissionOrderIds] = useState<string[]>([]);
+  const [isLoadingCommissionOrders, setIsLoadingCommissionOrders] = useState(false);
 
   // Ref to track if invoice type change effect should run
   const isFirstInvoiceTypeRender = useRef(true);
@@ -199,6 +212,8 @@ export function CreateInvoiceDrawer({
       setSalesOrders([]);
       setSelectedSalesOrderId('');
       setSalesOrderSearch('');
+      setCommissionOrders([]);
+      setSelectedCommissionOrderIds([]);
       // Reset the first render ref when drawer closes
       isFirstInvoiceTypeRender.current = true;
     }
@@ -217,6 +232,42 @@ export function CreateInvoiceDrawer({
       setSelectedSalesOrderId('');
       setItems([]);
     }
+  }, [watchedCustomerId, watchedInvoiceType]);
+
+  // Load unbilled commission orders when a supplier is picked on a commission invoice
+  useEffect(() => {
+    setSelectedCommissionOrderIds([]);
+    if (watchedInvoiceType !== 'commission' || !watchedCustomerId) {
+      setCommissionOrders([]);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingCommissionOrders(true);
+    getBillableCommissionOrders()
+      .then((result) => {
+        if (cancelled) { return; }
+        if (result.success && result.data) {
+          setCommissionOrders(result.data);
+        } else {
+          setCommissionOrders([]);
+          toast.error(result.error || 'Failed to load commission orders');
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCommissionOrders([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoadingCommissionOrders(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [watchedCustomerId, watchedInvoiceType]);
 
   // Auto-populate billing address when customer/supplier changes
@@ -438,25 +489,69 @@ export function CreateInvoiceDrawer({
   };
 
   // ============================================
+  // COMMISSION ORDERS SELECTION
+  // ============================================
+
+  const selectedCommissionOrders = commissionOrders.filter((order) =>
+    selectedCommissionOrderIds.includes(order.id)
+  );
+
+  // Drop untouched blank lines (e.g. the initial empty commission line) once orders are selected
+  const removeBlankItems = () => {
+    setItems((prev) => prev.filter((item) => item.productId || item.unitPrice > 0));
+  };
+
+  const toggleCommissionOrder = (orderId: string) => {
+    if (!selectedCommissionOrderIds.includes(orderId)) {
+      removeBlankItems();
+    }
+    setSelectedCommissionOrderIds((prev) =>
+      prev.includes(orderId) ? prev.filter((id) => id !== orderId) : [...prev, orderId]
+    );
+  };
+
+  const toggleAllCommissionOrders = () => {
+    if (selectedCommissionOrderIds.length === commissionOrders.length) {
+      setSelectedCommissionOrderIds([]);
+    } else {
+      removeBlankItems();
+      setSelectedCommissionOrderIds(commissionOrders.map((order) => order.id));
+    }
+  };
+
+  // ============================================
   // TOTALS CALCULATION
   // ============================================
 
-  const totals = calculateInvoiceTotals(
-    items.map((item) => ({
+  const totals = calculateInvoiceTotals([
+    // Commission order lines are built on the server from these same stored amounts
+    ...selectedCommissionOrders.map((order) => ({
+      quantity: 1,
+      unitPrice: order.commissionAmount,
+      discountPercent: 0,
+      taxRate: 0,
+    })),
+    ...items.map((item) => ({
       quantity: item.quantity,
       unitPrice: item.unitPrice,
       discountPercent: item.discountPercent,
       taxRate: item.taxRate,
-    }))
-  );
+    })),
+  ]);
 
   // ============================================
   // SUBMIT
   // ============================================
 
   const onSubmit = async (data: CreateInvoiceFormValues) => {
-    if (items.length === 0) {
-      toast.error('Please add at least one item');
+    const commissionOrderIds = data.invoiceType === 'commission' ? selectedCommissionOrderIds : [];
+
+    if (items.length === 0 && commissionOrderIds.length === 0) {
+      toast.error(
+        data.invoiceType === 'commission'
+          ? 'Please select a commission order or add at least one item'
+          : 'Please add at least one item'
+      );
       return;
     }
 
@@ -513,6 +608,7 @@ export function CreateInvoiceDrawer({
         })),
         customerNotes: data.customerNotes || null,
         internalNotes: data.internalNotes || null,
+        commissionSalesOrderIds: commissionOrderIds.length > 0 ? commissionOrderIds : undefined,
       };
 
       const result = await createInvoice(payload);
@@ -827,7 +923,8 @@ export function CreateInvoiceDrawer({
                                 </TableRow>
                               ) : (
                                 filteredSalesOrders.map((so) => {
-                                  const isDisabled = so.hasInvoice;
+                                  // Commission-only orders are invoiced by Galileo, not Gesher
+                                  const isDisabled = so.hasInvoice || so.isCommissionOnly;
 
                                   return (
                                     <TableRow
@@ -861,6 +958,13 @@ export function CreateInvoiceDrawer({
                                       <TableCell>
                                         {so.hasInvoice ? (
                                           <span className="text-xs text-amber-600 font-medium">Already Invoiced</span>
+                                        ) : so.isCommissionOnly ? (
+                                          <span
+                                            className="text-xs text-violet-700 font-medium"
+                                            title="Galileo invoices the customer for commission-only orders"
+                                          >
+                                            Commission Only
+                                          </span>
                                         ) : (
                                           <span className="text-xs text-green-600 font-medium capitalize">
                                             {so.status}
@@ -891,6 +995,95 @@ export function CreateInvoiceDrawer({
             </div>
           )}
 
+          {/* Commission Orders Selection (only for Commission Invoice type) */}
+          {watchedInvoiceType === 'commission' && watchedCustomerId && (
+            <div className="space-y-2 p-4 border rounded-lg bg-muted/30">
+              <Label>Select Commission Orders</Label>
+              <p className="text-sm text-muted-foreground">
+                Commission-only sales orders not billed yet. Each selected order becomes one invoice line.
+              </p>
+
+              {isLoadingCommissionOrders ? (
+                <div className="flex items-center justify-center py-6">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                  <span className="ml-2 text-muted-foreground">Loading commission orders...</span>
+                </div>
+              ) : commissionOrders.length === 0 ? (
+                <div className="text-center py-4 text-sm text-muted-foreground">
+                  No unbilled commission orders. You can still add commission lines manually below.
+                </div>
+              ) : (
+                <div className="border rounded-lg overflow-hidden">
+                  <div className="max-h-[240px] overflow-y-auto">
+                    <Table>
+                      <TableHeader className="sticky top-0 bg-background z-10">
+                        <TableRow>
+                          <TableHead className="w-[50px] text-center">
+                            <input
+                              type="checkbox"
+                              aria-label="Select all commission orders"
+                              className="h-4 w-4 cursor-pointer"
+                              checked={selectedCommissionOrderIds.length === commissionOrders.length}
+                              onChange={toggleAllCommissionOrders}
+                            />
+                          </TableHead>
+                          <TableHead>SO #</TableHead>
+                          <TableHead>Customer</TableHead>
+                          <TableHead>Customer PO</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead className="text-right">Tires</TableHead>
+                          <TableHead className="text-right">Rate</TableHead>
+                          <TableHead className="text-right">Commission</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {commissionOrders.map((order) => {
+                          const isSelected = selectedCommissionOrderIds.includes(order.id);
+                          return (
+                            <TableRow
+                              key={order.id}
+                              className={`cursor-pointer transition-colors ${isSelected ? 'bg-primary/5' : 'hover:bg-muted/50'}`}
+                              onClick={() => toggleCommissionOrder(order.id)}
+                            >
+                              <TableCell className="text-center">
+                                <input
+                                  type="checkbox"
+                                  aria-label={`Select ${order.orderNumber}`}
+                                  className="h-4 w-4 cursor-pointer"
+                                  checked={isSelected}
+                                  onChange={() => toggleCommissionOrder(order.id)}
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                              </TableCell>
+                              <TableCell className="font-medium">{order.orderNumber}</TableCell>
+                              <TableCell>{order.customerName}</TableCell>
+                              <TableCell>{order.customerPoNumber || '-'}</TableCell>
+                              <TableCell className="capitalize text-xs">{order.status}</TableCell>
+                              <TableCell className="text-right">{order.tireCount}</TableCell>
+                              <TableCell className="text-right">${(order.commissionRate / 100).toFixed(2)}</TableCell>
+                              <TableCell className="text-right font-medium">
+                                ${(order.commissionAmount / 100).toLocaleString('en-US', {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })}
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              )}
+
+              {selectedCommissionOrders.length > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  {selectedCommissionOrders.length} order(s) selected
+                </p>
+              )}
+            </div>
+          )}
+
           {/* Line Items Section */}
           <div className="space-y-1 pt-2">
             <div className="flex items-center justify-between">
@@ -912,12 +1105,45 @@ export function CreateInvoiceDrawer({
             </div>
           </div>
 
-          {items.length === 0 ? (
-            <div className="border rounded-lg p-8 text-center text-muted-foreground bg-muted/30">
-              {watchedInvoiceType === 'customer'
-                ? 'Select a sales order above to populate items.'
-                : 'No items added yet. Click "Add Item" to get started.'}
+          {/* Lines for selected commission orders (read-only; amounts come from the orders) */}
+          {watchedInvoiceType === 'commission' && selectedCommissionOrders.length > 0 && (
+            <div className="border rounded-lg overflow-hidden">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Sales Commission (from selected orders)</TableHead>
+                    <TableHead className="w-[140px] text-right">Amount</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {selectedCommissionOrders.map((order) => (
+                    <TableRow key={order.id}>
+                      <TableCell className="text-sm">
+                        {order.orderNumber}
+                        {order.customerPoNumber ? ` / PO ${order.customerPoNumber}` : ''}
+                        {` / ${order.customerName} / ${order.tireCount} tires x $${(order.commissionRate / 100).toFixed(2)}`}
+                      </TableCell>
+                      <TableCell className="text-right font-medium">
+                        ${(order.commissionAmount / 100).toLocaleString('en-US', {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             </div>
+          )}
+
+          {items.length === 0 ? (
+            watchedInvoiceType === 'commission' && selectedCommissionOrders.length > 0 ? null : (
+              <div className="border rounded-lg p-8 text-center text-muted-foreground bg-muted/30">
+                {watchedInvoiceType === 'customer'
+                  ? 'Select a sales order above to populate items.'
+                  : 'No items added yet. Select commission orders above or click "Add Item".'}
+              </div>
+            )
           ) : (
             <div className="border rounded-lg overflow-hidden">
               <Table>
@@ -1050,7 +1276,7 @@ export function CreateInvoiceDrawer({
           )}
 
           {/* Totals */}
-          {items.length > 0 && (
+          {(items.length > 0 || selectedCommissionOrders.length > 0) && (
             <div className="flex justify-end">
               <div className="w-72 space-y-2 border rounded-lg p-4 bg-muted/30">
                 <div className="flex justify-between text-sm">
@@ -1115,7 +1341,11 @@ export function CreateInvoiceDrawer({
           </Button>
           <Button
             type="submit"
-            disabled={isSubmitting || items.length === 0}
+            disabled={
+              isSubmitting ||
+              (items.length === 0 &&
+                !(watchedInvoiceType === 'commission' && selectedCommissionOrders.length > 0))
+            }
             onClick={form.handleSubmit(onSubmit)}
           >
             {isSubmitting ? (

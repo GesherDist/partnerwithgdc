@@ -11,6 +11,12 @@ import { createAdminClient } from '@/shared/lib/supabase/admin';
 import type { UnitsBySKUDataPoint, UnitsBySKUChartData, ProductLegendItem, ChannelPerformanceDataPoint, InventoryByLocation, DashboardStat, MarginDataPoint, RevenueDataPoint, DateRange, CommissionRevenueStats } from '../types';
 
 // Helper to format date as YYYY-MM-DD string
+/** Credit notes that reduce revenue (credit_note_status enum has no 'approved') */
+const CREDIT_NOTE_RECOGNIZED = ['issued', 'applied'];
+
+/** Open Orders = sales orders being worked on (agreed definition, Aug 27 2025) */
+const OPEN_ORDER_STATUSES = ['confirmed', 'processing'];
+
 function formatDateString(date: Date): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -206,6 +212,7 @@ export async function getChannelPerformance(dateRange?: DateRange): Promise<Chan
     .gte('order_date', startDate)
     .lte('order_date', endDate)
     .is('deleted_at', null)
+    .not('is_commission_only', 'is', true)
     .in('status', ['delivered']);
 
   if (ordersError) {
@@ -489,13 +496,14 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
     .eq('status', 'delivered')
     .gte('order_date', primaryStartDate)
     .lte('order_date', primaryEndDate)
-    .is('deleted_at', null);
+    .is('deleted_at', null)
+    .not('is_commission_only', 'is', true);
 
   // Fetch credit notes for current period (returns/credits)
   const { data: currentPeriodCredits } = await supabase
     .from('credit_notes')
     .select('id, grand_total, credit_note_date')
-    .eq('status', 'approved')
+    .in('status', CREDIT_NOTE_RECOGNIZED)
     .gte('credit_note_date', primaryStartDate)
     .lte('credit_note_date', primaryEndDate)
     .is('deleted_at', null);
@@ -524,12 +532,13 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
     .eq('status', 'delivered')
     .gte('order_date', formatDateString(lastMonthStart))
     .lte('order_date', formatDateString(lastMonthEnd))
-    .is('deleted_at', null);
+    .is('deleted_at', null)
+    .not('is_commission_only', 'is', true);
 
   const { data: lastMonthCredits } = await supabase
     .from('credit_notes')
     .select('grand_total')
-    .eq('status', 'approved')
+    .in('status', CREDIT_NOTE_RECOGNIZED)
     .gte('credit_note_date', formatDateString(lastMonthStart))
     .lte('credit_note_date', formatDateString(lastMonthEnd))
     .is('deleted_at', null);
@@ -544,12 +553,13 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
     .select('grand_total')
     .eq('status', 'delivered')
     .gte('order_date', formatDateString(currentYearStart))
-    .is('deleted_at', null);
+    .is('deleted_at', null)
+    .not('is_commission_only', 'is', true);
 
   const { data: ytdCredits } = await supabase
     .from('credit_notes')
     .select('grand_total')
-    .eq('status', 'approved')
+    .in('status', CREDIT_NOTE_RECOGNIZED)
     .gte('credit_note_date', formatDateString(currentYearStart))
     .is('deleted_at', null);
 
@@ -575,12 +585,13 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
     .eq('status', 'delivered')
     .gte('order_date', formatDateString(lastYearStart))
     .lte('order_date', formatDateString(lastYearSameDay))
-    .is('deleted_at', null);
+    .is('deleted_at', null)
+    .not('is_commission_only', 'is', true);
 
   const { data: lastYearYtdCredits } = await supabase
     .from('credit_notes')
     .select('grand_total')
-    .eq('status', 'approved')
+    .in('status', CREDIT_NOTE_RECOGNIZED)
     .gte('credit_note_date', formatDateString(lastYearStart))
     .lte('credit_note_date', formatDateString(lastYearSameDay))
     .is('deleted_at', null);
@@ -739,7 +750,8 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
           name,
           base_cost,
           item_type
-        )
+        ),
+        sales_orders ( is_commission_only )
       `)
       .in('sales_order_id', ytdShipmentIds);
 
@@ -791,8 +803,9 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
 
         ytdUnits += quantity;
 
-        // EXCLUDE commission items from margin calculation (revenue and cost)
-        if (!isCommissionItem(item)) {
+        // EXCLUDE commission items and commission-only orders (Galileo invoices the customer) from margin
+        const commissionOnlyOrder = (item.sales_orders as unknown as { is_commission_only: boolean | null } | null)?.is_commission_only === true;
+        if (!isCommissionItem(item) && !commissionOnlyOrder) {
           ytdTotalRevenue += unitPrice * quantity;
           ytdTotalCost += baseCost * quantity;
         }
@@ -824,7 +837,8 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
         products (
           base_cost,
           item_type
-        )
+        ),
+        sales_orders ( is_commission_only )
       `)
       .in('sales_order_id', lastYearYtdShipmentIds);
 
@@ -857,8 +871,9 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
 
         lastYearYtdUnits += quantity;
 
-        // EXCLUDE commission items from margin calculation (revenue and cost)
-        if (!isCommissionItem(item)) {
+        // EXCLUDE commission items and commission-only orders (Galileo invoices the customer) from margin
+        const commissionOnlyOrder = (item.sales_orders as unknown as { is_commission_only: boolean | null } | null)?.is_commission_only === true;
+        if (!isCommissionItem(item) && !commissionOnlyOrder) {
           lastYearYtdTotalRevenue += unitPrice * quantity;
           lastYearYtdTotalCost += baseCost * quantity;
         }
@@ -866,31 +881,22 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
     }
   }
 
-  // Fetch open shipments count (match Operations Dashboard "OPEN" status)
-  // Use load_status (not status) to match Operations Dashboard
-  // Only count: load_status = 'open' (orders being processed)
-  const { count: openOrdersCount } = await supabase
-    .from('shipments')
-    .select('id', { count: 'exact', head: true })
-    .eq('load_status', 'open');
+  // Open Orders: sales orders with status confirmed or processing (not deleted)
+  const { data: openOrdersData, count: openOrdersCount } = await supabase
+    .from('sales_orders')
+    .select('grand_total', { count: 'exact' })
+    .in('status', OPEN_ORDER_STATUSES)
+    .is('deleted_at', null);
 
-  // Calculate last month open shipments for comparison
+  // Comparison: the same open orders that were already placed by the end of last month
   const { count: lastMonthOpenCount } = await supabase
-    .from('shipments')
+    .from('sales_orders')
     .select('id', { count: 'exact', head: true })
-    .eq('load_status', 'open')
-    .lte('created_at', lastMonthEnd.toISOString());
+    .in('status', OPEN_ORDER_STATUSES)
+    .is('deleted_at', null)
+    .lte('order_date', formatDateString(lastMonthEnd));
 
-  // Calculate open shipments value (from linked sales orders)
-  const { data: openShipmentsData } = await supabase
-    .from('shipments')
-    .select('sales_order_id, sales_orders(grand_total)')
-    .eq('load_status', 'open');
-
-  const openOrdersValue = openShipmentsData?.reduce((sum, s) => {
-    const so = (s as any).sales_orders;
-    return sum + (so?.grand_total || 0);
-  }, 0) || 0;
+  const openOrdersValue = openOrdersData?.reduce((sum, so) => sum + (so.grand_total || 0), 0) || 0;
 
   // Units change calculation
   const ytdUnitsChange = lastYearYtdUnits > 0 ? ((ytdUnits - lastYearYtdUnits) / lastYearYtdUnits) * 100 : 0;
@@ -967,7 +973,8 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
     {
       id: 'blended-margin',
       title: 'Blended Margin (YTD)',
-      value: '16.7%', // Static value
+      // (YTD revenue − YTD cost at products.base_cost) ÷ YTD revenue, commission lines excluded
+      value: ytdTotalRevenue > 0 ? `${ytdBlendedMargin.toFixed(1)}%` : '—',
       change: `${marginChange >= 0 ? '+' : ''}${marginChange.toFixed(1)}%`,
       trend: marginChange >= 0 ? 'up' : 'down',
       icon: 'percent',
@@ -1197,6 +1204,7 @@ export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDat
     .gte('order_date', queryStartDate)
     .lte('order_date', queryEndDate)
     .is('deleted_at', null)
+    .not('is_commission_only', 'is', true)
     .in('status', ['delivered']);
 
   if (currentError) {
@@ -1217,6 +1225,7 @@ export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDat
     .gte('order_date', formatDateString(lastYearStartDate))
     .lte('order_date', formatDateString(lastYearEndDate))
     .is('deleted_at', null)
+    .not('is_commission_only', 'is', true)
     .in('status', ['delivered']);
 
   if (lastError) {

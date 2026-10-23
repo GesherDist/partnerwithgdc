@@ -15,7 +15,8 @@ export interface CalcItem {
 }
 
 const QB_COA = 'QuickBooks, using Settings › QuickBooks › Chart of Accounts';
-const NO_COST = 'Pending: ERP purchase-order prices are the customer sales prices, so the real Galileo purchase cost is not recorded yet';
+const ERP_COST = 'ERP product cost (products.base_cost) × tires, per client confirmation (COGS from the ERP). The note "Some tires have no ERP cost" means a tire product has no cost entered';
+const PY_NOTE = 'PY: "since go-live" — shown as — while the ERP has no prior-year data';
 
 export const CALCULATIONS: Record<string, CalcItem[]> = {
   '1.1': [
@@ -73,8 +74,13 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
       source: 'Average AP: QuickBooks month-end balances · Credit purchases: QuickBooks vendor bills − vendor credits, by transaction date',
       status: 'live',
     },
-    { kpi: 'DIO', formula: '= average inventory at cost ÷ COGS × days in the period', source: NO_COST, status: 'pending' },
-    { kpi: 'CCC', formula: '= DIO + DSO − DPO', source: 'Pending: needs DIO and DPO', status: 'pending' },
+    {
+      kpi: 'DIO',
+      formula: '= average inventory at cost ÷ COGS × days in the period',
+      source: `Average inventory: QuickBooks month-end balances · COGS: ${ERP_COST}`,
+      status: 'live',
+    },
+    { kpi: 'CCC', formula: '= DIO + DSO − DPO', source: 'Calculated when all three are available', status: 'live' },
   ],
   '1.4': [
     {
@@ -98,19 +104,33 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
       source: 'ERP invoices · tires = products of type Inventory; commission invoices excluded',
       status: 'live',
     },
-    { kpi: 'COGS', formula: '= FIFO purchase cost of the same invoiced tires', source: NO_COST, status: 'pending' },
-    { kpi: 'Gross Profit', formula: '= Revenue − COGS; % = Gross Profit ÷ Revenue', source: 'Pending: needs COGS', status: 'pending' },
+    { kpi: 'COGS', formula: '= ERP cost of the same invoiced tires (tires × product cost)', source: ERP_COST, status: 'live' },
+    { kpi: 'Gross Profit', formula: '= Revenue − COGS; % = Gross Profit ÷ Revenue', source: 'Calculated', status: 'live' },
     {
       kpi: 'OPEX',
       formula: '= Profit & Loss total of accounts mapped to OPEX for the period; % = OPEX ÷ Revenue',
       source: `${QB_COA} · Profit and Loss`,
       status: 'live',
     },
-    { kpi: 'Operating Profit', formula: '= Gross Profit − OPEX', source: 'Pending: needs COGS', status: 'pending' },
+    { kpi: 'Operating Profit', formula: '= Gross Profit − OPEX; % = Operating Profit ÷ Revenue', source: 'ERP gross profit − QuickBooks OPEX', status: 'live' },
     {
       kpi: 'Columns',
       formula: 'MTD = 1st of month → today · T90 = last 90 days · YTD = Jan 1 → today · PY = Jan 1 → same date last year',
-      source: 'Dates in America/New_York',
+      source: `Dates in America/New_York · ${PY_NOTE}`,
+      status: 'live',
+    },
+  ],
+  '2.1b': [
+    {
+      kpi: 'Commission Billed',
+      formula: '= Σ line totals of commission invoices to Galileo (not draft/cancelled) dated in the period',
+      source: 'ERP commission invoices · kept out of Revenue, COGS and Gross Profit (Ankur, Sep 8 / Sep 25)',
+      status: 'live',
+    },
+    {
+      kpi: 'Not Billed Yet',
+      formula: '= Σ commission on commission-only sales orders (tires allocated Manufacturer Direct × rate per tire) not yet on a commission invoice',
+      source: 'ERP sales orders',
       status: 'live',
     },
   ],
@@ -118,7 +138,7 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
     { kpi: 'Tires Sold', formula: '= Σ quantity of the same invoiced tire lines used for Revenue', source: 'ERP invoices', status: 'live' },
     { kpi: 'Revenue / Tire', formula: '= Revenue ÷ Tires Sold', source: 'Calculated', status: 'live' },
     { kpi: 'OPEX / Tire', formula: '= OPEX ÷ Tires Sold', source: 'QuickBooks OPEX ÷ ERP tires', status: 'live' },
-    { kpi: 'COGS / GP / OP per Tire', formula: '= each line ÷ Tires Sold', source: 'Pending: needs COGS', status: 'pending' },
+    { kpi: 'COGS / GP / OP per Tire', formula: '= each line ÷ Tires Sold', source: 'Calculated', status: 'live' },
   ],
   '2.3': [
     {
@@ -134,13 +154,13 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
   '3.1': [
     {
       kpi: 'Backlog Tires',
-      formula: '= Σ (tires ordered − tires already invoiced) on firm sales orders (confirmed, processing, shipped, delivered)',
-      source: 'ERP sales orders + invoices · no quotes or pipeline',
+      formula: '= Σ (tires ordered − tires already invoiced) on firm sales orders still confirmed or processing (client definition)',
+      source: 'ERP sales orders + invoices · no quotes or pipeline · commission-only orders excluded (Galileo invoices the customer; see Commission Revenue)',
       status: 'live',
     },
     { kpi: 'Backlog Revenue', formula: '= remaining tires × net unit price of the sales order line', source: 'ERP sales orders', status: 'live' },
     { kpi: 'Revenue / Tire', formula: '= Backlog Revenue ÷ Backlog Tires', source: 'Calculated', status: 'live' },
-    { kpi: 'Backlog GP, GP / Tire, GP %', formula: '= Backlog Revenue − expected cost of the remaining tires', source: NO_COST, status: 'pending' },
+    { kpi: 'Backlog GP, GP / Tire, GP %', formula: '= Backlog Revenue − ERP cost of the remaining tires', source: ERP_COST, status: 'live' },
     {
       kpi: 'T90 Avg / YTD Avg / PY',
       formula: '= average of the daily backlog values in the last 90 days / since Jan 1; PY = the value one year ago',

@@ -18,6 +18,7 @@ export { getCustomersTableColumns } from './CustomersTableColumns';
 // Drawers/Modals
 export { CreateCustomerDrawer } from './CreateCustomerDrawer';
 export { ViewCustomerDrawer } from './ViewCustomerDrawer';
+export { SyncAllCustomersButton } from './SyncAllCustomersButton';
 export { EditCustomerDrawer } from './EditCustomerDrawer';
 
 // Contacts

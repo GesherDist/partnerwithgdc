@@ -53,6 +53,9 @@ export const createInvoiceSchema = z.object({
   items: z.array(invoiceItemSchema).min(1, 'At least one item is required'),
   customerNotes: z.string().nullable().optional(),
   internalNotes: z.string().nullable().optional(),
+  // Commission invoice only: commission-only sales orders billed on this invoice.
+  // The server builds their lines from the stored commission amounts.
+  commissionSalesOrderIds: z.array(z.string().uuid()).max(200).optional(),
 });
 
 export type CreateInvoiceInput = z.infer<typeof createInvoiceSchema>;

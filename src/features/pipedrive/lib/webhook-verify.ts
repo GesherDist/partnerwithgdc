@@ -185,6 +185,9 @@ export function isSupportedEvent(event: string): event is PipedriveWebhookEvent 
     'updated.note',
     'added.activity',
     'updated.activity',
+    'added.organization',
+    'updated.organization',
+    'deleted.organization',
   ];
   return supportedEvents.includes(event as PipedriveWebhookEvent);
 }

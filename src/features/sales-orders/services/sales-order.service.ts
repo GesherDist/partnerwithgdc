@@ -93,6 +93,37 @@ async function refreshPipedrivePurchaseHistory(orderId: string, statuses: OrderS
   await refreshPurchaseHistoryForOrder(orderId);
 }
 
+/**
+ * Update the "ERP Order Status" of the Pipedrive deal the order came from (via
+ * its quote), if any. Background; never fails the status change.
+ */
+function syncPipedriveOrderStatus(salesOrderId: string): void {
+  void import('@/features/pipedrive/gdc/order-status.service')
+    .then(({ syncOrderStatusInBackground }) => syncOrderStatusInBackground({ salesOrderId }))
+    .catch((error) => console.error('[Pipedrive] Order status sync could not start:', error));
+}
+
+/**
+ * Republish the Pipedrive purchase history of the given customers after an
+ * edit of an order counted as a purchase (header or lines). Runs in the
+ * background and never throws: saving the order must not wait for Pipedrive.
+ */
+function refreshPipedrivePurchaseHistoryAfterEdit(customerIds: Array<string | null | undefined>, statuses: OrderStatus[]): void {
+  void (async () => {
+    try {
+      const { PURCHASE_HISTORY_ORDER_STATUSES } = await import('@/features/pipedrive/gdc/config');
+      const counted = PURCHASE_HISTORY_ORDER_STATUSES as readonly string[];
+      if (!statuses.some((status) => counted.includes(status))) {
+        return;
+      }
+      const { refreshPurchaseHistoryForCustomers } = await import('@/features/pipedrive/gdc/purchase-history.service');
+      await refreshPurchaseHistoryForCustomers(customerIds);
+    } catch (error) {
+      console.error('[PurchaseHistory] Refresh after order edit failed:', error);
+    }
+  })();
+}
+
 
 // ============================================
 // SERVICE
@@ -352,6 +383,16 @@ export const salesOrderService = {
         console.error('Failed to log sales order update audit:', err);
       });
 
+      // Pipedrive purchase history shows the order number and date per
+      // customer; a changed customer updates both customers' notes
+      if (
+        existing.customerId !== order.customerId ||
+        existing.orderNumber !== order.orderNumber ||
+        String(existing.orderDate) !== String(order.orderDate)
+      ) {
+        refreshPipedrivePurchaseHistoryAfterEdit([existing.customerId, order.customerId], [existing.status, order.status]);
+      }
+
       return {
         success: true,
         data: order,
@@ -404,6 +445,9 @@ export const salesOrderService = {
 
       // Return updated order
       const order = await salesOrderRepository.findById(id);
+
+      // Pipedrive purchase history shows the tire quantities and prices
+      refreshPipedrivePurchaseHistoryAfterEdit([existing.customerId], [existing.status]);
 
       return {
         success: true,
@@ -540,6 +584,8 @@ export const salesOrderService = {
 
       // Cancelling a placed order removes it from the customer's Pipedrive purchase history
       await refreshPipedrivePurchaseHistory(id, [existing.status, 'cancelled']);
+      // Pipedrive deal: ERP Order Status (background, orders from linked quotes only)
+      syncPipedriveOrderStatus(id);
 
       return {
         success: true,
@@ -605,6 +651,8 @@ export const salesOrderService = {
 
       // Keep the customer's Pipedrive purchase history in step with placed orders
       await refreshPipedrivePurchaseHistory(id, [existing.status, newStatus]);
+      // Pipedrive deal: ERP Order Status (background, orders from linked quotes only)
+      syncPipedriveOrderStatus(id);
 
       return {
         success: true,

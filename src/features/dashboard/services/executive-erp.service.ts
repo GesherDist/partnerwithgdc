@@ -6,14 +6,20 @@
  * date, tire lines only (product item_type 'inventory'). Credit notes
  * (issued/applied) reduce revenue on their credit-note date.
  *
- * COGS: FIFO from the tires' purchase cost. Each product's cost layers are
- * its PO lines (not draft/cancelled) in PO date order; invoiced tires consume
- * them oldest first, then the open backlog.
- * NOT ACTIVE YET (Oct 15, 2026): PO unit prices in the ERP are the customer
- * sales prices copied onto the PO, not Galileo's purchase cost, and
- * products.base_cost is mostly empty. Until the real purchase cost is
- * recorded, COGS is reported as unavailable (null) instead of a wrong margin.
- * Turn PURCHASE_COST_AVAILABLE on once PO lines carry the real cost.
+ * COGS (client confirmation, Oct 21, 2026: "COGS from the ERP"): tires × the
+ * product's ERP cost (products.base_cost). PO unit prices cannot be used: they
+ * are the customer sales prices copied onto the PO. Tires whose product has
+ * no cost (base_cost 0) make the figure incomplete (cogsComplete false).
+ * FIFO by container needs the real purchase cost per PO line, which the ERP
+ * does not record yet.
+ *
+ * Backlog (client confirmation): firm orders with status confirmed or
+ * processing, less the tires already invoiced. Commission-only orders are not
+ * Gesher revenue (Galileo invoices the customer) and are left out.
+ *
+ * Commission (Ankur, Sep 8 email / Sep 25 call): reported separately from tire
+ * revenue and gross margin — commission invoices to Galileo by invoice date,
+ * plus commission on commission-only orders not billed yet.
  *
  * Money in the database is in cents; this service returns dollars.
  */
@@ -38,9 +44,9 @@ import {
 export interface SalesFigures {
   revenue: number;
   units: number;
-  /** null when no purchase cost exists at all for the tires sold */
+  /** null when none of the tires sold has an ERP cost */
   cogs: number | null;
-  /** false when some tires had no PO cost layer left (last known price used) */
+  /** false when some tires sold have no ERP cost (base_cost 0) */
   cogsComplete: boolean;
 }
 
@@ -70,6 +76,13 @@ export interface ErpExecutiveFigures {
   /** Purchase order totals by PO date — DPO denominator */
   purchases: Record<PeriodKey, number>;
   backlog: { tires: number; revenue: number; cogs: number | null; cogsComplete: boolean };
+  /**
+   * Commission revenue (Ankur: break commission-only sales out, keep it out of tire
+   * revenue and gross margin): commission invoices to Galileo by invoice date.
+   */
+  commission: Record<PeriodKey, number>;
+  /** Commission-only orders whose commission is not billed to Galileo yet */
+  commissionUnbilled: { amount: number; orders: number };
   supply: SupplyCycle[];
   inventory: {
     tiresOnHand: number;
@@ -89,48 +102,8 @@ interface InvoiceLine {
   quantity: number;
   lineTotal: number;
   isTire: boolean;
-}
-
-// ============================================
-// FIFO
-// ============================================
-
-class FifoCost {
-  private layers = new Map<string, Array<{ qty: number; cost: number }>>();
-  private lastCost = new Map<string, number>();
-
-  addLayer(productId: string, qty: number, unitCost: number) {
-    if (qty <= 0) {
-      return;
-    }
-    const list = this.layers.get(productId) ?? [];
-    list.push({ qty, cost: unitCost });
-    this.layers.set(productId, list);
-    this.lastCost.set(productId, unitCost);
-  }
-
-  /** Cost (cents) of taking `qty` units, oldest layers first */
-  take(productId: string, qty: number): { cost: number | null; complete: boolean } {
-    const list = this.layers.get(productId) ?? [];
-    let remaining = qty;
-    let cost = 0;
-    while (remaining > 0 && list.length > 0) {
-      const layer = list[0]!;
-      const used = Math.min(layer.qty, remaining);
-      cost += used * layer.cost;
-      layer.qty -= used;
-      remaining -= used;
-      if (layer.qty === 0) {
-        list.shift();
-      }
-    }
-    if (remaining === 0) {
-      return { cost, complete: true };
-    }
-    // Sold more than was purchased: value the rest at the last known price
-    const last = this.lastCost.get(productId);
-    return last === undefined ? { cost: cost > 0 ? cost : null, complete: false } : { cost: cost + remaining * last, complete: false };
-  }
+  /** Line of a commission invoice (Gesher's commission from Galileo) */
+  isCommission: boolean;
 }
 
 // ============================================
@@ -139,17 +112,16 @@ class FifoCost {
 
 const NOT_RECOGNIZED = ['draft', 'cancelled'];
 const OPEN_PO_EXCLUDED = ['draft', 'cancelled'];
-const BACKLOG_SO_STATUSES = ['confirmed', 'processing', 'shipped', 'delivered'];
+/** Client confirmation: backlog = firm orders still confirmed or processing */
+const BACKLOG_SO_STATUSES = ['confirmed', 'processing'];
 const cents = (n: number) => Math.round(n) / 100;
-/** See the header: PO unit prices are sales prices today, so COGS stays unavailable */
-const PURCHASE_COST_AVAILABLE = false;
 
 export async function buildErpExecutiveFigures(asOf: string = businessToday()): Promise<ErpExecutiveFigures> {
   const periods = getPeriods(asOf);
   const keys = Object.keys(periods) as PeriodKey[];
 
   const [productsRes, invoicesRes, creditsRes, poRes, soRes, shipmentsRes, inventoryRes] = await Promise.all([
-    db.from('products').select('id, item_type'),
+    db.from('products').select('id, item_type, base_cost'),
     db
       .from('invoices')
       .select('invoice_number, invoice_date, status, invoice_type, invoice_items(product_id, sales_order_item_id, quantity, line_total)')
@@ -164,7 +136,7 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
       .not('status', 'in', `(${OPEN_PO_EXCLUDED.join(',')})`),
     db
       .from('sales_orders')
-      .select('order_number, order_date, status, order_series, sales_order_items(id, product_id, quantity, customer_qty, line_total)')
+      .select('order_number, order_date, status, order_series, is_commission_only, commission_amount, commission_invoice_id, sales_order_items(id, product_id, quantity, customer_qty, line_total)')
       .is('deleted_at', null)
       .not('status', 'in', '(draft,cancelled)'),
     db
@@ -180,6 +152,12 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
   }
 
   const tireIds = new Set((productsRes.data ?? []).filter((p) => p.item_type === 'inventory').map((p) => String(p.id)));
+  // ERP cost per tire (cents); 0 = no cost recorded
+  const unitCost = new Map((productsRes.data ?? []).map((p) => [String(p.id), Number(p.base_cost ?? 0)]));
+  const costOf = (productId: string, qty: number): { cost: number | null; complete: boolean } => {
+    const c = unitCost.get(productId) ?? 0;
+    return c > 0 ? { cost: c * qty, complete: true } : { cost: null, complete: false };
+  };
 
   // ---------- invoice lines (recognized) ----------
   const lines: InvoiceLine[] = [];
@@ -195,30 +173,21 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
         lineTotal: Number(item.line_total ?? 0),
         // Tire revenue: tire lines on customer invoices (commission invoices are not tire sales)
         isTire: Boolean(productId && tireIds.has(productId)) && inv.invoice_type !== 'commission',
+        isCommission: inv.invoice_type === 'commission',
       });
     }
   }
   lines.sort((a, b) => a.date.localeCompare(b.date) || a.order.localeCompare(b.order));
 
-  // ---------- FIFO layers from POs ----------
   const pos = [...(poRes.data ?? [])].sort(
     (a, b) => String(a.po_date).localeCompare(String(b.po_date)) || String(a.po_number).localeCompare(String(b.po_number))
   );
-  const fifo = new FifoCost();
-  for (const po of pos) {
-    for (const item of (po.purchase_order_items ?? []) as Array<Record<string, unknown>>) {
-      const productId = item.product_id ? String(item.product_id) : null;
-      if (productId && tireIds.has(productId)) {
-        fifo.addLayer(productId, Number(item.quantity_ordered ?? 0), Number(item.unit_price ?? 0));
-      }
-    }
-  }
 
   // ---------- sales per period ----------
   const lineCost = new Map<InvoiceLine, { cost: number | null; complete: boolean }>();
   for (const line of lines) {
     if (line.isTire && line.productId) {
-      lineCost.set(line, fifo.take(line.productId, line.quantity));
+      lineCost.set(line, costOf(line.productId, line.quantity));
     }
   }
   const credits = (creditsRes.data ?? []).map((c) => ({ date: String(c.credit_note_date), amount: Number(c.subtotal ?? 0) }));
@@ -253,10 +222,18 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
     sales[key] = {
       revenue: cents(revenue - credit),
       units,
-      cogs: !PURCHASE_COST_AVAILABLE ? null : units === 0 ? 0 : anyCost ? cents(cogs) : null,
-      cogsComplete: PURCHASE_COST_AVAILABLE && complete,
+      cogs: units === 0 ? 0 : anyCost ? cents(cogs) : null,
+      cogsComplete: complete,
     };
     creditSales[key] = cents(allSales - credit);
+  }
+
+  // ---------- commission revenue per period (separate from tire revenue) ----------
+  const commission = {} as Record<PeriodKey, number>;
+  for (const key of keys) {
+    commission[key] = cents(
+      lines.filter((l) => l.isCommission && inRange(l.date, periods[key])).reduce((s, l) => s + l.lineTotal, 0)
+    );
   }
 
   // ---------- purchases per period (DPO) ----------
@@ -284,7 +261,18 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
   let backlogCogs = 0;
   let backlogAnyCost = false;
   let backlogComplete = true;
+  let commissionUnbilledAmount = 0;
+  let commissionUnbilledOrders = 0;
   for (const so of sos) {
+    // Commission-only: Galileo invoices the customer, so these tires are not Gesher
+    // revenue backlog; their commission is tracked separately
+    if (so.is_commission_only === true) {
+      if (!so.commission_invoice_id && Number(so.commission_amount ?? 0) > 0) {
+        commissionUnbilledAmount += Number(so.commission_amount);
+        commissionUnbilledOrders += 1;
+      }
+      continue;
+    }
     if (!BACKLOG_SO_STATUSES.includes(String(so.status))) {
       continue;
     }
@@ -302,7 +290,7 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
       const unitNet = qty > 0 ? Number(item.line_total ?? 0) / qty : 0;
       backlogTires += remaining;
       backlogRevenue += remaining * unitNet;
-      const c = fifo.take(productId, remaining);
+      const c = costOf(productId, remaining);
       if (c.cost !== null) {
         backlogCogs += c.cost;
         backlogAnyCost = true;
@@ -415,9 +403,11 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
     backlog: {
       tires: backlogTires,
       revenue: cents(backlogRevenue),
-      cogs: !PURCHASE_COST_AVAILABLE ? null : backlogTires === 0 ? 0 : backlogAnyCost ? cents(backlogCogs) : null,
-      cogsComplete: PURCHASE_COST_AVAILABLE && backlogComplete,
+      cogs: backlogTires === 0 ? 0 : backlogAnyCost ? cents(backlogCogs) : null,
+      cogsComplete: backlogComplete,
     },
+    commission,
+    commissionUnbilled: { amount: cents(commissionUnbilledAmount), orders: commissionUnbilledOrders },
     supply,
     inventory: {
       tiresOnHand,

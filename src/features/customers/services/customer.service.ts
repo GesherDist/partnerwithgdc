@@ -52,6 +52,27 @@ async function getQboSyncService() {
   return qboSyncModule.qboCustomerSyncService;
 }
 
+/**
+ * Push a customer's name and address to its Pipedrive organization (created
+ * as "Current Customer" if missing). Contacts are not pushed here. Never
+ * throws: Pipedrive problems must not block saving the customer.
+ */
+async function pushCustomerToPipedrive(customerId: string): Promise<void> {
+  try {
+    const { getActivePipedriveConnectionId } = await import('@/features/pipedrive/gdc/settings');
+    if (!(await getActivePipedriveConnectionId())) {
+      return;
+    }
+    const { syncCustomerToPipedrive } = await import('@/features/pipedrive/gdc/customer-sync.service');
+    const result = await syncCustomerToPipedrive(customerId, { includeContacts: false });
+    if (result.organization.status === 'needs_review') {
+      console.warn(`[Pipedrive] Customer ${customerId} not synced: ${result.organization.reason}`);
+    }
+  } catch (error) {
+    console.error(`[Pipedrive] Background customer sync failed for ${customerId}:`, error);
+  }
+}
+
 // ============================================
 // TYPES
 // ============================================
@@ -276,6 +297,9 @@ export const customerService = {
         console.error('Background QBO sync failed:', err);
       });
 
+      // Sync to Pipedrive (fire and forget)
+      void pushCustomerToPipedrive(customer.id);
+
       return {
         success: true,
         data: customer,
@@ -294,7 +318,9 @@ export const customerService = {
    */
   async create(
     input: CreateCustomerInput,
-    userId?: string
+    userId?: string,
+    /** skipPipedriveSync: the customer came from Pipedrive and is linked by the caller */
+    options: { skipPipedriveSync?: boolean } = {}
   ): Promise<ServiceResult<Customer>> {
     try {
       // Validate input
@@ -349,6 +375,11 @@ export const customerService = {
         console.error('Background QBO sync failed:', err);
       });
 
+      // Sync to Pipedrive (fire and forget), unless the customer came from Pipedrive
+      if (!options.skipPipedriveSync) {
+        void pushCustomerToPipedrive(customer.id);
+      }
+
       return {
         success: true,
         data: customer,
@@ -368,7 +399,9 @@ export const customerService = {
   async update(
     id: string,
     input: UpdateCustomerInput,
-    userId?: string
+    userId?: string,
+    /** skipPipedriveSync: the change came from Pipedrive, so do not push it back */
+    options: { skipPipedriveSync?: boolean } = {}
   ): Promise<ServiceResult<Customer>> {
     try {
       // Check if customer exists
@@ -437,6 +470,16 @@ export const customerService = {
       this.syncCustomerToQbo(customer, userId).catch((err) => {
         console.error('Background QBO sync failed:', err);
       });
+
+      // Sync to Pipedrive (fire and forget), unless the change came from Pipedrive.
+      // Only name/address (and the ERP ID) reach the organization, so other edits
+      // (credit, tax, ...) of an already linked customer need no call.
+      const pipedriveFields = ['customerCode', 'name', 'address1', 'address2', 'city', 'state', 'zip', 'country'] as const;
+      const pipedriveChange =
+        !customer.pipedriveOrgId || pipedriveFields.some((field) => existing[field] !== customer[field]);
+      if (!options.skipPipedriveSync && pipedriveChange) {
+        void pushCustomerToPipedrive(customer.id);
+      }
 
       return {
         success: true,

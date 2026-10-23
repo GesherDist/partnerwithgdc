@@ -28,7 +28,6 @@ import {
 } from '@/shared/components/ui/select';
 import { Input } from '@/shared/components/ui/input';
 import { Label } from '@/shared/components/ui/label';
-import { Checkbox } from '@/shared/components/ui/checkbox';
 import {
   Alert,
   AlertDescription,
@@ -98,7 +97,6 @@ const ENTITY_INPUT_LABELS: Record<EntityType, string> = {
 export default function CascadeDeletePage() {
   const [entityType, setEntityType] = useState<EntityType>('customer');
   const [entityNumber, setEntityNumber] = useState('');
-  const [deleteAuditLogs, setDeleteAuditLogs] = useState(true);
 
   const [loading, setLoading] = useState(false);
   const [previewData, setPreviewData] = useState<PreviewData | null>(null);
@@ -191,9 +189,7 @@ export default function CascadeDeletePage() {
       const response = await fetch(endpoint, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          deleteAuditLogs,
-        }),
+        body: JSON.stringify({}),
       });
 
       const data = await response.json();
@@ -331,22 +327,10 @@ export default function CascadeDeletePage() {
             </p>
           </div>
 
-          {/* Options */}
-          <div className="flex items-center space-x-2">
-            <Checkbox
-              id="delete-audit-logs"
-              checked={deleteAuditLogs}
-              onCheckedChange={(checked) =>
-                setDeleteAuditLogs(checked === true)
-              }
-            />
-            <Label
-              htmlFor="delete-audit-logs"
-              className="text-sm font-normal cursor-pointer"
-            >
-              Delete audit logs too (recommended for complete cleanup)
-            </Label>
-          </div>
+          {/* Audit trail is always kept */}
+          <p className="text-sm text-muted-foreground">
+            Audit logs are always kept, so the deletion stays traceable.
+          </p>
 
           {/* Error Display */}
           {error && (

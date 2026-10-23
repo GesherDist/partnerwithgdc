@@ -1651,6 +1651,8 @@ export async function getGDCInventoryByOrderSeries(
         shipping_address_state,
         shipping_address_postal_code,
         grand_total,
+        is_commission_only,
+        commission_amount,
         customers (id, name)
       ),
       locations:warehouse_id (
@@ -1701,6 +1703,8 @@ export async function getGDCInventoryByOrderSeries(
       shipping_address_state,
       shipping_address_postal_code,
       grand_total,
+      is_commission_only,
+      commission_amount,
       status,
       internal_notes,
       created_at,
@@ -2184,6 +2188,8 @@ export async function getGDCInventoryByOrderSeries(
       invoiceAmount: linkedSO?.grand_total
         ? linkedSO.grand_total / 100  // Customer invoice (for allocated POs)
         : po.grand_total / 100 || 0,  // PO amount (for warehouse/unallocated POs)
+      isCommissionOnly: linkedSO?.is_commission_only === true,
+      commissionAmount: linkedSO?.is_commission_only ? (linkedSO.commission_amount || 0) / 100 : 0,
       deliveryAddress: addressParts.join(', '),
       expectedDelivery: shipment?.customer_expected_delivery || po.expected_delivery_date || linkedSO?.requested_delivery_date || null,
       status: displayStatus, // Shipment status (if exists) or PO status
@@ -2358,6 +2364,8 @@ export async function getGDCInventoryByOrderSeries(
       qtyDelivered: qtyDeliveredSO,
       outstandingQty: outstandingQtySO,
       invoiceAmount: so.grand_total ? so.grand_total / 100 : 0,
+      isCommissionOnly: so.is_commission_only === true,
+      commissionAmount: so.is_commission_only ? (so.commission_amount || 0) / 100 : 0,
       deliveryAddress: addressParts.join(', '),
       expectedDelivery: shipment?.customer_expected_delivery || so.requested_delivery_date || null,
       status: displayStatus, // Shipment status (if exists) or SO status
@@ -2393,23 +2401,40 @@ export async function getGDCInventoryByOrderSeries(
 // Returns data for all order series tabs
 // ============================================
 
-export async function getAllGDCInventories(filters?: OperationsFilters): Promise<GDCInventoryData[]> {
-  const { ORDER_SERIES } = await import('@/shared/lib/global-data');
+// One operations page load asks for the GDC inventories from several places
+// (stats, SKU breakdown, immediate attention, status mix, GDC tabs) at the
+// same time. Calls with the same filters share one in-flight fetch.
+const gdcInventoriesInFlight = new Map<string, Promise<GDCInventoryData[]>>();
 
-  const results: GDCInventoryData[] = [];
-
-  for (const series of ORDER_SERIES) {
-    try {
-      const data = await getGDCInventoryByOrderSeries(series.code, filters);
-      results.push(data);
-    } catch (error) {
-      console.error(`Error fetching GDC inventory for ${series.code}:`, error);
-      // Return empty data for this series instead of failing
-      results.push({ orderSeries: series.code, items: [], uniqueSkus: [] });
-    }
+export function getAllGDCInventories(filters?: OperationsFilters): Promise<GDCInventoryData[]> {
+  const key = JSON.stringify(filters ?? {});
+  const pending = gdcInventoriesInFlight.get(key);
+  if (pending) {
+    return pending;
   }
 
-  return results;
+  const request = fetchAllGDCInventories(filters).finally(() => {
+    gdcInventoriesInFlight.delete(key);
+  });
+  gdcInventoriesInFlight.set(key, request);
+  return request;
+}
+
+async function fetchAllGDCInventories(filters?: OperationsFilters): Promise<GDCInventoryData[]> {
+  const { ORDER_SERIES } = await import('@/shared/lib/global-data');
+
+  return Promise.all(
+    ORDER_SERIES.map(async (series) => {
+      try {
+        return await getGDCInventoryByOrderSeries(series.code, filters);
+      } catch (error) {
+        console.error(`Error fetching GDC inventory for ${series.code}:`, error);
+        // Empty data for this series instead of failing; the tab shows the error
+        const message = error instanceof Error ? error.message : 'Failed to load';
+        return { orderSeries: series.code, items: [], uniqueSkus: [], error: message };
+      }
+    })
+  );
 }
 
 // ============================================

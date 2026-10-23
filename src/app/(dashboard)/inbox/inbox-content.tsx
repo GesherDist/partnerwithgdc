@@ -20,6 +20,8 @@ import {
   AlertCircle,
   Copy,
   Check,
+  Ship,
+  Loader2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -53,8 +55,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   getInboundEmails,
   deleteInboundEmail,
+  reprocessAsShippingEmail,
 } from '@/features/inbound-emails/actions';
 import type { InboundEmail } from '@/features/inbound-emails/types';
+import { isSeairEmail, describeShippingResult } from '@/features/inbound-emails/lib/shipping-email';
 import { ViewEmailDrawer } from '@/features/inbound-emails/components/ViewEmailDrawer';
 import { formatDistanceToNow } from 'date-fns';
 import { toast } from 'sonner';
@@ -190,6 +194,9 @@ export function InboxContent() {
   const [emailToDelete, setEmailToDelete] = useState<InboundEmail | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // SEAIR email being run through the shipping processor
+  const [processingId, setProcessingId] = useState<string | null>(null);
+
   const [meta, setMeta] = useState({
     total: 0,
     page: 1,
@@ -258,6 +265,30 @@ export function InboxContent() {
     setIsDeleting(false);
     setDeleteDialogOpen(false);
     setEmailToDelete(null);
+  };
+
+  // Process a SEAIR email as a shipping update (moves it to Shipping Tracking)
+  const handleProcessShipping = async (email: InboundEmail) => {
+    setProcessingId(email.id);
+    try {
+      const result = await reprocessAsShippingEmail(email.id);
+      if (result.success && result.data) {
+        const { ok, message } = describeShippingResult(result.data);
+        if (ok) {
+          toast.success(message);
+        } else {
+          toast.warning(message);
+        }
+        fetchEmails();
+      } else {
+        toast.error(result.error || 'Failed to process shipping email');
+      }
+    } catch (error) {
+      console.error('Process shipping email error:', error);
+      toast.error('Failed to process shipping email');
+    } finally {
+      setProcessingId(null);
+    }
   };
 
   // Handle search
@@ -415,7 +446,7 @@ export function InboxContent() {
                   <TableHead className="w-[100px]">Attachments</TableHead>
                   <TableHead className="w-[120px]">Status</TableHead>
                   <TableHead className="w-[150px]">Received</TableHead>
-                  <TableHead className="w-[100px] text-right">Actions</TableHead>
+                  <TableHead className="w-[140px] text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -474,6 +505,25 @@ export function InboxContent() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1">
+                        {isSeairEmail(email.from_email) && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title="Process as shipping update"
+                            aria-label="Process as shipping update"
+                            disabled={processingId !== null}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleProcessShipping(email);
+                            }}
+                          >
+                            {processingId === email.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Ship className="h-4 w-4 text-blue-600" />
+                            )}
+                          </Button>
+                        )}
                         <Button
                           variant="ghost"
                           size="icon"
@@ -537,6 +587,7 @@ export function InboxContent() {
         open={isDrawerOpen}
         onClose={handleDrawerClose}
         onQuoteCreated={handleQuoteCreated}
+        onShippingProcessed={handleQuoteCreated}
       />
 
       {/* Delete Confirmation Dialog */}

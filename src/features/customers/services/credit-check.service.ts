@@ -85,14 +85,18 @@ class CreditCheckServiceImpl {
     userId: string,
     note?: string
   ): Promise<{ success: boolean; error?: string }> {
+    const now = new Date().toISOString();
     const { error } = await db.from('approval_events').insert({
-      type: 'credit_release',
+      event_type: 'credit_release',
       subject_type: subjectType,
       subject_id: subjectId,
       status: 'approved',
+      requested_by: userId,
+      requested_at: now,
       decided_by: userId,
-      decided_at: new Date().toISOString(),
-      note: note || 'Credit limit override applied',
+      decided_at: now,
+      reason: 'Credit limit override',
+      decision_note: note || 'Credit limit override applied',
     });
 
     if (error) {

@@ -508,31 +508,28 @@ class CustomerRepositoryImpl {
    * Generate next customer code in format CUST-0001, CUST-0002, etc.
    */
   async getNextCustomerCode(): Promise<string> {
-    // Get the highest existing customer code with CUST- prefix
+    // Highest numeric CUST- code. Named codes (e.g. CUST-GALILEO) sort above
+    // numbers as text, so every CUST- code is read and compared as a number.
+    // Deleted customers count too: their codes stay taken.
     const { data, error } = await db
       .from('customers')
       .select('customer_code')
-      .like('customer_code', 'CUST-%')
-      .order('customer_code', { ascending: false })
-      .limit(1);
+      .like('customer_code', 'CUST-%');
 
     if (error) {
       throw new Error(`Failed to get next customer code: ${error.message}`);
     }
 
-    let nextNumber = 1;
-
-    if (data && data.length > 0 && data[0]) {
-      const lastCode = data[0].customer_code;
-      // Extract number from CUST-XXXX format
-      const match = lastCode.match(/^CUST-(\d+)$/);
+    let highest = 0;
+    for (const row of data ?? []) {
+      const match = String(row.customer_code).match(/^CUST-(\d+)$/);
       if (match) {
-        nextNumber = parseInt(match[1], 10) + 1;
+        highest = Math.max(highest, parseInt(match[1]!, 10));
       }
     }
 
     // Format with leading zeros (4 digits)
-    return `CUST-${nextNumber.toString().padStart(4, '0')}`;
+    return `CUST-${(highest + 1).toString().padStart(4, '0')}`;
   }
 
   // ==========================================

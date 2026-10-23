@@ -5,12 +5,13 @@
  *
  * Admin tools for the GDC Pipedrive CRM (shown on the connected Pipedrive card):
  * - check / apply the GDC Sales pipeline, stages, custom fields and activity types
+ * - map Gesher customers to Pipedrive organizations once, by hand (CustomerMappingDialog)
  * - import existing customers from CSV (keyed by ERP customer ID), with dry run
  * - publish customer purchase history to Pipedrive organizations
  */
 
 import { useRef, useState } from 'react';
-import { CheckCircle2, AlertTriangle, Loader2, Upload, Wrench, History } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, Loader2, Upload, Wrench, History, GitMerge } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/shared/components/ui/button';
@@ -21,6 +22,7 @@ import {
   backfillPurchaseHistory,
 } from '@/features/pipedrive/gdc/actions';
 import type { SetupReport } from '@/features/pipedrive/gdc/setup.service';
+import { CustomerMappingDialog } from './CustomerMappingDialog';
 import type { CustomerImportRowResult } from '@/features/pipedrive/gdc/customer-sync.service';
 
 const ACTION_LABELS: Record<string, string> = {
@@ -42,6 +44,7 @@ export function GdcSetupPanel() {
   const [importResults, setImportResults] = useState<{ dryRun: boolean; rows: CustomerImportRowResult[] } | null>(null);
 
   const [backfillBusy, setBackfillBusy] = useState(false);
+  const [mappingOpen, setMappingOpen] = useState(false);
 
   // ---------------- Setup ----------------
   const runSetup = async (dryRun: boolean) => {
@@ -175,6 +178,25 @@ export function GdcSetupPanel() {
             </div>
           </div>
         )}
+      </div>
+
+      <Separator />
+
+      {/* Customer mapping */}
+      <div className="space-y-3">
+        <div>
+          <p className="text-sm font-medium text-foreground">Customer mapping</p>
+          <p className="text-xs text-muted-foreground">
+            Link each Gesher customer to its Pipedrive organization once, by hand, with suggestions (ERP ID, name,
+            email). Do this after connecting a new Pipedrive account and before &quot;Sync all with Pipedrive&quot;, so
+            no duplicates or wrong links are created.
+          </p>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => setMappingOpen(true)}>
+          <GitMerge className="mr-2 h-4 w-4" />
+          Open customer mapping
+        </Button>
+        <CustomerMappingDialog open={mappingOpen} onOpenChange={setMappingOpen} />
       </div>
 
       <Separator />

@@ -153,6 +153,72 @@ async function updateInvoiceSyncError(
   }
 }
 
+/**
+ * Commission invoice (Gesher bills Galileo its commission): the invoice is
+ * linked to a supplier, not a customer. QuickBooks bills it to the customer
+ * with the supplier's name, using the existing QuickBooks items.
+ * Match only: nothing is created in QuickBooks (it stays the source of truth).
+ */
+async function resolveCommissionQboRefs(
+  connectionId: string,
+  supplier: { id: string; name: string } | null,
+  productIds: string[]
+): Promise<{ qboCustomerId: string; productQboIds: Record<string, string> } | { error: string }> {
+  if (!supplier?.name) {
+    return { error: 'Supplier not found on this commission invoice' };
+  }
+
+  const qboCustomer = await quickBooksProvider.findCustomerByName(connectionId, supplier.name);
+  if (!qboCustomer?.externalId) {
+    return {
+      error: `QuickBooks customer "${supplier.name}" not found. Create a customer with exactly this name in QuickBooks (or rename it to match), then push again.`,
+    };
+  }
+
+  const supabase = createAdminClient();
+  const productQboIds: Record<string, string> = {};
+
+  for (const productId of productIds) {
+    const { data: product, error: productError } = await supabase
+      .from('products')
+      .select('id, sku, name, qbo_item_id')
+      .eq('id', productId)
+      .single();
+
+    if (productError || !product) {
+      return { error: 'A product on this commission invoice was not found' };
+    }
+
+    if (product.qbo_item_id) {
+      productQboIds[productId] = product.qbo_item_id;
+      continue;
+    }
+
+    const qboItem =
+      (await quickBooksProvider.findProductByName(connectionId, product.name)) ??
+      (product.sku ? await quickBooksProvider.findProductByName(connectionId, product.sku) : null);
+
+    if (!qboItem?.externalId) {
+      return {
+        error: `QuickBooks item "${product.name}"${product.sku ? ` (SKU ${product.sku})` : ''} not found. Create it in QuickBooks (or match the name), then push again.`,
+      };
+    }
+
+    productQboIds[productId] = qboItem.externalId;
+
+    // Remember the link so the next push does not need to search again
+    const { error: linkError } = await supabase
+      .from('products')
+      .update({ qbo_item_id: qboItem.externalId, qbo_synced_at: new Date().toISOString() })
+      .eq('id', productId);
+    if (linkError) {
+      console.error(`Could not save QuickBooks item link for product ${product.sku}:`, linkError);
+    }
+  }
+
+  return { qboCustomerId: qboCustomer.externalId, productQboIds };
+}
+
 // ============================================
 // MAIN SERVICE FUNCTIONS
 // ============================================
@@ -188,6 +254,12 @@ export async function pushInvoiceToQbo(invoiceId: string): Promise<PushInvoiceRe
         grand_total,
         customer_notes,
         quickbooks_invoice_id,
+        invoice_type,
+        supplier_id,
+        suppliers:supplier_id (
+          id,
+          name
+        ),
         invoice_items (
           id,
           product_id,
@@ -247,7 +319,25 @@ export async function pushInvoiceToQbo(invoiceId: string): Promise<PushInvoiceRe
     // Supabase returns the relation as an object for single() queries with FK relations
     let customer = invoice.customers as unknown as { id: string; qbo_customer_id: string | null } | null;
 
-    if (!customer?.qbo_customer_id) {
+    // Commission invoice to Galileo: match the QuickBooks customer and items by name
+    // instead of syncing (steps 4 and 5 below are for customer invoices only)
+    const isCommissionInvoice = invoice.invoice_type === 'commission';
+    let commissionProductQboIds: Record<string, string> = {};
+    if (isCommissionInvoice) {
+      const supplier = invoice.suppliers as unknown as { id: string; name: string } | null;
+      const commissionProductIds = Array.from(
+        new Set((invoice.invoice_items || []).map((item: { product_id: string }) => item.product_id))
+      );
+      const refs = await resolveCommissionQboRefs(qboConnection.connectionId, supplier, commissionProductIds);
+      if ('error' in refs) {
+        await updateInvoiceSyncError(invoiceId);
+        return { success: false, error: refs.error };
+      }
+      customer = { id: supplier!.id, qbo_customer_id: refs.qboCustomerId };
+      commissionProductQboIds = refs.productQboIds;
+    }
+
+    if (!isCommissionInvoice && !customer?.qbo_customer_id) {
       // Customer not synced - fetch full customer data and sync to QBO
       const { data: fullCustomer, error: customerError } = await supabase
         .from('customers')
@@ -314,9 +404,11 @@ export async function pushInvoiceToQbo(invoiceId: string): Promise<PushInvoiceRe
       console.log(`Customer ${customerData.name} synced to QBO with ID: ${customerSyncResult.qboCustomerId}`);
     }
 
-    // 5. Check and auto-sync products if not synced
-    const productIds = Array.from(new Set((invoice.invoice_items || []).map((item: { product_id: string }) => item.product_id)));
-    const productQboIds: Record<string, string> = {};
+    // 5. Check and auto-sync products if not synced (commission items were matched above)
+    const productIds = isCommissionInvoice
+      ? []
+      : Array.from(new Set((invoice.invoice_items || []).map((item: { product_id: string }) => item.product_id)));
+    const productQboIds: Record<string, string> = { ...commissionProductQboIds };
 
     for (const productId of productIds) {
       // Check if product has QBO ID
@@ -381,7 +473,8 @@ export async function pushInvoiceToQbo(invoiceId: string): Promise<PushInvoiceRe
       invoiceNumber: invoice.invoice_number,
       invoiceDate: invoice.invoice_date,
       dueDate: invoice.due_date,
-      customerId: invoice.customer_id,
+      // Commission invoices have no ERP customer; the QuickBooks customer is set below
+      customerId: invoice.customer_id || invoice.supplier_id,
       subtotal: invoice.subtotal,
       taxTotal: invoice.tax_total,
       discountTotal: invoice.discount_total,

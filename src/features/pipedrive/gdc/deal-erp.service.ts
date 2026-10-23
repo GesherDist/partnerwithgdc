@@ -5,6 +5,8 @@
  *   When a GDC deal transitions to Won, Gesher creates ONE draft quote from the
  *   deal's products (24s/38s, quantities, prices, discounts) for the ERP
  *   customer linked to the deal's organization, and submits it for approval.
+ *   A new organization with no ERP customer becomes one first (or is linked
+ *   to the matching ERP customer): createCustomerFromOrganization.
  *   The existing ERP workflow then applies: quote approval, customer PO, credit
  *   check / hold and permissions for converting the quote to a sales order.
  *   Gesher never inserts sales orders directly here.
@@ -34,6 +36,9 @@ import { ERP_NOTE_MARKER, GDC_STAGE_ORDER, GDC_STAGES, type GdcStageKey } from '
 import { getGdcConfig } from './setup.service';
 import { getActivePipedriveConnectionId, type GdcResolvedConfig } from './settings';
 import { classifyTireSize } from './purchase-history.service';
+import { createCustomerFromOrganization } from './customer-sync.service';
+import { syncDealOrderStatus } from './order-status.service';
+import { auditService } from '@/shared/lib/audit';
 import { isMissingColumnError, MigrationRequiredError } from './schema-guard';
 
 /** Marks quotes created by this integration (only these are auto-submitted) */
@@ -76,6 +81,8 @@ interface DealRecord {
   currency: string | null;
   value: number | null;
   title: string;
+  /** Pipedrive lost reason (set when the deal is lost) */
+  lostReason: string | null;
   customFields: Record<string, unknown>;
 }
 
@@ -128,6 +135,7 @@ export function parseDeal(raw: unknown): DealRecord | null {
     currency: typeof r.currency === 'string' ? r.currency : null,
     value: toNumber(r.value),
     title: String(r.title ?? ''),
+    lostReason: typeof r.lost_reason === 'string' && r.lost_reason.trim() ? r.lost_reason.trim() : null,
     customFields: (r.custom_fields as Record<string, unknown>) ?? {},
   };
 }
@@ -477,6 +485,15 @@ export async function handleWonDeal(pipedriveDealId: number): Promise<WonDealRes
   if (deal.pipelineId !== config.pipelineId) {
     return { status: 'not_gdc_pipeline', message: 'Deal is not in the GDC Sales pipeline' };
   }
+  // Won again after being lost: its quote was rejected for the loss, so it is
+  // unlinked (kept for history) and a new quote is made from the deal
+  if (existingQuote && isRejectedForLoss(existingQuote, deal.id)) {
+    const { error: unlinkError } = await db.from('quotes').update({ pipedrive_deal_id: null }).eq('id', existingQuote.id);
+    if (unlinkError) {
+      throw new Error(`Failed to unlink lost quote ${existingQuote.quote_number}: ${unlinkError.message}`);
+    }
+    existingQuote = null;
+  }
   if (existingQuote) {
     return finalizeExistingQuote(connectionId, config, deal, existingQuote);
   }
@@ -486,21 +503,42 @@ export async function handleWonDeal(pipedriveDealId: number): Promise<WonDealRes
     await addDealNoteOnce(connectionId, deal.id, 'ERP quote not created: the deal has no organization. Add it, then use "Create ERP quote" in Gesher.');
     return { status: 'customer_not_linked', message: 'Deal has no organization' };
   }
-  const { data: customers, error: customerError } = await db
-    .from('customers')
-    .select('id, customer_code, name, address_1, address_2, city, state, zip, country, shipping_address_1, shipping_address_2, shipping_city, shipping_state, shipping_zip, shipping_country, use_separate_shipping')
-    .eq('pipedrive_org_id', deal.orgId)
-    .is('deleted_at', null);
-  if (customerError) {
-    throw new Error(`Failed to load customer for organization ${deal.orgId}: ${customerError.message}`);
-  }
-  if (!customers || customers.length === 0) {
-    await addDealNoteOnce(
-      connectionId,
-      deal.id,
-      'ERP quote not created: this organization is not linked to an ERP customer. Link it (customer import or "Sync to Pipedrive" on the customer), then use "Create ERP quote" in Gesher.'
-    );
-    return { status: 'customer_not_linked', message: 'Organization is not linked to an ERP customer' };
+  const loadLinkedCustomers = async (orgId: number) => {
+    const { data, error } = await db
+      .from('customers')
+      .select('id, customer_code, name, address_1, address_2, city, state, zip, country, shipping_address_1, shipping_address_2, shipping_city, shipping_state, shipping_zip, shipping_country, use_separate_shipping')
+      .eq('pipedrive_org_id', orgId)
+      .is('deleted_at', null);
+    if (error) {
+      throw new Error(`Failed to load customer for organization ${orgId}: ${error.message}`);
+    }
+    return data ?? [];
+  };
+  let customers = await loadLinkedCustomers(deal.orgId);
+  if (customers.length === 0) {
+    // New account won in Pipedrive: the organization becomes an ERP customer
+    // (or is linked to the matching one), then the quote is created as usual
+    const fromOrg = await createCustomerFromOrganization(deal.orgId);
+    if (fromOrg.status === 'created' || fromOrg.status === 'linked' || fromOrg.status === 'already_linked') {
+      customers = await loadLinkedCustomers(deal.orgId);
+    }
+    if (customers.length === 0) {
+      await addDealNoteOnce(
+        connectionId,
+        deal.id,
+        `ERP quote not created: this organization has no ERP customer and one could not be created (${fromOrg.message}). Fix it, then use "Create ERP quote" in Gesher.`
+      );
+      return { status: 'customer_not_linked', message: fromOrg.message };
+    }
+    if (fromOrg.status === 'created' || fromOrg.status === 'linked') {
+      await addDealNoteOnce(
+        connectionId,
+        deal.id,
+        fromOrg.status === 'created'
+          ? `New ERP customer ${fromOrg.customerCode} created from this organization (Dealer, credit pending: the quote approval runs the credit check).`
+          : `This organization was linked to the existing ERP customer ${fromOrg.customerCode}.`
+      );
+    }
   }
   if (customers.length > 1) {
     await addDealNoteOnce(connectionId, deal.id, 'ERP quote not created: this organization is linked to more than one ERP customer. Fix the links, then use "Create ERP quote" in Gesher.');
@@ -669,6 +707,135 @@ export async function handleWonDeal(pipedriveDealId: number): Promise<WonDealRes
 // SALES ORDER -> PIPEDRIVE
 // ============================================
 
+// ============================================
+// LOST DEAL -> ERP (one way)
+// ============================================
+
+/** Note line marking an ERP record touched because its deal was lost */
+const LOST_DEAL_MARKER = '[Pipedrive Lost] deal ';
+
+function isRejectedForLoss(quote: LinkedQuote, dealId: number): boolean {
+  return quote.status === 'rejected' && Boolean(quote.internal_notes?.includes(`${LOST_DEAL_MARKER}${dealId} `));
+}
+
+/** Append a line to a notes column unless that deal's lost line is already there */
+async function appendLostNote(
+  table: 'quotes' | 'sales_orders',
+  id: string,
+  current: string | null,
+  dealId: number,
+  line: string
+): Promise<void> {
+  if (current?.includes(`${LOST_DEAL_MARKER}${dealId} `)) {
+    return;
+  }
+  const { error } = await db
+    .from(table)
+    .update({ internal_notes: [current?.trim(), line].filter(Boolean).join('\n') })
+    .eq('id', id);
+  if (error) {
+    throw new Error(`Failed to add the lost note: ${error.message}`);
+  }
+}
+
+export interface LostDealResult {
+  status: 'quote_rejected' | 'order_flagged' | 'already_done' | 'not_linked' | 'not_lost' | 'not_connected';
+  message: string;
+  quoteNumber?: string;
+  orderNumber?: string;
+}
+
+/**
+ * A GDC deal was marked Lost in Pipedrive (after its ERP quote was made):
+ * - quote not yet converted (draft, pending approval, approved): rejected, with
+ *   the lost reason in its notes (and the approval queue cleared), so it can no
+ *   longer become an order
+ * - a sales order already exists: never cancelled automatically (stock may be
+ *   allocated); the lost reason goes on the order's notes and the deal gets a
+ *   note asking to cancel it in Gesher if needed
+ * - no ERP quote for the deal: nothing to do
+ * Safe to repeat: the deal is re-read, and notes are added only once.
+ */
+export async function handleLostDeal(pipedriveDealId: number): Promise<LostDealResult> {
+  const connectionId = await getActivePipedriveConnectionId();
+  if (!connectionId) {
+    return { status: 'not_connected', message: 'Pipedrive is not connected' };
+  }
+  const deal = await getDeal(connectionId, pipedriveDealId);
+  if (!deal || deal.status !== 'lost') {
+    return { status: 'not_lost', message: 'Deal is not lost (it may have been reopened)' };
+  }
+  const quote = await findLiveQuoteForDeal(deal.id);
+  if (!quote) {
+    return { status: 'not_linked', message: 'Deal has no ERP quote' };
+  }
+
+  const reason = deal.lostReason ?? 'no reason given';
+  const day = new Date().toISOString().slice(0, 10);
+  const line = `${LOST_DEAL_MARKER}${deal.id} (${deal.title}) lost on ${day}: ${reason}`;
+
+  const { data: order, error: orderError } = await db
+    .from('sales_orders')
+    .select('id, order_number, status, internal_notes')
+    .eq('quote_id', quote.id)
+    .is('deleted_at', null)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (orderError) {
+    throw new Error(`Failed to load the sales order of quote ${quote.quote_number}: ${orderError.message}`);
+  }
+
+  if (order) {
+    const orderNumber = String(order.order_number);
+    await appendLostNote('sales_orders', String(order.id), order.internal_notes as string | null, deal.id, line);
+    const action =
+      order.status === 'cancelled'
+        ? 'It is already cancelled.'
+        : ['shipped', 'delivered'].includes(String(order.status))
+          ? `It is already ${order.status}; nothing was changed.`
+          : 'It was not cancelled automatically; cancel it in Gesher if the order is off.';
+    await addDealNoteOnce(connectionId, deal.id, `Deal lost (${reason}). ERP sales order ${orderNumber} exists (${order.status}). ${action}`);
+    return { status: 'order_flagged', message: `Sales order ${orderNumber} flagged (${order.status})`, quoteNumber: quote.quote_number, orderNumber };
+  }
+
+  if (!['draft', 'pending_approval', 'approved'].includes(quote.status)) {
+    await appendLostNote('quotes', quote.id, quote.internal_notes, deal.id, line);
+    return { status: 'already_done', message: `Quote ${quote.quote_number} is already ${quote.status}`, quoteNumber: quote.quote_number };
+  }
+
+  // Lost reason first, so a retry after a partial failure still sees the marker
+  await appendLostNote('quotes', quote.id, quote.internal_notes, deal.id, line);
+  if (quote.status === 'pending_approval') {
+    // Normal rejection: also closes the pending approval
+    const rejected = await quoteService.rejectQuoteApproval(quote.id, `Deal lost in Pipedrive: ${reason}`);
+    if (!rejected.success) {
+      throw new Error(`Quote ${quote.quote_number} not rejected: ${rejected.error ?? 'unknown error'}`);
+    }
+  } else {
+    // Draft / approved cannot be rejected through the normal approval flow;
+    // a lost deal must still stop the quote from becoming an order
+    const { error } = await db.from('quotes').update({ status: 'rejected' }).eq('id', quote.id).in('status', ['draft', 'approved']);
+    if (error) {
+      throw new Error(`Quote ${quote.quote_number} not rejected: ${error.message}`);
+    }
+    auditService.log({
+      action: 'reject',
+      module: 'quotes',
+      entityType: 'Quote',
+      entityId: quote.id,
+      oldData: { status: quote.status },
+      newData: { status: 'rejected', reason: `Deal lost in Pipedrive: ${reason}` },
+      description: `Quote ${quote.quote_number} rejected: Pipedrive deal ${deal.id} lost`,
+    }).catch((auditError: unknown) => console.error('Failed to log lost-deal quote rejection:', auditError));
+    await syncDealOrderStatus(deal.id).catch((statusError: unknown) =>
+      console.error(`[DealErp] Order status update failed for lost deal ${deal.id}:`, statusError)
+    );
+  }
+  await addDealNoteOnce(connectionId, deal.id, `Deal lost (${reason}). ERP quote ${quote.quote_number} was rejected.`);
+  return { status: 'quote_rejected', message: `Quote ${quote.quote_number} rejected (${reason})`, quoteNumber: quote.quote_number };
+}
+
 export type WriteBackStatus = 'written' | 'already_written' | 'not_linked' | 'not_connected' | 'failed';
 
 export interface WriteBackResult {
@@ -715,6 +882,10 @@ export async function writeBackSalesOrderNumber(quoteId: string, salesOrderId: s
     }
     await advanceDealStage(connectionId, config, deal, 'won_order_placed');
     await addDealNoteOnce(connectionId, dealId, `ERP sales order ${orderNumber} created from the approved quote.`);
+    // ERP Order Status follows the new order; its failure must not fail the write-back
+    await syncDealOrderStatus(dealId).catch((statusError: unknown) =>
+      console.error(`[DealErp] Order status update failed for deal ${dealId}:`, statusError)
+    );
     return {
       status: alreadyWritten ? 'already_written' : 'written',
       message: `Sales order ${orderNumber} ${alreadyWritten ? 'was already' : 'is now'} on Pipedrive deal ${dealId}`,

@@ -5,8 +5,8 @@
  *
  * Pipedrive block for the customer detail page:
  * - link status (organization / person / deal IDs)
- * - "Sync to Pipedrive": create or link the customer's Pipedrive organization
- *   (and its contacts) using the GDC matching rules
+ * - "Sync with Pipedrive": two-way sync of the customer and its contacts with
+ *   the Pipedrive organization and people (ERP wins when both changed)
  * - "Publish purchase history": pinned tire purchase-history note on the org
  * - "Sync LTV to Pipedrive": existing lifetime-value push
  *
@@ -19,7 +19,8 @@ import { toast } from 'sonner';
 
 import { Button } from '@/shared/components/ui/button';
 import { pushCustomerLTVToPipedrive } from '@/features/pipedrive/actions';
-import { syncCustomerToPipedriveAction, publishPurchaseHistoryAction } from '@/features/pipedrive/gdc/actions';
+import { syncCustomerWithPipedriveAction, publishPurchaseHistoryAction } from '@/features/pipedrive/gdc/actions';
+import { describeTwoWaySync } from '@/features/pipedrive/gdc/two-way-sync.format';
 import { getCustomer } from '../actions';
 import type { Customer } from '../types';
 
@@ -53,28 +54,16 @@ export function CustomerPipedriveSection({ customer, canEdit, onCustomerUpdated 
 
   const handleSync = () => {
     startSync(async () => {
-      const result = await syncCustomerToPipedriveAction(customer.id);
+      const result = await syncCustomerWithPipedriveAction(customer.id);
       if (!result.success || !result.data) {
-        toast.error('Failed to sync to Pipedrive', { description: result.error || 'Unknown error' });
+        toast.error('Failed to sync with Pipedrive', { description: result.error || 'Unknown error' });
         return;
       }
-      const { organization, people, warnings } = result.data;
-      const review = [organization, ...people.map((p) => p.result)].filter((r) => r.status === 'needs_review');
-      if (review.length > 0) {
-        toast.warning('Pipedrive needs review', {
-          description: review.map((r) => r.reason).filter(Boolean).join('; '),
-        });
+      const message = describeTwoWaySync(result.data);
+      if (message.needsReview) {
+        toast.warning(message.title, { description: message.description });
       } else {
-        const orgText: Record<string, string> = {
-          created: 'created in Pipedrive',
-          matched: 'found in Pipedrive and linked',
-          linked: 'already linked',
-        };
-        const contactsText =
-          people.length === 0 ? 'no contacts in Gesher to sync' : `${people.length} contact(s) synced as Pipedrive people`;
-        toast.success(`Organization (ID ${organization.id}) ${orgText[organization.status] ?? organization.status}`, {
-          description: [contactsText, ...warnings].join('. '),
-        });
+        toast.success(message.title, { description: message.description });
       }
       // Show the new link without a full page reload
       const reloaded = await getCustomer(customer.id);
@@ -126,7 +115,7 @@ export function CustomerPipedriveSection({ customer, canEdit, onCustomerUpdated 
             {isLinked ? 'Linked to Pipedrive' : 'Not linked to Pipedrive'}
           </p>
           <p className="text-xs text-muted-foreground">
-            {isLinked ? linkedIds.join(' · ') : 'Sync to Pipedrive to create or link its organization and contacts.'}
+            {isLinked ? linkedIds.join(' · ') : 'Sync with Pipedrive to create or link its organization and contacts.'}
           </p>
         </div>
       </div>
@@ -135,7 +124,7 @@ export function CustomerPipedriveSection({ customer, canEdit, onCustomerUpdated 
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={handleSync} disabled={isSyncing}>
             {isSyncing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Link2 className="mr-2 h-4 w-4" />}
-            Sync to Pipedrive
+            Sync with Pipedrive
           </Button>
           {customer.pipedriveOrgId && (
             <Button variant="outline" size="sm" onClick={handlePublish} disabled={isPublishing}>

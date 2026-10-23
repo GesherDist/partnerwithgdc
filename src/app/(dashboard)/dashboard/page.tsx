@@ -9,6 +9,7 @@
  * - dashboard.view_module: Access to dashboard page
  * - dashboard.view_analytics: Stats Grid (KPIs) and Charts
  * - dashboard.view_inventory: Inventory overview
+ * - dashboard.view_financials: Financial Metrics / Profitability / Supply Chain tabs
  *
  * Data: All data is fetched from database (no mock data fallback)
  * Date Filters: This Month, Last Month, This Quarter, Last Quarter, YTD, Last Year, etc.
@@ -99,6 +100,7 @@ export default async function DashboardPage() {
   // Permission checks for sub-sections (for executive dashboard)
   const canViewAnalytics = hasPermission(user, 'dashboard.view_analytics');
   const canViewInventory = hasPermission(user, 'dashboard.view_inventory');
+  const canViewFinancials = hasPermission(user, 'dashboard.view_financials');
 
   // Default date range: Last 6 Months
   const defaultDateRange = getDateRangeFromPreset('last_6_months');
@@ -165,6 +167,7 @@ export default async function DashboardPage() {
     <DashboardContent
       canViewAnalytics={canViewAnalytics}
       canViewInventory={canViewInventory}
+      canViewFinancials={canViewFinancials}
       initialStats={dynamicStats}
       initialUnitsBySKU={dynamicUnitsBySKU}
       initialChannelData={dynamicChannelData}

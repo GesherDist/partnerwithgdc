@@ -2,7 +2,7 @@
  * Pipedrive Webhook Service
  *
  * Handles processing of incoming Pipedrive webhook events.
- * Supports person, deal, and note events.
+ * Supports person, deal, note, activity and organization events.
  */
 
 import { db } from '@/shared/lib/supabase/database';
@@ -10,6 +10,7 @@ import { leadsRepository } from '@/features/leads/repositories/leads.repository'
 import type { CreateLeadDTO, LeadStatus } from '@/features/leads/types';
 import type { PipedriveWebhookEvent } from '../lib/webhook-verify';
 import { toPipedriveId } from '../lib/sync-log';
+import type { PersonToContactResult } from '../gdc/customer-sync.service';
 
 // ============================================
 // TYPES
@@ -75,9 +76,11 @@ interface WebhookPayload {
     is_bulk_update: boolean;
     matches_filters?: { current: unknown[] };
     webhook_id: string;
+    /** "app" for edits in Pipedrive, "api" for changes made through the API */
+    change_source?: string;
   };
-  current?: PipedrivePersonData | PipedriveDealData | PipedriveNoteData;
-  previous?: PipedrivePersonData | PipedriveDealData | PipedriveNoteData;
+  current?: PipedrivePersonData | PipedriveDealData | PipedriveNoteData | Record<string, unknown>;
+  previous?: PipedrivePersonData | PipedriveDealData | PipedriveNoteData | Record<string, unknown>;
   event: string;
 }
 
@@ -146,6 +149,8 @@ class PipedriveWebhookService {
           return await this.handleNoteEvent(action, payload);
         case 'activity':
           return await this.handleActivityEvent(action, payload);
+        case 'organization':
+          return await this.handleOrganizationEvent(action, payload);
         default:
           return {
             success: true,
@@ -184,6 +189,43 @@ class PipedriveWebhookService {
       };
     }
 
+    // Customer contacts first (two-way contact sync), then Gesher leads
+    const contact = await this.syncPersonToContact(action, payload);
+    const lead = await this.handlePersonForLead(action, personData);
+    if (!contact) {
+      return lead;
+    }
+    const contactChanged = contact.status !== 'skipped' && contact.status !== 'unchanged' && contact.status !== 'not_linked';
+    return {
+      success: contact.status !== 'failed' && lead.success,
+      action: contact.status === 'failed' ? 'error' : contactChanged ? 'updated' : lead.action,
+      entityType: contactChanged || contact.status === 'failed' ? 'customer' : lead.entityType,
+      entityId: contact.contactId ?? lead.entityId,
+      message: `Contact: ${contact.message}; Lead: ${lead.message ?? lead.action}`,
+    };
+  }
+
+  /**
+   * Pipedrive -> ERP half of the two-way contact sync (customer-sync.service).
+   * Changes made through the API are skipped: they are this system's own
+   * ERP -> Pipedrive writes (also caught by the value comparison).
+   */
+  private async syncPersonToContact(action: string, payload: WebhookPayload): Promise<PersonToContactResult | null> {
+    const { applyPersonToContact, unlinkDeletedPerson } = await import('../gdc/customer-sync.service');
+    if (action === 'deleted') {
+      const personId = Number(payload.meta.id);
+      return Number.isInteger(personId) && personId > 0 ? await unlinkDeletedPerson(personId) : null;
+    }
+    if (action !== 'added' && action !== 'updated') {
+      return null;
+    }
+    if (payload.meta.change_source === 'api') {
+      return { status: 'skipped', message: 'Change made through the API (ERP sync)' };
+    }
+    return await applyPersonToContact(payload.current);
+  }
+
+  private async handlePersonForLead(action: string, personData: PipedrivePersonData): Promise<ProcessResult> {
     // GDC flow: people live in Pipedrive and customers flow ERP → Pipedrive,
     // so a Pipedrive person no longer becomes a Gesher lead on its own (the
     // customer import would otherwise fill Leads with customers' contacts).
@@ -460,12 +502,22 @@ class PipedriveWebhookService {
       return await this.handleDealWon(deal);
     }
 
+    // A real transition to Lost: the ERP quote is rejected or the order flagged
+    // (gdc/deal-erp.service). A failure throws, so the deal event is retried.
+    let lostMessage: string | null = null;
+    if (changedTo(deal as unknown as Record<string, unknown>, previous as unknown as Record<string, unknown>, 'status', (v) => v === 'lost')) {
+      const { handleLostDeal } = await import('../gdc/deal-erp.service');
+      const lost = await handleLostDeal(deal.id);
+      lostMessage = `ERP: ${lost.message}`;
+    }
+
     // Find lead by deal ID or person ID
     let existingLead = await this.findLeadByDeal(deal);
 
     if (!existingLead) {
       // Create new lead
-      return await this.handleDealAdded(deal);
+      const added = await this.handleDealAdded(deal);
+      return lostMessage ? { ...added, message: `${lostMessage}; ${added.message ?? ''}` } : added;
     }
 
     // Update lead with deal info
@@ -485,7 +537,7 @@ class PipedriveWebhookService {
       action: 'updated',
       entityType: 'lead',
       entityId: lead.id,
-      message: `Updated lead from deal: ${deal.title}`,
+      message: [lostMessage, `Updated lead from deal: ${deal.title}`].filter(Boolean).join('; '),
     };
   }
 
@@ -614,6 +666,60 @@ class PipedriveWebhookService {
       action: moved || report.status === 'task_created' ? 'updated' : 'skipped',
       entityType: dealId ? 'deal' : 'activity',
       message: `${moved ? `Deal ${dealId} moved to Contacted` : 'No stage change'}; ${reportMessage}`,
+    };
+  }
+
+  // ============================================
+  // ORGANIZATION EVENTS
+  // ============================================
+
+  /**
+   * Pipedrive -> ERP half of the two-way customer sync (customer-sync.service):
+   * - updated: name and address copied to the linked ERP customer
+   * - added: ignored; a new organization (lead / prospect) is not an ERP customer
+   * - deleted: the ERP customer is kept, only its Pipedrive link is removed
+   * Changes made through the API are skipped: they are this system's own
+   * ERP -> Pipedrive writes (also caught by the value comparison).
+   */
+  private async handleOrganizationEvent(action: string, payload: WebhookPayload): Promise<ProcessResult> {
+    if (action === 'added') {
+      return { success: true, action: 'skipped', entityType: 'customer', message: 'New organizations do not create ERP customers' };
+    }
+    if (action === 'updated' && payload.meta.change_source === 'api') {
+      return { success: true, action: 'skipped', entityType: 'customer', message: 'Change made through the API (ERP sync)' };
+    }
+
+    const { applyOrganizationToCustomer, unlinkDeletedOrganization } = await import('../gdc/customer-sync.service');
+
+    if (action === 'deleted') {
+      const orgId = Number(payload.meta.id);
+      if (!Number.isInteger(orgId) || orgId <= 0) {
+        return { success: true, action: 'skipped', entityType: 'customer', message: 'No organization id in the payload' };
+      }
+      const result = await unlinkDeletedOrganization(orgId);
+      return {
+        success: true,
+        action: result.status === 'unlinked' ? 'updated' : 'skipped',
+        entityType: 'customer',
+        entityId: result.customerId,
+        message: result.message,
+      };
+    }
+
+    if (action !== 'updated') {
+      return { success: true, action: 'skipped', entityType: 'customer', message: `Unsupported action: ${action}` };
+    }
+    if (!payload.current) {
+      return { success: true, action: 'skipped', entityType: 'customer', message: 'No organization data in payload' };
+    }
+
+    const result = await applyOrganizationToCustomer(payload.current);
+    return {
+      success: result.status !== 'failed',
+      action: result.status === 'updated' ? 'updated' : result.status === 'failed' ? 'error' : 'skipped',
+      entityType: 'customer',
+      entityId: result.customerId,
+      message: result.message,
     };
   }
 

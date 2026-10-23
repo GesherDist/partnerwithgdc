@@ -11,6 +11,16 @@ import { revalidatePath, unstable_noStore as noStore } from 'next/cache';
 import { db } from '@/shared/lib/supabase/database';
 import { createAdminClient } from '@/shared/lib/supabase/admin';
 import { getCurrentUser } from '@/shared/lib/auth';
+
+/**
+ * Pipedrive deal of the shipment's sales order: ERP Order Status, Shipment ETA
+ * and Container Status (gdc/order-status.service). Background; never fails.
+ */
+function syncShipmentToPipedrive(shipmentId: string): void {
+  void import('@/features/pipedrive/gdc/order-status.service')
+    .then(({ syncShipmentDealInBackground }) => syncShipmentDealInBackground(shipmentId))
+    .catch((error) => console.error('[Pipedrive] Shipment sync could not start:', error));
+}
 import {
   getOperationsData,
   getStats,
@@ -328,6 +338,7 @@ export async function updateShipmentStatus(
 
     // Revalidate operations dashboard
     revalidatePath('/operations');
+    syncShipmentToPipedrive(input.shipmentId);
 
     return { success: true, data: { id: input.shipmentId } };
   } catch (error) {
@@ -609,6 +620,7 @@ export async function updateShipment(
 
     // Revalidate operations dashboard
     revalidatePath('/operations');
+    syncShipmentToPipedrive(input.shipmentId);
 
     return { success: true, data: { id: input.shipmentId } };
   } catch (error) {
@@ -1033,6 +1045,9 @@ export async function updateShipmentOrOrder(
 
     // Revalidate operations dashboard
     revalidatePath('/operations');
+    if (shipment?.id) {
+      syncShipmentToPipedrive(shipment.id as string);
+    }
 
     console.log('[updateShipmentOrOrder] ✅ Update completed successfully for ID:', input.id);
 

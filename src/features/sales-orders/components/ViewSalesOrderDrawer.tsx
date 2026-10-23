@@ -56,6 +56,7 @@ import {
 import { ConfirmAllocationsModal } from './ConfirmAllocationsModal';
 import { toast } from 'sonner';
 import { AllocationManager } from './AllocationManager';
+import { CommissionSection, CommissionBadge } from './CommissionSection';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/components/ui/tabs';
 
 // ============================================
@@ -456,6 +457,7 @@ const handleReleaseHold = async () => {
                       {ORDER_CREDIT_STATUS_LABELS['hold']}
                     </Badge>
                   )}
+                  {order.isCommissionOnly && <CommissionBadge />}
                 </div>
 
                 {/* Credit Hold Banner */}
@@ -528,6 +530,26 @@ const handleReleaseHold = async () => {
                       />
                     )}
                   </div>
+                </Section>
+
+                {/* Commission */}
+                <Section title="Commission">
+                  <CommissionSection
+                    order={order}
+                    canEdit={canEditPermission}
+                    onSaved={fetchOrder}
+                  />
+                  {order.isCommissionOnly && (
+                    <p className="mt-3 text-xs text-muted-foreground">
+                      No customer invoice from Gesher: Galileo invoices the customer for this order.
+                    </p>
+                  )}
+                  {order.isCommissionOnly && existingInvoice && (
+                    <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">
+                      A customer invoice ({existingInvoice.invoiceNumber}) already exists for this commission-only
+                      order. Cancel it if it was created by mistake.
+                    </p>
+                  )}
                 </Section>
 
                 {/* Customer & Sales Rep */}
@@ -772,7 +794,7 @@ const handleReleaseHold = async () => {
                     View Invoice
                   </Button>
                 )}
-                {canCreateInvoice && !existingInvoice && (
+                {canCreateInvoice && !existingInvoice && !order?.isCommissionOnly && (
                   <Button
                     variant="outline"
                     size="sm"

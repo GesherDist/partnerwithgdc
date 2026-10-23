@@ -339,6 +339,92 @@ export async function publishPurchaseHistory(
 }
 
 /**
+ * Republish the purchase history of several customers (unique, linked ones
+ * only). Never throws: each failure is logged and counted.
+ */
+export async function refreshPurchaseHistoryForCustomers(
+  customerIds: Array<string | null | undefined>
+): Promise<{ published: number; failed: number }> {
+  const result = { published: 0, failed: 0 };
+  for (const customerId of [...new Set(customerIds.filter((id): id is string => Boolean(id)))]) {
+    try {
+      const published = await publishPurchaseHistory(customerId);
+      if (published.status === 'not_connected') {
+        break;
+      }
+      if (published.status !== 'not_linked') {
+        result.published++;
+      }
+    } catch (error) {
+      result.failed++;
+      console.error(`[PurchaseHistory] Refresh failed for customer ${customerId}:`, error);
+    }
+  }
+  return result;
+}
+
+/**
+ * Daily safety net (pipedrive-reconcile cron): republish the purchase history
+ * of every linked customer whose sales orders or order lines changed in the
+ * last `sinceHours` hours. Catches changes made outside the sales order service
+ * (pick tickets, packing lists, tracking, supplier portal, operations
+ * dashboard, imports). An unchanged note is not rewritten.
+ */
+export async function reconcileRecentPurchaseHistory(options: { sinceHours?: number } = {}): Promise<{
+  customers: number;
+  published: number;
+  failed: number;
+}> {
+  const since = new Date(Date.now() - (options.sinceHours ?? 26) * 3600_000).toISOString();
+
+  const [orders, items] = await Promise.all([
+    fetchAllRows<{ customer_id: string | null }>((from, to) =>
+      db.from('sales_orders').select('customer_id').gte('updated_at', since).order('id', { ascending: true }).range(from, to)
+    ),
+    fetchAllRows<{ sales_order_id: string }>((from, to) =>
+      db.from('sales_order_items').select('sales_order_id').gte('updated_at', since).order('id', { ascending: true }).range(from, to)
+    ),
+  ]);
+
+  const customerIds = new Set(orders.map((o) => o.customer_id).filter((id): id is string => Boolean(id)));
+  const orderIds = [...new Set(items.map((i) => i.sales_order_id))];
+  for (let start = 0; start < orderIds.length; start += 200) {
+    const { data, error } = await db
+      .from('sales_orders')
+      .select('customer_id')
+      .in('id', orderIds.slice(start, start + 200));
+    if (error) {
+      throw new Error(`Failed to load changed orders: ${error.message}`);
+    }
+    for (const row of data ?? []) {
+      if (row.customer_id) {customerIds.add(row.customer_id as string);}
+    }
+  }
+  if (customerIds.size === 0) {
+    return { customers: 0, published: 0, failed: 0 };
+  }
+
+  // Only customers linked to Pipedrive
+  const linked: string[] = [];
+  const ids = [...customerIds];
+  for (let start = 0; start < ids.length; start += 200) {
+    const { data, error } = await db
+      .from('customers')
+      .select('id')
+      .in('id', ids.slice(start, start + 200))
+      .not('pipedrive_org_id', 'is', null)
+      .is('deleted_at', null);
+    if (error) {
+      throw new Error(`Failed to load changed customers: ${error.message}`);
+    }
+    linked.push(...(data ?? []).map((row) => row.id as string));
+  }
+
+  const result = await refreshPurchaseHistoryForCustomers(linked);
+  return { customers: linked.length, ...result };
+}
+
+/**
  * Refresh purchase history after an ERP order changes status. Never throws:
  * an order status change must not fail because Pipedrive is unavailable.
  */

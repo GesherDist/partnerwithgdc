@@ -18,14 +18,22 @@ import { db } from '@/shared/lib/supabase/database';
 import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
 import type { AppUser } from '@/shared/stores/auth.store';
 import { ensureGdcSetup, explainSetupPermissionError, GdcSetupRequiredError, type SetupReport } from './setup.service';
-import {
-  parseCustomerImportCsv,
-  runCustomerImport,
-  syncCustomerToPipedrive,
-  type CustomerImportSummary,
-  type CustomerSyncResult,
-} from './customer-sync.service';
+import { parseCustomerImportCsv, runCustomerImport, type CustomerImportSummary } from './customer-sync.service';
 import { publishPurchaseHistory, type PurchaseHistoryPublishStatus } from './purchase-history.service';
+import { syncCustomerWithPipedrive, type TwoWaySyncResult } from './two-way-sync.service';
+import { getActivePipedriveConnectionId } from './settings';
+import {
+  acknowledgePipedriveAccountSwitch,
+  getLinkedPipedriveAccount,
+  type LinkedPipedriveAccount,
+} from './account-guard.service';
+import {
+  applyCustomerMapping,
+  buildCustomerMappingPreview,
+  type CustomerMappingPreview,
+  type MappingApplyResult,
+  type MappingDecision,
+} from './customer-mapping.service';
 import {
   handleWonDeal,
   writeBackSalesOrderNumber,
@@ -138,21 +146,166 @@ export async function importCustomersCsv(
   }
 }
 
-export async function syncCustomerToPipedriveAction(
-  customerId: string,
-  dryRun = false
-): Promise<ActionResult<CustomerSyncResult>> {
+/** "Sync with Pipedrive" button: two-way sync of the customer and its contacts */
+export async function syncCustomerWithPipedriveAction(customerId: string): Promise<ActionResult<TwoWaySyncResult>> {
   const auth = await authorize('customers.edit');
   if (!auth.ok) {return auth.result;}
 
   try {
-    const result = await syncCustomerToPipedrive(customerId, { dryRun });
-    if (!dryRun) {
+    const result = await syncCustomerWithPipedrive(customerId);
+    revalidatePath('/customers');
+    return { success: true, data: result };
+  } catch (error) {
+    return failure('GDC two-way customer sync', error, 'Sync failed');
+  }
+}
+
+/** Customers per "Sync all with Pipedrive" call (each one makes several Pipedrive calls) */
+const SYNC_ALL_BATCH_SIZE = 10;
+
+export interface SyncAllBatchResult {
+  processed: number;
+  /** Active customers to sync; only on the first call (cursor null) */
+  total: number | null;
+  nextCursor: string | null;
+  totals: {
+    updatedInErp: number;
+    updatedInPipedrive: number;
+    contactsCreatedInErp: number;
+    contactsCreatedInPipedrive: number;
+  };
+  /** Customers that failed or need a look, with the reason */
+  problems: Array<{ customerCode: string; name: string; message: string }>;
+}
+
+/**
+ * "Sync all with Pipedrive" (Customers list): two-way sync of every active
+ * customer, in batches. Call again with `nextCursor` until it is null.
+ */
+export async function syncAllCustomersWithPipedriveAction(cursor: string | null): Promise<ActionResult<SyncAllBatchResult>> {
+  const auth = await authorize('customers.edit');
+  if (!auth.ok) {return auth.result;}
+
+  try {
+    if (!(await getActivePipedriveConnectionId())) {
+      return { success: false, error: 'Pipedrive is not connected' };
+    }
+
+    let total: number | null = null;
+    if (!cursor) {
+      const { count, error } = await db
+        .from('customers')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'active')
+        .is('deleted_at', null);
+      if (error) {throw new Error(error.message);}
+      total = count ?? 0;
+    }
+
+    let query = db
+      .from('customers')
+      .select('id, customer_code, name')
+      .eq('status', 'active')
+      .is('deleted_at', null)
+      .order('id', { ascending: true })
+      .limit(SYNC_ALL_BATCH_SIZE);
+    if (cursor) {query = query.gt('id', cursor);}
+    const { data: customers, error } = await query;
+    if (error) {throw new Error(error.message);}
+
+    const result: SyncAllBatchResult = {
+      processed: customers?.length ?? 0,
+      total,
+      nextCursor: null,
+      totals: { updatedInErp: 0, updatedInPipedrive: 0, contactsCreatedInErp: 0, contactsCreatedInPipedrive: 0 },
+      problems: [],
+    };
+    for (const customer of customers ?? []) {
+      const label = { customerCode: customer.customer_code as string, name: customer.name as string };
+      try {
+        const synced = await syncCustomerWithPipedrive(customer.id as string);
+        const c = synced.contacts;
+        if (synced.customer.toErp.length > 0 || c.updatedInErp > 0) {result.totals.updatedInErp++;}
+        if (synced.customer.toPipedrive.length > 0 || c.updatedInPipedrive > 0) {result.totals.updatedInPipedrive++;}
+        result.totals.contactsCreatedInErp += c.createdInErp;
+        result.totals.contactsCreatedInPipedrive += c.createdInPipedrive;
+        if (synced.organization.status === 'needs_review') {
+          result.problems.push({ ...label, message: synced.organization.reason ?? 'needs review' });
+        } else if (synced.warnings.length > 0) {
+          result.problems.push({ ...label, message: synced.warnings.join('; ') });
+        }
+      } catch (syncError) {
+        result.problems.push({ ...label, message: errorMessage(syncError, 'Sync failed') });
+      }
+    }
+
+    const last = customers?.[customers.length - 1]?.id as string | undefined;
+    result.nextCursor = (customers?.length ?? 0) === SYNC_ALL_BATCH_SIZE && last ? last : null;
+    if (!result.nextCursor) {
       revalidatePath('/customers');
     }
     return { success: true, data: result };
   } catch (error) {
-    return failure('GDC customer sync', error, 'Sync failed');
+    return failure('GDC sync all customers', error, 'Sync failed');
+  }
+}
+
+// ============================================
+// PIPEDRIVE ACCOUNT (PD18)
+// ============================================
+
+/** The Pipedrive account Gesher's links belong to, and the last account change */
+export async function getPipedriveAccountStatusAction(): Promise<ActionResult<LinkedPipedriveAccount | null>> {
+  const auth = await authorize('settings.view_module');
+  if (!auth.ok) {return auth.result;}
+
+  try {
+    return { success: true, data: await getLinkedPipedriveAccount() };
+  } catch (error) {
+    return failure('Pipedrive account status', error, 'Could not load the Pipedrive account');
+  }
+}
+
+/** Hide the "Pipedrive account changed" notice */
+export async function acknowledgePipedriveAccountSwitchAction(): Promise<ActionResult<null>> {
+  const auth = await authorize(INTEGRATIONS_MANAGE);
+  if (!auth.ok) {return auth.result;}
+
+  try {
+    await acknowledgePipedriveAccountSwitch();
+    return { success: true, data: null };
+  } catch (error) {
+    return failure('Pipedrive account switch', error, 'Could not save');
+  }
+}
+
+// ============================================
+// CUSTOMER MAPPING (one-time, by hand)
+// ============================================
+
+/** Suggested ERP customer -> Pipedrive organization links. Read only. */
+export async function getCustomerMappingPreviewAction(): Promise<ActionResult<CustomerMappingPreview>> {
+  const auth = await authorize(INTEGRATIONS_MANAGE);
+  if (!auth.ok) {return auth.result;}
+
+  try {
+    return { success: true, data: await buildCustomerMappingPreview() };
+  } catch (error) {
+    return failure('GDC customer mapping preview', error, 'Could not load the mapping');
+  }
+}
+
+/** Apply one batch of mapping decisions (at most MAPPING_APPLY_BATCH_SIZE) */
+export async function applyCustomerMappingAction(decisions: MappingDecision[]): Promise<ActionResult<MappingApplyResult[]>> {
+  const auth = await authorize(INTEGRATIONS_MANAGE);
+  if (!auth.ok) {return auth.result;}
+
+  try {
+    const results = await applyCustomerMapping(decisions);
+    revalidatePath('/customers');
+    return { success: true, data: results };
+  } catch (error) {
+    return failure('GDC customer mapping apply', error, 'Could not apply the mapping');
   }
 }
 

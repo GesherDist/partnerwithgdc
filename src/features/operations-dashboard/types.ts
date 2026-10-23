@@ -301,6 +301,8 @@ export interface GDCInventoryItem {
   qtyDelivered?: number;
   outstandingQty?: number;
   invoiceAmount?: number;
+  isCommissionOnly?: boolean;  // Linked SO is commission-only (Galileo invoices the customer)
+  commissionAmount?: number;   // Commission Gesher earns, in dollars (0 when not commission-only)
   deliveryAddress: string;
   expectedDelivery: string | null;
   status: ShipmentStatus | string;  // Operations status (OPEN, CLOSED, HOLD, etc.) or PO status (draft, sent, confirmed, etc.)
@@ -320,6 +322,7 @@ export interface GDCInventoryData {
   orderSeries: string;        // e.g., "GDC 1"
   items: GDCInventoryItem[];
   uniqueSkus: SKUColumnInfo[];
+  error?: string;             // Set when the series failed to load (items is then empty)
 }
 
 // ============================================

@@ -27,6 +27,8 @@ export const REASON = {
   noContainers: 'Needs container data',
   noUnits: 'No tires on hand',
   noPurchases: 'No purchases in period',
+  sinceGoLive: 'Since go-live: no prior-year ERP data',
+  partialCost: 'Some tires have no ERP cost',
 } as const;
 
 type Cols4 = 'mtd' | 't90' | 'ytd' | 'py';
@@ -44,6 +46,8 @@ export interface ExecutiveDashboardModel {
   perTire: Record<'tiresSold' | 'revenue' | 'cogs' | 'grossProfit' | 'opex' | 'operatingProfit', Record<Cols4, Cell>>;
   opexRunRate: Record<'monthly' | 'annualized', Record<'current' | 't90' | 'py', Cell>>;
   backlog: Record<'tires' | 'revenue' | 'revenuePerTire' | 'grossProfit' | 'gpPerTire' | 'gpPct', Record<AvgCols, Cell>>;
+  /** Commission from Galileo, reported apart from tire revenue and gross profit */
+  commission: { billed: Record<Cols4, Cell>; unbilled: Cell; unbilledOrders: number };
   supply: Array<SupplyCycle & { containers: Cell }>;
   inventory: Record<'atCost' | 'tiresOnHand' | 'costPerTire' | 'uncommitted' | 'monthsOfSupply', Record<AvgCols, Cell>>;
 }
@@ -114,7 +118,13 @@ export function buildExecutiveModel(
   for (const c of effCols) {
     const ar = avgFor('accountsReceivable', c);
     const sales = erp.creditSales[c];
-    dso[c] = !q ? none(qNote) : ar === null ? none(REASON.noHistory) : sales === 0 ? none(REASON.noSales) : v(Math.round(((ar / sales) * p[c].days) * 10) / 10);
+    dso[c] = !q
+      ? none(qNote)
+      : ar === null
+        ? none(REASON.noHistory)
+        : sales === 0
+          ? none(c === 'py' ? REASON.sinceGoLive : REASON.noSales)
+          : v(Math.round(((ar / sales) * p[c].days) * 10) / 10);
     // DPO = average trade AP ÷ credit purchases (QuickBooks bills less vendor credits) × days (2.8)
     const ap = avgFor('accountsPayable', c);
     const purchases = q?.creditPurchases?.[c];
@@ -125,9 +135,24 @@ export function buildExecutiveModel(
         : purchases === 0
           ? none(REASON.noPurchases)
           : v(Math.round(((ap / purchases) * p[c].days) * 10) / 10);
-    // DIO needs COGS, so CCC (DIO + DSO − DPO) is not available either
-    dio[c] = none(REASON.noCost);
-    ccc[c] = none(REASON.noCost);
+    // DIO = average inventory at cost (QuickBooks) ÷ COGS (ERP cost of tires sold) × days (2.9)
+    const inv = avgFor('inventory', c);
+    const sold = erp.sales[c];
+    dio[c] = !q
+      ? none(qNote)
+      : sold.cogs === null
+        ? none(REASON.noCost)
+        : sold.cogs === 0
+          ? none(c === 'py' ? REASON.sinceGoLive : REASON.noSales)
+          : inv === null
+            ? none(REASON.noHistory)
+            : v(Math.round(((inv / sold.cogs) * p[c].days) * 10) / 10, sold.cogsComplete ? undefined : REASON.partialCost);
+    // CCC = DIO + DSO − DPO (2.10)
+    const parts = [dio[c], dso[c], dpo[c]];
+    const missing = parts.find((x) => x.value === null);
+    ccc[c] = missing
+      ? none(missing.note ?? REASON.noHistory)
+      : v(Math.round((dio[c].value! + dso[c].value! - dpo[c].value!) * 10) / 10);
   }
 
   // ---------- cash generation ----------
@@ -168,13 +193,30 @@ export function buildExecutiveModel(
   for (const c of cols4) {
     const s = erp.sales[c as PeriodKey];
     const opexValue = q ? q.opex[c as PeriodKey] : null;
-    const cogsCell = s.cogs === null ? none(REASON.noCost) : v(s.cogs);
+    // Client: PY "since go-live" — no prior-year sales in the ERP is not a $0 year
+    if (c === 'py' && s.units === 0 && s.revenue === 0) {
+      const since = none(REASON.sinceGoLive);
+      prof.revenue[c] = since;
+      prof.cogs[c] = { ...since, pct: null };
+      prof.grossProfit[c] = { ...since, pct: null };
+      prof.opex[c] = { ...(opexValue === null ? none(qNote) : v(opexValue)), pct: null };
+      prof.operatingProfit[c] = { ...since, pct: null };
+      tire.tiresSold[c] = since;
+      tire.revenue[c] = since;
+      tire.cogs[c] = since;
+      tire.grossProfit[c] = since;
+      tire.opex[c] = since;
+      tire.operatingProfit[c] = since;
+      continue;
+    }
+    const costNote = s.cogsComplete ? undefined : REASON.partialCost;
+    const cogsCell = s.cogs === null ? none(REASON.noCost) : v(s.cogs, costNote);
     const gp = s.cogs === null ? null : s.revenue - s.cogs;
     const op = gp === null || opexValue === null ? null : gp - opexValue;
     const pct = (x: number | null) => (x === null || s.revenue === 0 ? null : Math.round((x / s.revenue) * 1000) / 10);
     prof.revenue[c] = v(s.revenue);
     prof.cogs[c] = { ...cogsCell, pct: pct(s.cogs) };
-    prof.grossProfit[c] = { ...(gp === null ? none(REASON.noCost) : v(gp)), pct: pct(gp) };
+    prof.grossProfit[c] = { ...(gp === null ? none(REASON.noCost) : v(gp, costNote)), pct: pct(gp) };
     prof.opex[c] = { ...(opexValue === null ? none(qNote) : v(opexValue)), pct: pct(opexValue) };
     prof.operatingProfit[c] = { ...(op === null ? none(gp === null ? REASON.noCost : qNote) : v(op)), pct: pct(op) };
 
@@ -186,6 +228,21 @@ export function buildExecutiveModel(
     tire.opex[c] = perUnit(opexValue, qNote);
     tire.operatingProfit[c] = perUnit(op, gp === null ? REASON.noCost : qNote);
   }
+
+  // ---------- commission (separate from tire revenue and gross profit) ----------
+  const commissionBilled = {} as Record<Cols4, Cell>;
+  for (const c of cols4) {
+    const amount = erp.commission[c as PeriodKey];
+    const s = erp.sales[c as PeriodKey];
+    // Same "since go-live" rule as revenue: no ERP activity in the prior year is not a $0 year
+    commissionBilled[c] =
+      c === 'py' && amount === 0 && s.units === 0 && s.revenue === 0 ? none(REASON.sinceGoLive) : v(amount);
+  }
+  const commission: ExecutiveDashboardModel['commission'] = {
+    billed: commissionBilled,
+    unbilled: v(erp.commissionUnbilled.amount),
+    unbilledOrders: erp.commissionUnbilled.orders,
+  };
 
   // ---------- OPEX run rate ----------
   const monthlyT90 = q ? q.opex.t90 / 3 : null;
@@ -235,6 +292,7 @@ export function buildExecutiveModel(
   // ---------- backlog ----------
   const b = erp.backlog;
   const bGp = b.cogs === null ? null : b.revenue - b.cogs;
+  const bCostNote = b.cogsComplete ? undefined : REASON.partialCost;
   const histNone = { t90Avg: none(REASON.noHistory), ytdAvg: none(REASON.noHistory), py: none(REASON.noHistory) };
   const costNone = { t90Avg: none(REASON.noCost), ytdAvg: none(REASON.noCost), py: none(REASON.noCost) };
   const backlog: ExecutiveDashboardModel['backlog'] = {
@@ -244,10 +302,13 @@ export function buildExecutiveModel(
       current: b.tires ? v(Math.round((b.revenue / b.tires) * 100) / 100) : none(REASON.noSales),
       ...histRow(perTireOf((d) => d.backlogRevenue, (d) => d.backlogTires)),
     },
-    grossProfit: { current: bGp === null ? none(REASON.noCost) : v(bGp), ...(bGp === null ? costNone : histNone) },
-    gpPerTire: { current: bGp === null ? none(REASON.noCost) : v(div(bGp, b.tires)), ...(bGp === null ? costNone : histNone) },
+    grossProfit: { current: bGp === null ? none(REASON.noCost) : v(bGp, bCostNote), ...(bGp === null ? costNone : histNone) },
+    gpPerTire: {
+      current: bGp === null ? none(REASON.noCost) : v(div(bGp, b.tires) === null ? null : Math.round((bGp / b.tires) * 100) / 100, bCostNote),
+      ...(bGp === null ? costNone : histNone),
+    },
     gpPct: {
-      current: bGp === null ? none(REASON.noCost) : v(div(bGp, b.revenue) === null ? null : Math.round((bGp / b.revenue) * 1000) / 10),
+      current: bGp === null ? none(REASON.noCost) : v(div(bGp, b.revenue) === null ? null : Math.round((bGp / b.revenue) * 1000) / 10, bCostNote),
       ...(bGp === null ? costNone : histNone),
     },
   };
@@ -296,6 +357,7 @@ export function buildExecutiveModel(
     perTire: tire,
     opexRunRate,
     backlog,
+    commission,
     supply: erp.supply.map((s) => ({ ...s, containers: s.containerCount > 0 ? v(s.containerCount) : none(REASON.noContainers) })),
     inventory,
   };

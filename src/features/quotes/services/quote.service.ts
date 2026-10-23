@@ -25,6 +25,16 @@ import type {
 import { QUOTE_STATUS_TRANSITIONS as STATUS_TRANSITIONS } from '../types';
 import { auditService } from '@/shared/lib/audit';
 
+/**
+ * Update the "ERP Order Status" of the quote's Pipedrive deal, if it has one.
+ * Background; never fails the status change (gdc/order-status.service).
+ */
+function syncPipedriveOrderStatus(quoteId: string): void {
+  void import('@/features/pipedrive/gdc/order-status.service')
+    .then(({ syncOrderStatusInBackground }) => syncOrderStatusInBackground({ quoteId }))
+    .catch((error) => console.error('[Pipedrive] Order status sync could not start:', error));
+}
+
 // Helper to convert quote to audit data (exclude large/sensitive fields)
 function quoteToAuditData(quote: Quote | QuoteWithItems): Record<string, unknown> {
   return {
@@ -479,6 +489,8 @@ export const quoteService = {
 
       // Update quote status
       const quote = await quoteRepository.updateStatus(id, 'pending_approval', userId);
+      // Pipedrive deal: ERP Order Status (background, linked quotes only)
+      syncPipedriveOrderStatus(id);
 
       // Log audit event (fire and forget)
       auditService.log({
@@ -544,6 +556,8 @@ export const quoteService = {
 
       // Update quote status
       const quote = await quoteRepository.updateStatus(id, 'approved', userId);
+      // Pipedrive deal: ERP Order Status (background, linked quotes only)
+      syncPipedriveOrderStatus(id);
 
       // Log audit event (fire and forget)
       auditService.log({
@@ -609,6 +623,8 @@ export const quoteService = {
 
       // Update quote status
       const quote = await quoteRepository.updateStatus(id, 'rejected', userId);
+      // Pipedrive deal: ERP Order Status (background, linked quotes only)
+      syncPipedriveOrderStatus(id);
 
       // Log audit event (fire and forget)
       auditService.log({
@@ -774,13 +790,19 @@ export const quoteService = {
 
       // If credit hold, log to approval_events
       if (creditStatus === 'hold') {
-        await db.from('approval_events').insert({
-          type: 'credit_release',
+        const { error: approvalError } = await db.from('approval_events').insert({
+          event_type: 'credit_release',
           subject_type: 'sales_order',
           subject_id: salesOrderResult.data.id,
           status: 'pending',
-          note: `Credit check failed: ${creditCheck.message || 'Awaiting finance approval'}`,
+          requested_by: userId || null,
+          reason: `Credit check failed: ${creditCheck.message || 'Awaiting finance approval'}`,
+          metadata: { quoteId: id },
         });
+        if (approvalError) {
+          // The order is already created on hold; a missing audit row must not undo that
+          console.error('Failed to log credit hold approval event:', approvalError);
+        }
       }
 
       // If the quote came from a won Pipedrive deal, write the SO number back (never throws)
@@ -830,6 +852,8 @@ export const quoteService = {
       }
 
       const quote = await quoteRepository.updateStatus(id, newStatus, userId);
+      // Pipedrive deal: ERP Order Status (background, linked quotes only)
+      syncPipedriveOrderStatus(id);
 
       return {
         success: true,

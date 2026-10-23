@@ -34,6 +34,7 @@ import {
   IntegrationDetails,
 } from './IntegrationCard';
 import { GdcSetupPanel } from '@/features/pipedrive/components/GdcSetupPanel';
+import { PipedriveAccountNotice } from '@/features/pipedrive/components/PipedriveAccountNotice';
 
 // ============================================
 // TYPES
@@ -243,6 +244,7 @@ function PipedriveCardComponent() {
             </p>
           </div>
         )}
+        <PipedriveAccountNotice connected={false} />
         <div className="rounded-lg border bg-muted/40 p-4">
           <p className="text-sm text-muted-foreground">
             Click the button below to connect your Pipedrive account using secure OAuth authentication.
@@ -291,6 +293,7 @@ function PipedriveCardComponent() {
           </>
         }
       >
+        <PipedriveAccountNotice connected />
         <IntegrationDetails
           items={[
             { label: 'Account', value: status.accountName || status.companyDomain || 'Unknown' },

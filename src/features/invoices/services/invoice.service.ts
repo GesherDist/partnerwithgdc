@@ -27,6 +27,227 @@ import type {
 import { INVOICE_STATUS_TRANSITIONS } from '../types';
 import { creditCheckService } from '@/features/customers/services/credit-check.service';
 import { salesOrderService } from '@/features/sales-orders/services/sales-order.service';
+import { db } from '@/shared/lib/supabase/database';
+
+/** Galileo invoices the customer on commission-only orders, so Gesher must not. */
+export const COMMISSION_ONLY_INVOICE_ERROR =
+  'This is a commission-only order: Galileo invoices the customer. Gesher bills the commission to Galileo instead.';
+
+// ============================================
+// COMMISSION BILLING (commission-only sales orders -> commission invoice to Galileo)
+// ============================================
+
+/** Order statuses whose commission can be billed (not draft, not cancelled). */
+const BILLABLE_COMMISSION_ORDER_STATUSES = ['pending', 'confirmed', 'processing', 'shipped', 'delivered'];
+
+export interface BillableCommissionOrder {
+  id: string;
+  orderNumber: string;
+  customerName: string;
+  customerPoNumber: string | null;
+  status: string;
+  tireCount: number;
+  commissionRate: number; // cents per tire
+  commissionAmount: number; // cents
+  customerId: string | null;
+  customerCode: string | null;
+  shipToAddress: string | null; // Sales order delivery address, one line
+}
+
+interface CommissionOrderRow {
+  id: string;
+  order_number: string;
+  customer_po_number: string | null;
+  status: string;
+  is_commission_only: boolean | null;
+  commission_rate: number | null;
+  commission_amount: number | null;
+  commission_invoice_id: string | null;
+  customer_id: string | null;
+  shipping_address_street: string | null;
+  shipping_address_city: string | null;
+  shipping_address_state: string | null;
+  shipping_address_postal_code: string | null;
+  shipping_address_country: string | null;
+  customers: { name: string; customer_code: string | null } | { name: string; customer_code: string | null }[] | null;
+}
+
+const COMMISSION_ORDER_SELECT =
+  'id, order_number, customer_po_number, status, is_commission_only, commission_rate, commission_amount, commission_invoice_id, ' +
+  'customer_id, shipping_address_street, shipping_address_city, shipping_address_state, shipping_address_postal_code, shipping_address_country, ' +
+  'customers (name, customer_code)';
+
+function toBillableCommissionOrder(row: CommissionOrderRow): BillableCommissionOrder {
+  const customer = Array.isArray(row.customers) ? row.customers[0] : row.customers;
+  const rate = row.commission_rate || 0;
+  const amount = row.commission_amount || 0;
+  const cityLine = [row.shipping_address_city, row.shipping_address_state, row.shipping_address_postal_code]
+    .filter(Boolean)
+    .join(', ');
+  const shipTo = [row.shipping_address_street, cityLine, row.shipping_address_country].filter(Boolean).join(', ');
+  return {
+    id: row.id,
+    orderNumber: row.order_number,
+    customerName: customer?.name || 'Unknown',
+    customerId: row.customer_id,
+    customerCode: customer?.customer_code || null,
+    shipToAddress: shipTo || null,
+    customerPoNumber: row.customer_po_number,
+    status: row.status,
+    tireCount: rate > 0 ? Math.round(amount / rate) : 0,
+    commissionRate: rate,
+    commissionAmount: amount,
+  };
+}
+
+/** Commission-only orders that have a commission amount and are not billed yet. */
+export async function listBillableCommissionOrders(): Promise<BillableCommissionOrder[]> {
+  const { data, error } = await db
+    .from('sales_orders')
+    .select(COMMISSION_ORDER_SELECT)
+    .eq('is_commission_only', true)
+    .is('commission_invoice_id', null)
+    .is('deleted_at', null)
+    .in('status', BILLABLE_COMMISSION_ORDER_STATUSES)
+    .gt('commission_amount', 0)
+    .order('order_date', { ascending: true });
+
+  if (error) {
+    throw error;
+  }
+
+  return ((data || []) as unknown as CommissionOrderRow[]).map(toBillableCommissionOrder);
+}
+
+/** Commission-only orders billed on a given commission invoice. */
+export async function listCommissionOrdersForInvoice(invoiceId: string): Promise<BillableCommissionOrder[]> {
+  const { data, error } = await db
+    .from('sales_orders')
+    .select(COMMISSION_ORDER_SELECT)
+    .eq('commission_invoice_id', invoiceId)
+    .is('deleted_at', null)
+    .order('order_number', { ascending: true });
+
+  if (error) {
+    throw error;
+  }
+
+  return ((data || []) as unknown as CommissionOrderRow[]).map(toBillableCommissionOrder);
+}
+
+/** The "Sales Commission" service product (QuickBooks SKU GDC-COMMISSION). */
+async function findCommissionProduct(): Promise<{ id: string; sku: string } | null> {
+  const { data: bySku, error: skuError } = await db
+    .from('products')
+    .select('id, sku')
+    .eq('sku', 'GDC-COMMISSION')
+    .is('deleted_at', null)
+    .limit(1);
+
+  if (skuError) {
+    throw skuError;
+  }
+  if (bySku && bySku[0]) {
+    return bySku[0];
+  }
+
+  const { data: byName, error: nameError } = await db
+    .from('products')
+    .select('id, sku')
+    .eq('item_type', 'service')
+    .ilike('name', '%commission%')
+    .is('deleted_at', null)
+    .limit(1);
+
+  if (nameError) {
+    throw nameError;
+  }
+  return byName?.[0] ?? null;
+}
+
+/**
+ * Build one invoice line per commission order, from the amounts stored on the orders.
+ * Returns an error message when any order cannot be billed.
+ */
+async function buildCommissionLines(
+  orderIds: string[]
+): Promise<{ lines: CreateInvoiceItemDTO[] } | { error: string }> {
+  const { data, error } = await db
+    .from('sales_orders')
+    .select(COMMISSION_ORDER_SELECT)
+    .in('id', orderIds)
+    .is('deleted_at', null);
+
+  if (error) {
+    throw error;
+  }
+
+  const rows = (data || []) as unknown as CommissionOrderRow[];
+  const byId = new Map(rows.map((row) => [row.id, row]));
+
+  for (const id of orderIds) {
+    const row = byId.get(id);
+    if (!row) {
+      return { error: 'One of the selected sales orders was not found' };
+    }
+    if (row.is_commission_only !== true) {
+      return { error: `${row.order_number} is not a commission-only order` };
+    }
+    if (!BILLABLE_COMMISSION_ORDER_STATUSES.includes(row.status)) {
+      return { error: `${row.order_number} cannot be billed in '${row.status}' status` };
+    }
+    if (row.commission_invoice_id) {
+      return { error: `Commission for ${row.order_number} is already billed` };
+    }
+    if (!row.commission_amount || row.commission_amount <= 0) {
+      return { error: `${row.order_number} has no commission amount` };
+    }
+  }
+
+  const product = await findCommissionProduct();
+  if (!product) {
+    return { error: 'No "Sales Commission" service product found (SKU GDC-COMMISSION). Please create it first.' };
+  }
+
+  const lines: CreateInvoiceItemDTO[] = orderIds.map((id) => {
+    const order = toBillableCommissionOrder(byId.get(id) as CommissionOrderRow);
+    const rate = (order.commissionRate / 100).toFixed(2);
+    const description = [
+      `Sales Commission - ${order.orderNumber}`,
+      order.customerPoNumber ? `PO ${order.customerPoNumber}` : null,
+      order.customerName,
+      `${order.tireCount} tires x $${rate}`,
+    ]
+      .filter(Boolean)
+      .join(' / ')
+      .slice(0, 500);
+
+    return {
+      productId: product.id,
+      sku: product.sku,
+      description,
+      quantity: 1,
+      unitCode: 'EA',
+      unitPrice: order.commissionAmount,
+      discountPercent: 0,
+      taxRate: 0,
+    };
+  });
+
+  return { lines };
+}
+
+/** Make the orders billed on a cancelled/deleted commission invoice billable again. */
+async function releaseCommissionOrders(invoiceId: string): Promise<void> {
+  const { error } = await db
+    .from('sales_orders')
+    .update({ commission_invoice_id: null })
+    .eq('commission_invoice_id', invoiceId);
+
+  if (error) {
+    console.error('Failed to release commission orders for invoice', invoiceId, error);
+  }
+}
 
 // Helper to convert invoice to audit data (exclude large/sensitive fields)
 function invoiceToAuditData(invoice: Invoice | InvoiceWithItems): Record<string, unknown> {
@@ -112,6 +333,10 @@ export const invoiceService = {
       }
 
       const salesOrder = soResult.data;
+
+      if (salesOrder.isCommissionOnly) {
+        return { success: false, error: COMMISSION_ONLY_INVOICE_ERROR };
+      }
 
       // Check if invoice already exists for this SO
       const existingResult = await invoiceRepository.findMany({
@@ -254,6 +479,20 @@ export const invoiceService = {
     userId?: string
   ): Promise<ServiceResult<InvoiceWithItems>> {
     try {
+      // Commission invoice billing selected commission-only orders:
+      // their lines are built here from the stored amounts (never trusted from the client)
+      const commissionOrderIds = Array.from(new Set(input.commissionSalesOrderIds || []));
+      if (commissionOrderIds.length > 0) {
+        if (input.invoiceType !== 'commission') {
+          return { success: false, error: 'Commission orders can only be billed on a commission invoice' };
+        }
+        const built = await buildCommissionLines(commissionOrderIds);
+        if ('error' in built) {
+          return { success: false, error: built.error };
+        }
+        input = { ...input, items: [...built.lines, ...(input.items || [])], commissionSalesOrderIds: commissionOrderIds };
+      }
+
       const validation = createInvoiceSchema.safeParse(input);
       if (!validation.success) {
         return {
@@ -263,7 +502,54 @@ export const invoiceService = {
         };
       }
 
+      // A customer invoice linked to a sales order: same rules as createFromSalesOrder
+      const linkedSalesOrderId = validation.data.salesOrderId;
+      if (linkedSalesOrderId && validation.data.invoiceType !== 'commission') {
+        const { data: linkedOrder, error: linkedOrderError } = await db
+          .from('sales_orders')
+          .select('id, is_commission_only')
+          .eq('id', linkedSalesOrderId)
+          .is('deleted_at', null)
+          .maybeSingle();
+
+        if (linkedOrderError) {
+          throw linkedOrderError;
+        }
+        if (!linkedOrder) {
+          return { success: false, error: 'Sales order not found' };
+        }
+        if (linkedOrder.is_commission_only === true) {
+          return { success: false, error: COMMISSION_ONLY_INVOICE_ERROR };
+        }
+
+        const existing = await invoiceRepository.findMany({ salesOrderId: linkedSalesOrderId, limit: 1 });
+        if (existing.data.length > 0) {
+          return { success: false, error: 'An invoice already exists for this sales order' };
+        }
+      }
+
       const invoice = await invoiceRepository.create(validation.data, userId);
+
+      // Mark the commission orders as billed on this invoice. The NULL check makes a
+      // concurrent invoice for the same order fail instead of billing it twice.
+      if (commissionOrderIds.length > 0) {
+        const { data: linked, error: linkError } = await db
+          .from('sales_orders')
+          .update({ commission_invoice_id: invoice.id, updated_by: userId || null })
+          .in('id', commissionOrderIds)
+          .is('commission_invoice_id', null)
+          .select('id');
+
+        if (linkError || (linked || []).length !== commissionOrderIds.length) {
+          console.error('Failed to link commission orders to invoice', invoice.id, linkError);
+          await releaseCommissionOrders(invoice.id);
+          await invoiceRepository.softDelete(invoice.id, userId);
+          return {
+            success: false,
+            error: 'Some of the selected orders were billed by another invoice at the same time. Please try again.',
+          };
+        }
+      }
 
       // Log audit event (fire and forget)
       auditService.logCreate(
@@ -328,6 +614,10 @@ export const invoiceService = {
 
       const invoice = await invoiceRepository.update(id, validation.data, userId);
 
+      if (validation.data.status === 'cancelled') {
+        await releaseCommissionOrders(id);
+      }
+
       // Log audit event (fire and forget)
       auditService.logUpdate(
         'invoices',
@@ -375,6 +665,7 @@ export const invoiceService = {
       }
 
       const invoice = await invoiceRepository.softDelete(id, userId);
+      await releaseCommissionOrders(id);
 
       // Log audit event (fire and forget)
       auditService.logDelete(
@@ -607,6 +898,10 @@ export const invoiceService = {
       }
 
       const invoice = await invoiceRepository.updateStatus(id, newStatus, userId);
+
+      if (newStatus === 'cancelled') {
+        await releaseCommissionOrders(id);
+      }
 
       // Log audit event for status change (fire and forget)
       auditService.log({

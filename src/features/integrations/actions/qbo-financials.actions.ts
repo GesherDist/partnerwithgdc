@@ -3,7 +3,7 @@
 /**
  * QuickBooks Financials — server actions for the management dashboard
  *
- * Read: the latest stored snapshot (dashboard.view_module).
+ * Read: the latest stored snapshot (dashboard.view_financials).
  * Sync now: refresh accounts + read the QuickBooks reports + store today's
  * snapshot (settings.edit or integrations.manage). Without migration 162 the
  * fresh figures are still returned, just not stored.
@@ -33,8 +33,8 @@ export async function getQuickBooksFinancials(): Promise<Result<QuickBooksFinanc
   if (!user) {
     return { success: false, error: 'Authentication required' };
   }
-  if (!hasPermission(user, 'dashboard.view_module')) {
-    return { success: false, error: 'Permission denied: dashboard.view_module' };
+  if (!hasPermission(user, 'dashboard.view_financials')) {
+    return { success: false, error: 'Permission denied: dashboard.view_financials' };
   }
 
   const connection = await getConnectionByProvider('quickbooks');
@@ -66,8 +66,8 @@ export async function ensureFreshQuickBooksFinancials(): Promise<Result<{ financ
   if (!user) {
     return { success: false, error: 'Authentication required' };
   }
-  if (!hasPermission(user, 'dashboard.view_module')) {
-    return { success: false, error: 'Permission denied: dashboard.view_module' };
+  if (!hasPermission(user, 'dashboard.view_financials')) {
+    return { success: false, error: 'Permission denied: dashboard.view_financials' };
   }
 
   const connection = await getConnectionByProvider('quickbooks');

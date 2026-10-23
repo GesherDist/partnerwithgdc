@@ -37,14 +37,16 @@ import {
   AlertDialogTitle,
 } from '@/shared/components/ui/alert-dialog';
 
+// Import components/hooks directly: the '@/features/quotes' barrel also exports
+// quoteService (server-only code), which must not reach this client component.
 import {
   QuotesTable,
   ViewQuoteDrawer,
   CreateQuoteDrawer,
   EditQuoteDrawer,
-  useQuotes,
   UploadPODialog,
-} from '@/features/quotes';
+} from '@/features/quotes/components';
+import { useQuotes } from '@/features/quotes/hooks';
 import { ApproveQuoteDialog } from '@/features/quotes/components/ApproveQuoteDialog';
 import {
   deleteQuote,

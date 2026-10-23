@@ -53,6 +53,8 @@ import { getDateRangeFromPreset, DATE_RANGE_LABELS } from '../types';
 interface DashboardContentProps {
   canViewAnalytics: boolean;
   canViewInventory: boolean;
+  /** Financial Metrics / Profitability / Supply Chain tabs (dashboard.view_financials) */
+  canViewFinancials: boolean;
   initialStats: DashboardStat[];
   initialUnitsBySKU: UnitsBySKUChartData;
   initialChannelData: ChannelPerformanceDataPoint[];
@@ -68,6 +70,7 @@ interface DashboardContentProps {
 export function DashboardContent({
   canViewAnalytics,
   canViewInventory,
+  canViewFinancials,
   initialStats,
   initialUnitsBySKU,
   initialChannelData,
@@ -211,11 +214,15 @@ export function DashboardContent({
 
       {/* Tab Navigation */}
       <Tabs defaultValue="overview" className="w-full">
-        <TabsList className="grid w-full grid-cols-4 mb-6">
+        <TabsList className={`grid w-full mb-6 ${canViewFinancials ? 'grid-cols-4' : 'grid-cols-1'}`}>
           <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="financial">Financial Metrics</TabsTrigger>
-          <TabsTrigger value="profitability">Profitability</TabsTrigger>
-          <TabsTrigger value="supply">Supply Chain</TabsTrigger>
+          {canViewFinancials && (
+            <>
+              <TabsTrigger value="financial">Financial Metrics</TabsTrigger>
+              <TabsTrigger value="profitability">Profitability</TabsTrigger>
+              <TabsTrigger value="supply">Supply Chain</TabsTrigger>
+            </>
+          )}
         </TabsList>
 
         {/* Tab 1: Overview - Existing Content */}
@@ -242,24 +249,28 @@ export function DashboardContent({
           )}
         </TabsContent>
 
-        {/* Tab 2: Financial Metrics */}
-        <TabsContent value="financial" className="space-y-6 mt-0">
-          <div className="grid gap-6">
-            {/* Live figures from QuickBooks (Oct 12 call) */}
-            <QuickBooksFinancials />
-            <FinancialMetricsTables />
-          </div>
-        </TabsContent>
+        {canViewFinancials && (
+          <>
+            {/* Tab 2: Financial Metrics */}
+            <TabsContent value="financial" className="space-y-6 mt-0">
+              <div className="grid gap-6">
+                {/* Live figures from QuickBooks (Oct 12 call) */}
+                <QuickBooksFinancials />
+                <FinancialMetricsTables />
+              </div>
+            </TabsContent>
 
-        {/* Tab 3: Profitability */}
-        <TabsContent value="profitability" className="space-y-6 mt-0">
-          <ProfitabilityTables />
-        </TabsContent>
+            {/* Tab 3: Profitability */}
+            <TabsContent value="profitability" className="space-y-6 mt-0">
+              <ProfitabilityTables />
+            </TabsContent>
 
-        {/* Tab 4: Supply Chain */}
-        <TabsContent value="supply" className="space-y-6 mt-0">
-          <SupplyChainTables />
-        </TabsContent>
+            {/* Tab 4: Supply Chain */}
+            <TabsContent value="supply" className="space-y-6 mt-0">
+              <SupplyChainTables />
+            </TabsContent>
+          </>
+        )}
       </Tabs>
     </div>
   );

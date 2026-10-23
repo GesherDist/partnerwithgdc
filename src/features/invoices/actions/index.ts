@@ -7,7 +7,12 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { invoiceService } from '../services/invoice.service';
+import {
+  invoiceService,
+  listBillableCommissionOrders,
+  listCommissionOrdersForInvoice,
+  type BillableCommissionOrder,
+} from '../services/invoice.service';
 import { createClient } from '@/shared/lib/supabase/server';
 import { getCurrentUser, hasAnyPermission } from '@/shared/lib/auth';
 import type {
@@ -134,9 +139,57 @@ export async function createInvoice(data: CreateInvoiceInput) {
 
   if (result.success) {
     revalidatePath('/invoices');
+    if (data.commissionSalesOrderIds?.length) {
+      revalidatePath('/sales-orders');
+      revalidatePath('/operations');
+    }
   }
 
   return result;
+}
+
+/**
+ * Commission-only sales orders whose commission is not billed to Galileo yet
+ * (used by the Commission Invoice drawer).
+ */
+export async function getBillableCommissionOrders(): Promise<{
+  success: boolean;
+  data?: BillableCommissionOrder[];
+  error?: string;
+}> {
+  const auth = await authorizeAny(['invoices.create', 'orders.edit']);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
+  try {
+    return { success: true, data: await listBillableCommissionOrders() };
+  } catch (error) {
+    console.error('getBillableCommissionOrders error:', error);
+    return { success: false, error: 'Failed to load commission orders' };
+  }
+}
+
+/**
+ * Commission-only sales orders billed on this commission invoice
+ * (shown in the invoice drawer: which customer orders the commission is for).
+ */
+export async function getInvoiceCommissionOrders(invoiceId: string): Promise<{
+  success: boolean;
+  data?: BillableCommissionOrder[];
+  error?: string;
+}> {
+  const auth = await authorizeAny(INVOICE_READ);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
+  try {
+    return { success: true, data: await listCommissionOrdersForInvoice(invoiceId) };
+  } catch (error) {
+    console.error('getInvoiceCommissionOrders error:', error);
+    return { success: false, error: 'Failed to load commission orders' };
+  }
 }
 
 // ============================================
@@ -419,6 +472,7 @@ export async function getCustomerSalesOrders(customerId: string): Promise<{
     status: string;
     grandTotal: number;
     hasInvoice: boolean;
+    isCommissionOnly: boolean;
   }>;
   error?: string;
 }> {
@@ -445,6 +499,7 @@ export async function getCustomerSalesOrders(customerId: string): Promise<{
         order_date,
         status,
         grand_total,
+        is_commission_only,
         invoices:invoices(id)
       `)
       .eq('customer_id', customerId)
@@ -467,6 +522,7 @@ export async function getCustomerSalesOrders(customerId: string): Promise<{
         status: so.status,
         grandTotal: so.grand_total || 0,
         hasInvoice: Array.isArray(so.invoices) && so.invoices.length > 0,
+        isCommissionOnly: so.is_commission_only === true,
       })),
     };
   } catch (error) {

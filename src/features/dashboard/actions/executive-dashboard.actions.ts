@@ -22,8 +22,9 @@ export async function getExecutiveDashboard(): Promise<
   if (!user) {
     return { success: false, error: 'Authentication required' };
   }
-  if (!hasPermission(user, 'dashboard.view_module')) {
-    return { success: false, error: 'Permission denied: dashboard.view_module' };
+  // Cash, revenue, margin and OPEX: only roles allowed to see financial figures
+  if (!hasPermission(user, 'dashboard.view_financials')) {
+    return { success: false, error: 'Permission denied: dashboard.view_financials' };
   }
 
   try {

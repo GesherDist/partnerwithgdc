@@ -2,7 +2,7 @@
  * Pipedrive Webhook Endpoint
  *
  * Handles incoming webhook events from Pipedrive CRM.
- * Supports person, deal, and note events.
+ * Supports person, deal, note, activity and organization events.
  *
  * Endpoint: POST /api/webhooks/pipedrive
  *
@@ -29,6 +29,7 @@ import {
   releaseWebhookEvent,
 } from '@/features/pipedrive/lib/webhook-dedup';
 import { toPipedriveId } from '@/features/pipedrive/lib/sync-log';
+import { isFromLinkedPipedriveAccount } from '@/features/pipedrive/gdc/account-guard.service';
 import { db } from '@/shared/lib/supabase/database';
 
 // ============================================
@@ -103,6 +104,16 @@ export async function POST(request: NextRequest) {
 
     // Webhooks v2 (Pipedrive's default since Mar 17, 2025) are normalized to the v1 shape
     const payload = normalizeWebhookPayload(parseResult.data);
+
+    // Events from another Pipedrive account (e.g. a sandbox whose webhook is
+    // still set up) must not touch Gesher data
+    if (!(await isFromLinkedPipedriveAccount(payload.meta.company_id))) {
+      return NextResponse.json({
+        success: true,
+        action: 'skipped',
+        message: `Event from another Pipedrive account (company ${payload.meta.company_id})`,
+      });
+    }
 
     // Check if event is supported
     if (!isSupportedEvent(payload.event)) {
@@ -231,6 +242,11 @@ export async function GET() {
       'deleted.deal',
       'added.note',
       'updated.note',
+      'added.activity',
+      'updated.activity',
+      'added.organization',
+      'updated.organization',
+      'deleted.organization',
     ],
     timestamp: new Date().toISOString(),
   });

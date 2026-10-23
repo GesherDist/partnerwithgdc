@@ -107,7 +107,28 @@ export async function GET(request: Request) {
 
   try {
     // connected_by references users(id) (application user), not auth.users(id)
-    await pipedriveProvider.handleOAuthCallback({ code }, appUser.id);
+    const connection = await pipedriveProvider.handleOAuthCallback({ code }, appUser.id);
+
+    // A different Pipedrive account than the one Gesher's stored IDs belong to:
+    // clear them first (gdc/account-guard.service). If that fails, the new
+    // connection is undone so nothing runs against the wrong records.
+    const meta = (connection.metadata ?? {}) as { companyId?: string | number; companyName?: string };
+    if (meta.companyId !== undefined && meta.companyId !== null) {
+      try {
+        const { onPipedriveAccountConnected } = await import('@/features/pipedrive/gdc/account-guard.service');
+        const result = await onPipedriveAccountConnected({ companyId: String(meta.companyId), companyName: meta.companyName ?? null });
+        if (result.switched) {
+          console.warn(
+            `[Pipedrive] Account changed from ${result.previous?.companyName ?? result.previous?.companyId} to ${meta.companyName ?? meta.companyId}; stored links cleared:`,
+            result.cleared
+          );
+        }
+      } catch (guardError) {
+        console.error('[Pipedrive] Account check failed; undoing the connection:', guardError);
+        await pipedriveProvider.disconnect(connection.id).catch(() => undefined);
+        return closePopupWithError('Could not prepare Gesher for this Pipedrive account. Nothing was changed; please try again.');
+      }
+    }
 
     // Success - return HTML that closes the popup (like QuickBooks)
     return new Response(

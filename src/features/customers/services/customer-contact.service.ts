@@ -20,6 +20,28 @@ import type {
   UpdateCustomerContactDTO,
 } from '../types';
 
+/**
+ * Push a contact to its Pipedrive person (created if missing, under the
+ * customer's organization). Never throws: Pipedrive problems must not block
+ * saving the contact.
+ */
+async function pushContactToPipedrive(contactId: string): Promise<void> {
+  try {
+    const { syncContactToPipedrive } = await import('@/features/pipedrive/gdc/customer-sync.service');
+    const result = await syncContactToPipedrive(contactId);
+    if (result?.status === 'needs_review') {
+      console.warn(`[Pipedrive] Contact ${contactId} not synced: ${result.reason}`);
+    }
+  } catch (error) {
+    console.error(`[Pipedrive] Background contact sync failed for ${contactId}:`, error);
+  }
+}
+
+/** skipPipedriveSync: the change came from Pipedrive, so do not push it back */
+interface SyncOptions {
+  skipPipedriveSync?: boolean;
+}
+
 // ============================================
 // TYPES
 // ============================================
@@ -114,7 +136,8 @@ export const customerContactService = {
    */
   async create(
     input: CreateCustomerContactInput,
-    userId?: string
+    userId?: string,
+    options: SyncOptions = {}
   ): Promise<ServiceResult<CustomerContact>> {
     try {
       // Validate input
@@ -149,6 +172,11 @@ export const customerContactService = {
 
       const contact = await customerContactRepository.create(dto, userId);
 
+      // Sync to Pipedrive (fire and forget), unless the contact came from Pipedrive
+      if (!options.skipPipedriveSync) {
+        void pushContactToPipedrive(contact.id);
+      }
+
       return {
         success: true,
         data: contact,
@@ -168,7 +196,8 @@ export const customerContactService = {
   async update(
     id: string,
     input: UpdateCustomerContactInput,
-    userId?: string
+    userId?: string,
+    options: SyncOptions = {}
   ): Promise<ServiceResult<CustomerContact>> {
     try {
       // Check if contact exists
@@ -200,6 +229,13 @@ export const customerContactService = {
       if (validation.data.mobile !== undefined) {dto.mobile = validation.data.mobile;}
 
       const contact = await customerContactRepository.update(id, dto, userId);
+
+      // Sync to Pipedrive (fire and forget) when something Pipedrive holds
+      // changed, unless the change came from Pipedrive
+      const pipedriveFields = ['firstName', 'lastName', 'contactType', 'email', 'phone', 'mobile'] as const;
+      if (!options.skipPipedriveSync && pipedriveFields.some((field) => existing[field] !== contact[field])) {
+        void pushContactToPipedrive(contact.id);
+      }
 
       return {
         success: true,

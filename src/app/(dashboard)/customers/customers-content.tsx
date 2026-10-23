@@ -31,6 +31,7 @@ import {
   CustomersTable,
   CreateCustomerDrawer,
   EditCustomerDrawer,
+  SyncAllCustomersButton,
   useCustomers,
 } from '@/features/customers';
 import type { CustomerTableRow, CustomerStatus } from '@/features/customers/types';
@@ -165,9 +166,9 @@ export function CustomersPageContent() {
             >
               <RefreshCw className={`h-4 w-4 ${isCustomersLoading ? 'animate-spin' : ''}`} />
             </Button>
-            {/* "Sync from Pipedrive" removed: it imported Pipedrive leads into
-                Gesher, the opposite of the GDC flow (customers go ERP → Pipedrive
-                via "Sync to Pipedrive" on a customer and the CSV import). */}
+            {/* Two-way sync of every active customer and its contacts (the old
+                "Sync from Pipedrive" imported Pipedrive leads and was removed) */}
+            {canEdit && <SyncAllCustomersButton onFinished={refetchCustomers} />}
             {canCreate && (
               <Button onClick={handleCreateClick}>
                 <Plus className="mr-2 h-4 w-4" />

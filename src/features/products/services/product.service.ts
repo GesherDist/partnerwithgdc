@@ -16,6 +16,23 @@ const getQboProductSyncService = async () => {
   return qboProductSyncService;
 };
 
+/**
+ * Bring the product's Pipedrive catalog entry up to date (see
+ * gdc/product-sync.service). Never throws: Pipedrive problems must not block
+ * saving the product.
+ */
+async function pushProductToPipedrive(product: Product, previousSku?: string | null): Promise<void> {
+  try {
+    const { syncProductToPipedrive } = await import('@/features/pipedrive/gdc/product-sync.service');
+    const result = await syncProductToPipedrive(product, previousSku);
+    if (result.status === 'conflict') {
+      console.warn(`[Pipedrive] Product ${product.sku} not synced: ${result.message}`);
+    }
+  } catch (error) {
+    console.error(`[Pipedrive] Background product sync failed for ${product.sku}:`, error);
+  }
+}
+
 // Helper to convert product to audit data (exclude large/sensitive fields)
 function productToAuditData(product: Product): Record<string, unknown> {
   return {
@@ -263,6 +280,9 @@ export const productService = {
       //   console.error('Failed to trigger QBO product sync:', err);
       // });
 
+      // Sync to the Pipedrive product catalog (fire and forget)
+      void pushProductToPipedrive(product);
+
       return {
         success: true,
         data: product,
@@ -356,6 +376,17 @@ export const productService = {
       //   console.error('Failed to trigger QBO product sync:', err);
       // });
 
+      // Sync to the Pipedrive product catalog (fire and forget) when a field
+      // it uses changed; a SKU change is found there by the old SKU
+      const pipedriveChange =
+        existing.sku !== product.sku ||
+        existing.name !== product.name ||
+        existing.basePrice !== product.basePrice ||
+        existing.status !== product.status;
+      if (pipedriveChange) {
+        void pushProductToPipedrive(product, existing.sku !== product.sku ? existing.sku : null);
+      }
+
       return {
         success: true,
         data: product,
@@ -406,6 +437,10 @@ export const productService = {
       ).catch((err) => {
         console.error('Failed to log product delete audit:', err);
       });
+
+      // Pipedrive: no longer linkable to deals (fire and forget). The deleted
+      // row is synced with deletedAt set even if softDelete did not return it.
+      void pushProductToPipedrive({ ...product, deletedAt: product.deletedAt ?? new Date() });
 
       return {
         success: true,
@@ -464,6 +499,9 @@ export const productService = {
       ).catch((err) => {
         console.error('Failed to log product restore audit:', err);
       });
+
+      // Pipedrive: linkable to deals again (fire and forget)
+      void pushProductToPipedrive(product);
 
       return {
         success: true,

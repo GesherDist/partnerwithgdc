@@ -32,7 +32,8 @@ import { getCustomer } from '../actions';
 import { formatCreditLimit } from '../lib/schemas';
 import { CustomerContactsList } from './CustomerContactsList';
 import { pushCustomerLTVToPipedrive } from '@/features/pipedrive/actions';
-import { syncCustomerToPipedriveAction, publishPurchaseHistoryAction } from '@/features/pipedrive/gdc/actions';
+import { syncCustomerWithPipedriveAction, publishPurchaseHistoryAction } from '@/features/pipedrive/gdc/actions';
+import { describeTwoWaySync } from '@/features/pipedrive/gdc/two-way-sync.format';
 import type { Customer } from '../types';
 import { toast } from 'sonner';
 import {
@@ -152,21 +153,16 @@ function CustomerDetailsTab({ customer }: { customer: Customer }) {
 
   const handleSyncOrganization = () => {
     startSyncOrg(async () => {
-      const result = await syncCustomerToPipedriveAction(customer.id);
+      const result = await syncCustomerWithPipedriveAction(customer.id);
       if (result.success && result.data) {
-        const { organization, people, warnings } = result.data;
-        const review = [organization, ...people.map((p) => p.result)].filter((r) => r.status === 'needs_review');
-        if (review.length > 0) {
-          toast.warning('Pipedrive needs review', {
-            description: review.map((r) => r.reason).filter(Boolean).join('; '),
-          });
+        const message = describeTwoWaySync(result.data);
+        if (message.needsReview) {
+          toast.warning(message.title, { description: message.description });
         } else {
-          toast.success(`Organization ${organization.status}; ${people.length} contact(s) synced`, {
-            description: warnings.join('; ') || undefined,
-          });
+          toast.success(message.title, { description: message.description });
         }
       } else {
-        toast.error('Failed to sync to Pipedrive', { description: result.error || 'Unknown error' });
+        toast.error('Failed to sync with Pipedrive', { description: result.error || 'Unknown error' });
       }
     });
   };
@@ -381,7 +377,7 @@ function CustomerDetailsTab({ customer }: { customer: Customer }) {
                 <div className="flex-1">
                   <p className="text-sm font-medium text-muted-foreground">Not linked to Pipedrive</p>
                   <p className="text-xs text-muted-foreground">
-                    Sync to Pipedrive to create or link its organization
+                    Sync with Pipedrive to create or link its organization
                   </p>
                 </div>
               </>
@@ -391,7 +387,7 @@ function CustomerDetailsTab({ customer }: { customer: Customer }) {
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" size="sm" onClick={handleSyncOrganization} disabled={isSyncingOrg}>
               {isSyncingOrg ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Link2 className="h-4 w-4 mr-2" />}
-              Sync to Pipedrive
+              Sync with Pipedrive
             </Button>
             {customer.pipedriveOrgId && (
               <Button variant="outline" size="sm" onClick={handlePublishHistory} disabled={isPublishingHistory}>

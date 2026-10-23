@@ -203,6 +203,15 @@ export async function importHistoricalData(data: {
       }
     }
 
+    // Pipedrive purchase history of the imported customers, once per customer
+    // (background, never fails the import)
+    const importedCustomerIds = [...importedSOs.values()].map((so) => so.customerId);
+    if (importedCustomerIds.length > 0) {
+      void import('@/features/pipedrive/gdc/purchase-history.service')
+        .then(({ refreshPurchaseHistoryForCustomers }) => refreshPurchaseHistoryForCustomers(importedCustomerIds))
+        .catch((error) => console.error('[PurchaseHistory] Refresh after historical import failed:', error));
+    }
+
     // Add diagnostic summary if there were failed SOs
     if (failedSOs.size > 0) {
       errors.push(

@@ -193,12 +193,28 @@ export interface SalesOrder {
   cancelledBy: string | null;
   cancellationReason: string | null;
 
+  // Commission-only order: Galileo invoices the customer, Gesher earns a per-tire commission
+  isCommissionOnly: boolean;
+  commissionRate: number; // cents per tire
+  commissionAmount: number; // cents
+  galileoInvoiceNumber: string | null;
+  commissionInvoiceId: string | null; // Commission invoice to Galileo that billed this order (null = not billed)
+
   // Audit
   createdAt: Date;
   updatedAt: Date;
   createdBy: string | null;
   updatedBy: string | null;
   deletedAt: Date | null;
+}
+
+/** Default commission per tire in cents ($275.00) */
+export const DEFAULT_COMMISSION_RATE_CENTS = 27500;
+
+export interface UpdateSalesOrderCommissionDTO {
+  isCommissionOnly: boolean;
+  commissionRate: number; // cents per tire
+  galileoInvoiceNumber?: string | null;
 }
 
 /**

@@ -53,17 +53,53 @@ export interface PersonInput {
   name: string;
   email?: string | null;
   phone?: string | null;
+  /** Written as a phone labelled "mobile" */
+  mobile?: string | null;
   role?: string | null;
   orgId?: number | null;
   ownerId?: number | null;
   existingPersonId?: number | null;
 }
 
-interface OrgRecord {
+/** A Pipedrive email or phone entry */
+export interface PersonChannel {
+  value: string;
+  label: string | null;
+  primary: boolean;
+}
+
+/** Contact details of a Pipedrive person, as used by the two-way contact sync */
+export interface PersonDetails {
+  id: number;
+  name: string;
+  firstName: string | null;
+  lastName: string | null;
+  orgId: number | null;
+  /** Primary email, else the first one */
+  email: string | null;
+  /** Primary phone not labelled "mobile", else the first such phone */
+  phone: string | null;
+  /** First phone labelled "mobile" */
+  mobile: string | null;
+  role: string | null;
+}
+
+/** Structured organization address (Pipedrive address components) */
+export interface OrgAddress {
+  street: string | null;
+  city: string | null;
+  state: string | null;
+  county: string | null;
+  postalCode: string | null;
+  country: string | null;
+}
+
+export interface OrgRecord {
   id: number;
   name: string;
   ownerId: number | null;
-  hasAddress: boolean;
+  /** Null when the organization has no structured address */
+  address: OrgAddress | null;
   customFields: Record<string, unknown>;
 }
 
@@ -71,7 +107,12 @@ interface PersonRecord {
   id: number;
   name: string;
   orgId: number | null;
+  /** Normalized, for matching */
   emails: string[];
+  emailList: PersonChannel[];
+  phoneList: PersonChannel[];
+  /** custom_fields (v2), or the whole record (v1 keeps custom fields at the top level) */
+  customFields: Record<string, unknown>;
 }
 
 // ============================================
@@ -89,20 +130,78 @@ function toId(value: unknown): number | null {
   return typeof n === 'number' && Number.isInteger(n) && n > 0 ? n : null;
 }
 
+const text = (value: unknown): string | null => {
+  const s = typeof value === 'string' ? value.trim() : typeof value === 'number' ? String(value) : '';
+  return s ? s : null;
+};
+
+/**
+ * Structured address of an organization, from the API v2 / webhooks v2 shape
+ * (address: { route, locality, ... }) or the v1 shape (address_route, ...).
+ * Returns null when there are no components (no address, or free text only).
+ */
+export function parseOrgAddress(raw: unknown): OrgAddress | null {
+  const r = raw as Record<string, unknown> | null;
+  if (!r) {
+    return null;
+  }
+  const nested = r.address && typeof r.address === 'object' ? (r.address as Record<string, unknown>) : null;
+  const part = (key: string) => (nested ? text(nested[key]) : text(r[`address_${key}`]));
+
+  const street = [part('street_number'), part('route')].filter(Boolean).join(' ') || null;
+  const address: OrgAddress = {
+    street,
+    city: part('locality'),
+    state: part('admin_area_level_1'),
+    county: part('admin_area_level_2'),
+    postalCode: part('postal_code'),
+    country: part('country'),
+  };
+  return address.street || address.city || address.state || address.postalCode ? address : null;
+}
+
+/** Comparable form of an address part: case and spacing do not count as a change */
+export const normalizeAddressPart = (value: string | null | undefined) =>
+  (value ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+const US_COUNTRY_NAMES = new Set(['us', 'usa', 'u.s.', 'u.s.a.', 'united states', 'united states of america']);
+
+/** "United States" / "USA" / "US" compare equal; ERP stores the code "US" */
+export function normalizeCountry(value: string | null | undefined): string {
+  const n = normalizeAddressPart(value);
+  return US_COUNTRY_NAMES.has(n) ? 'us' : n;
+}
+
 function parseOrg(raw: unknown): OrgRecord | null {
   const r = raw as Record<string, unknown> | null;
   const id = toId(r?.id);
   if (!r || id === null || r.is_deleted === true) {
     return null;
   }
-  const address = r.address as { value?: string } | string | null | undefined;
   return {
     id,
     name: String(r.name ?? ''),
     ownerId: toId(r.owner_id),
-    hasAddress: typeof address === 'string' ? address.trim() !== '' : Boolean(address?.value),
+    address: parseOrgAddress(r),
     customFields: (r.custom_fields as Record<string, unknown>) ?? {},
   };
+}
+
+/** Emails / phones from v2 (emails, phones) or v1 (email, phone) */
+function parseChannels(list: unknown): PersonChannel[] {
+  return (Array.isArray(list) ? list : [])
+    .map((entry) => {
+      if (typeof entry === 'string') {
+        return { value: entry.trim(), label: null, primary: false };
+      }
+      const e = entry as { value?: unknown; label?: unknown; primary?: unknown };
+      return {
+        value: text(e?.value) ?? '',
+        label: text(e?.label)?.toLowerCase() ?? null,
+        primary: e?.primary === true,
+      };
+    })
+    .filter((channel) => channel.value !== '');
 }
 
 function parsePerson(raw: unknown): PersonRecord | null {
@@ -111,14 +210,48 @@ function parsePerson(raw: unknown): PersonRecord | null {
   if (!r || id === null || r.is_deleted === true) {
     return null;
   }
-  const emailList = (r.emails ?? r.email) as Array<{ value?: string } | string> | undefined;
+  const emailList = parseChannels(r.emails ?? r.email);
   return {
     id,
     name: String(r.name ?? ''),
     orgId: toId(r.org_id),
-    emails: (Array.isArray(emailList) ? emailList : [])
-      .map((e) => normalizeEmail(typeof e === 'string' ? e : e?.value))
-      .filter(Boolean),
+    emails: emailList.map((e) => normalizeEmail(e.value)).filter(Boolean),
+    emailList,
+    phoneList: parseChannels(r.phones ?? r.phone),
+    customFields: (r.custom_fields as Record<string, unknown> | undefined) ?? r,
+  };
+}
+
+const isMobile = (channel: PersonChannel) => channel.label === 'mobile';
+const primaryEmailOf = (list: PersonChannel[]) => (list.find((e) => e.primary) ?? list[0])?.value ?? null;
+const workPhoneOf = (list: PersonChannel[]) => {
+  const work = list.filter((p) => !isMobile(p));
+  return (work.find((p) => p.primary) ?? work[0])?.value ?? null;
+};
+const mobilePhoneOf = (list: PersonChannel[]) => list.find(isMobile)?.value ?? null;
+
+/** Phone numbers compare by digits only: "(402) 555-0100" = "402-555-0100" */
+export const normalizePhone = (value: string | null | undefined) => (value ?? '').replace(/\D/g, '');
+
+/**
+ * Contact details of a person (webhook or API record, v1 or v2 shape).
+ */
+export function parsePersonDetails(raw: unknown, roleFieldCode: string | null): PersonDetails | null {
+  const person = parsePerson(raw);
+  if (!person) {
+    return null;
+  }
+  const r = raw as Record<string, unknown>;
+  return {
+    id: person.id,
+    name: person.name.trim(),
+    firstName: text(r.first_name),
+    lastName: text(r.last_name),
+    orgId: person.orgId,
+    email: primaryEmailOf(person.emailList),
+    phone: workPhoneOf(person.phoneList),
+    mobile: mobilePhoneOf(person.phoneList),
+    role: roleFieldCode ? text(person.customFields[roleFieldCode]) : null,
   };
 }
 
@@ -156,7 +289,7 @@ async function searchIds(
   return [...new Set(searchHitIds(response.data))];
 }
 
-async function getOrg(connectionId: string, id: number): Promise<OrgRecord | null> {
+export async function getOrg(connectionId: string, id: number): Promise<OrgRecord | null> {
   try {
     const response = await runPipedriveRequest(() =>
       pipedriveProvider.request<unknown>(connectionId, 'GET', `organizations/${id}`)
@@ -235,16 +368,46 @@ export function accountTypeToWrite(
   return { write: null, kept: current !== requested ? current : null };
 }
 
+/**
+ * True when the ERP address has something to write and differs from the
+ * organization's address (no address, free text only, or another component).
+ */
+function addressDiffers(address: NonNullable<OrganizationInput['address']>, existing: OrgRecord | null): boolean {
+  const hasErpAddress = [address.street, address.city, address.state, address.postalCode].some((part) => part?.trim());
+  if (!hasErpAddress) {
+    return false;
+  }
+  const current = existing?.address;
+  if (!current) {
+    return true;
+  }
+  return (
+    normalizeAddressPart(address.street) !== normalizeAddressPart(current.street) ||
+    normalizeAddressPart(address.city) !== normalizeAddressPart(current.city) ||
+    normalizeAddressPart(address.state) !== normalizeAddressPart(current.state) ||
+    normalizeAddressPart(address.postalCode) !== normalizeAddressPart(current.postalCode) ||
+    normalizeCountry(address.country) !== normalizeCountry(current.country) ||
+    // A county from the CSV import replaces the one in Pipedrive
+    (Boolean(address.county) && normalizeAddressPart(address.county) !== normalizeAddressPart(current.county))
+  );
+}
+
 function buildOrgBody(config: GdcResolvedConfig, input: OrganizationInput, existing: OrgRecord | null) {
   const body: Record<string, unknown> = {};
   const customFields: Record<string, unknown> = {};
 
-  if (!existing) {
-    body.name = input.name.trim();
+  // Two-way customer sync: the ERP name and address are written whenever they
+  // differ, so the last change wins (Pipedrive edits reach the ERP through the
+  // organization webhook). Unchanged values are not written, so a sync with
+  // nothing new sends no update and triggers no webhook.
+  const name = input.name.trim();
+  if (!existing || (name && existing.name.trim() !== name)) {
+    body.name = name;
   }
 
-  if (input.erpCustomerId) {
-    customFields[config.fields.org_erp_customer_id.code] = input.erpCustomerId;
+  const erpField = config.fields.org_erp_customer_id.code;
+  if (input.erpCustomerId && existing?.customFields[erpField] !== input.erpCustomerId) {
+    customFields[erpField] = input.erpCustomerId;
   }
   const accountType = accountTypeToWrite(config, existing, input.accountType).write;
   if (accountType) {
@@ -254,9 +417,11 @@ function buildOrgBody(config: GdcResolvedConfig, input: OrganizationInput, exist
     }
   }
 
-  // Address is only filled when missing, so rep edits in Pipedrive win
+  // Address: written when it differs from Pipedrive. An empty ERP address never
+  // clears a Pipedrive address, and the county (not stored in the ERP) is kept.
   const address = input.address;
-  if (address && (!existing || !existing.hasAddress)) {
+  if (address && addressDiffers(address, existing)) {
+    const county = address.county ?? existing?.address?.county ?? null;
     const parts = [address.street, address.city, address.state, address.postalCode, address.country]
       .map((part) => part?.trim())
       .filter(Boolean);
@@ -266,7 +431,7 @@ function buildOrgBody(config: GdcResolvedConfig, input: OrganizationInput, exist
         ...(address.street ? { route: address.street } : {}),
         ...(address.city ? { locality: address.city } : {}),
         ...(address.state ? { admin_area_level_1: address.state } : {}),
-        ...(address.county ? { admin_area_level_2: address.county } : {}),
+        ...(county ? { admin_area_level_2: county } : {}),
         ...(address.postalCode ? { postal_code: address.postalCode } : {}),
         ...(address.country ? { country: address.country } : {}),
       };
@@ -396,23 +561,121 @@ export async function upsertOrganization(
   return { status: 'created', id: createdOrg.id };
 }
 
+/**
+ * Customer mapping: mark an organization as the given ERP customer (ERP
+ * Customer ID + account type "Current Customer", upgrade only). Name and
+ * address are not touched. Returns false when the organization is gone.
+ */
+export async function markOrganizationAsCustomer(
+  connectionId: string,
+  config: GdcResolvedConfig,
+  orgId: number,
+  erpCustomerId: string
+): Promise<boolean> {
+  const org = await getOrg(connectionId, orgId);
+  if (!org) {
+    return false;
+  }
+  const customFields: Record<string, unknown> = {};
+  const erpField = config.fields.org_erp_customer_id.code;
+  if (org.customFields[erpField] !== erpCustomerId) {
+    customFields[erpField] = erpCustomerId;
+  }
+  const accountType = accountTypeToWrite(config, org, 'Current Customer').write;
+  const optionId = accountType ? config.fields.org_account_type.options?.[accountType] : undefined;
+  if (optionId !== undefined) {
+    customFields[config.fields.org_account_type.code] = optionId;
+  }
+  if (Object.keys(customFields).length > 0) {
+    await runPipedriveWrite(() =>
+      pipedriveProvider.request<unknown>(connectionId, 'PATCH', `organizations/${orgId}`, { custom_fields: customFields })
+    );
+  }
+  return true;
+}
+
 // ============================================
 // PERSONS
 // ============================================
 
+/**
+ * Emails to write, or null when the person's primary email already matches.
+ * The given email becomes the primary one and replaces the old primary; other
+ * emails added in Pipedrive are kept.
+ */
+function emailsToWrite(email: string | null | undefined, existing: PersonRecord | null) {
+  const value = email?.trim();
+  if (!value) {
+    return null;
+  }
+  const current = existing?.emailList ?? [];
+  if (normalizeEmail(primaryEmailOf(current)) === normalizeEmail(value)) {
+    return null;
+  }
+  const oldPrimary = normalizeEmail(primaryEmailOf(current));
+  const others = current.filter((e) => {
+    const n = normalizeEmail(e.value);
+    return n !== oldPrimary && n !== normalizeEmail(value);
+  });
+  return [
+    { value, primary: true, label: 'work' },
+    ...others.map((e) => ({ value: e.value, primary: false, label: e.label ?? 'other' })),
+  ];
+}
+
+/**
+ * Phones to write, or null when the work phone and mobile already match.
+ * The given phone replaces the work phone (primary), the mobile replaces the
+ * "mobile" phone; other numbers added in Pipedrive are kept.
+ */
+function phonesToWrite(phone: string | null | undefined, mobile: string | null | undefined, existing: PersonRecord | null) {
+  const work = phone?.trim() || null;
+  const cell = mobile?.trim() || null;
+  const current = existing?.phoneList ?? [];
+  const oldWork = workPhoneOf(current);
+  const oldMobile = mobilePhoneOf(current);
+  const workChanged = Boolean(work) && normalizePhone(work) !== normalizePhone(oldWork);
+  const mobileChanged = Boolean(cell) && normalizePhone(cell) !== normalizePhone(oldMobile);
+  if (!workChanged && !mobileChanged) {
+    return null;
+  }
+
+  const result: Array<{ value: string; primary: boolean; label: string }> = [];
+  const finalWork = work ?? oldWork;
+  const finalMobile = cell ?? oldMobile;
+  if (finalWork) {result.push({ value: finalWork, primary: true, label: 'work' });}
+  if (finalMobile) {result.push({ value: finalMobile, primary: !finalWork, label: 'mobile' });}
+  const replaced = new Set([oldWork, oldMobile, finalWork, finalMobile].map(normalizePhone).filter(Boolean));
+  for (const p of current) {
+    if (!replaced.has(normalizePhone(p.value))) {
+      result.push({ value: p.value, primary: false, label: p.label ?? 'other' });
+    }
+  }
+  return result;
+}
+
 function buildPersonBody(config: GdcResolvedConfig, input: PersonInput, existing: PersonRecord | null) {
   const body: Record<string, unknown> = {};
-  if (!existing) {
-    body.name = input.name.trim();
-    if (input.email) {body.emails = [{ value: input.email.trim(), primary: true, label: 'work' }];}
-    if (input.phone) {body.phones = [{ value: input.phone.trim(), primary: true, label: 'work' }];}
-    if (input.ownerId) {body.owner_id = input.ownerId;}
+  // Two-way contact sync: name, email, phones and role are written whenever
+  // they differ (last change wins); unchanged values are not sent.
+  const name = input.name.trim();
+  if (!existing || (name && existing.name.trim() !== name)) {
+    body.name = name;
+  }
+  const emails = emailsToWrite(input.email, existing);
+  if (emails) {body.emails = emails;}
+  const phones = phonesToWrite(input.phone, input.mobile, existing);
+  if (phones) {body.phones = phones;}
+  if (!existing && input.ownerId) {
+    body.owner_id = input.ownerId;
   }
   if (input.orgId && (!existing || !existing.orgId)) {
     body.org_id = input.orgId;
   }
-  if (input.role) {
-    body.custom_fields = { [config.fields.person_role.code]: input.role.trim() };
+  const roleCode = config.fields.person_role.code;
+  const currentRole = existing ? text(existing.customFields[roleCode]) : null;
+  if (input.role && input.role.trim() !== currentRole) {
+    body.custom_fields = { [roleCode]: input.role.trim() };
   }
   return body;
 }

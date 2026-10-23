@@ -22,6 +22,7 @@ import type {
   UserSummary,
   LocationSummary,
 } from '../types';
+import { DEFAULT_COMMISSION_RATE_CENTS } from '../types';
 import { calculateOrderTotals, calculateLineTotal } from '../lib/schemas';
 
 // ============================================
@@ -61,6 +62,11 @@ interface DbSalesOrder {
   cancelled_at: string | null;
   cancelled_by: string | null;
   cancellation_reason: string | null;
+  is_commission_only?: boolean | null;
+  commission_rate?: number | null;
+  commission_amount?: number | null;
+  galileo_invoice_number?: string | null;
+  commission_invoice_id?: string | null;
   created_at: string;
   updated_at: string;
   created_by: string | null;
@@ -1085,6 +1091,11 @@ class SalesOrderRepositoryImpl {
       cancelledAt: data.cancelled_at ? new Date(data.cancelled_at) : null,
       cancelledBy: data.cancelled_by,
       cancellationReason: data.cancellation_reason,
+      isCommissionOnly: data.is_commission_only === true,
+      commissionRate: data.commission_rate ?? DEFAULT_COMMISSION_RATE_CENTS,
+      commissionAmount: Number(data.commission_amount ?? 0),
+      galileoInvoiceNumber: data.galileo_invoice_number ?? null,
+      commissionInvoiceId: data.commission_invoice_id ?? null,
       createdAt: new Date(data.created_at),
       updatedAt: new Date(data.updated_at),
       createdBy: data.created_by,

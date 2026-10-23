@@ -27,12 +27,12 @@ import { getIcon } from '../lib/icons';
 const CALCULATION_FORMULAS: Record<string, { title: string; formula: string; notes?: string }> = {
   'revenue-mtd': {
     title: 'Revenue Calculation',
-    formula: 'Revenue = Delivered Sales Orders - Returns/Credits\n\nDatabase Sources:\n• Gross Sales: sales_orders.grand_total WHERE status = "delivered"\n• Returns: credit_notes.grand_total WHERE status = "approved"\n\nFiltered by: order_date (Order Date)',
+    formula: 'Revenue = Delivered Sales Orders - Returns/Credits\n\nDatabase Sources:\n• Gross Sales: sales_orders.grand_total WHERE status = "delivered"\n• Returns: credit_notes.grand_total WHERE status IN ("issued", "applied")\n\nFiltered by: order_date (Order Date)',
     notes: 'Based on delivered sales orders. Recognized revenue = orders that have been delivered to customer. Amounts stored in cents.',
   },
   'revenue-ytd': {
     title: 'Revenue (YTD) Calculation',
-    formula: 'Revenue = Delivered Sales Orders - Returns/Credits\n\nDatabase Sources:\n• Gross Sales: sales_orders.grand_total WHERE status = "delivered"\n• Returns: credit_notes.grand_total WHERE status = "approved"\n\nFiltered by: order_date (Jan 1 to today)',
+    formula: 'Revenue = Delivered Sales Orders - Returns/Credits\n\nDatabase Sources:\n• Gross Sales: sales_orders.grand_total WHERE status = "delivered"\n• Returns: credit_notes.grand_total WHERE status IN ("issued", "applied")\n\nFiltered by: order_date (Jan 1 to today)',
     notes: 'Based on delivered sales orders (YTD). Compared to same period last year.',
   },
   'units-sold': {
@@ -52,8 +52,8 @@ const CALCULATION_FORMULAS: Record<string, { title: string; formula: string; not
   },
   'open-orders': {
     title: 'Open Orders Calculation',
-    formula: 'Count of shipments with load_status = "open"\n\nOrder Value = Sum of linked sales_orders.grand_total for all open shipments',
-    notes: 'Shows shipments currently in OPEN status (not yet invoiced/delivered). Does not filter by date.',
+    formula: 'Count of sales orders with status IN ("confirmed", "processing")\n\nOrder Value = Sum of sales_orders.grand_total for those orders\nChange = vs the open orders already placed by the end of last month',
+    notes: 'All open sales orders (confirmed or processing), deleted orders excluded. Does not filter by date.',
   },
   'commission-expected-ytd': {
     title: 'Commission Expected (YTD) Calculation',

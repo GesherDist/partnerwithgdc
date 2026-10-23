@@ -8,6 +8,8 @@
 
 import { createClient } from '@/shared/lib/supabase/server';
 import { createAdminClient } from '@/shared/lib/supabase/admin';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
+import { isSeairEmail } from '../lib/shipping-email';
 import type {
   InboundEmail,
   InboundEmailWithAttachments,
@@ -267,6 +269,89 @@ export async function deleteInboundEmail(
   } catch (error) {
     console.error('deleteInboundEmail error:', error);
     return { success: false, error: 'Failed to delete email' };
+  }
+}
+
+// ============================================
+// REPROCESS AS SHIPPING EMAIL (SEAIR)
+// ============================================
+
+export interface ReprocessShippingResult {
+  matched: boolean;
+  shipmentId?: string;
+  containerNumber?: string | null;
+  soNumber?: string | null;
+  detectedStatus?: string | null;
+  skippedReason?: string;
+}
+
+/**
+ * Run a SEAIR email that landed in the Inbox through the shipping processor
+ * (same as the shipping@ webhook route). On success the email moves to the
+ * Shipping module; on failure it stays in the Inbox so it can be retried.
+ */
+export async function reprocessAsShippingEmail(
+  id: string
+): Promise<ActionResult<ReprocessShippingResult>> {
+  const user = await getCurrentUser();
+  if (!user) {
+    return { success: false, error: 'Authentication required' };
+  }
+  if (!hasPermission(user, 'shipments.edit')) {
+    return { success: false, error: 'Permission denied: shipments.edit' };
+  }
+
+  try {
+    const adminClient = createAdminClient();
+
+    const { data: email, error: emailError } = await adminClient
+      .from('inbound_emails')
+      .select('id, from_email, subject, text_body, html_body, received_at, to_local_part')
+      .eq('id', id)
+      .single();
+
+    if (emailError || !email) {
+      return { success: false, error: 'Email not found' };
+    }
+    if (!isSeairEmail(email.from_email)) {
+      return { success: false, error: 'Only SEAIR emails can be processed as shipping updates' };
+    }
+    if ((email.to_local_part || '').toLowerCase() === 'shipping') {
+      return { success: false, error: 'This email was already processed as a shipping update' };
+    }
+
+    const { processShippingEmail } = await import('@/features/shipping/services');
+    // received_at keeps ETA regression protection working for older emails
+    const result = await processShippingEmail(
+      email.id,
+      email.subject || '',
+      email.text_body || email.html_body || '',
+      email.received_at || new Date().toISOString()
+    );
+
+    if (!result.success) {
+      return { success: false, error: result.error || 'Shipping processing failed' };
+    }
+
+    await adminClient
+      .from('inbound_emails')
+      .update({ to_local_part: 'shipping', status: 'processed' })
+      .eq('id', email.id);
+
+    return {
+      success: true,
+      data: {
+        matched: result.matched,
+        shipmentId: result.shipmentId,
+        containerNumber: result.extraction?.containerNumber ?? null,
+        soNumber: result.extraction?.soNumber ?? null,
+        detectedStatus: result.extraction?.detectedStatus ?? null,
+        skippedReason: result.skippedReason,
+      },
+    };
+  } catch (error) {
+    console.error('reprocessAsShippingEmail error:', error);
+    return { success: false, error: 'Failed to process shipping email' };
   }
 }
 

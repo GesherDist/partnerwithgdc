@@ -51,6 +51,7 @@ interface GDCInventoryTableProps {
   orderSeries: string;          // e.g., "GDC 1"
   data: GDCInventoryItem[];
   uniqueSkus: SKUColumnInfo[];  // Dynamic SKU columns with product names
+  loadError?: string;           // Set when this series failed to load
   onView?: (item: GDCInventoryItem) => void;
   onEdit?: (item: GDCInventoryItem) => void;
 }
@@ -65,7 +66,7 @@ const PO_STATUS_COLORS: Record<string, string> = {
   cancelled: 'bg-red-100 text-red-700',
 };
 
-export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdit }: GDCInventoryTableProps) {
+export function GDCInventoryTable({ orderSeries, data, uniqueSkus, loadError, onView, onEdit }: GDCInventoryTableProps) {
   // State for expanded addresses and notes
   const [expandedAddressId, setExpandedAddressId] = useState<string | null>(null);
   const [expandedNotesId, setExpandedNotesId] = useState<string | null>(null);
@@ -195,10 +196,19 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
       return {
         ...acc,
         total: acc.total + item.totalQty,
+        commissionTotal: acc.commissionTotal + (item.isCommissionOnly ? item.commissionAmount || 0 : 0),
       };
     },
-    { total: 0, skuTotals: {} as Record<string, number> }
+    { total: 0, commissionTotal: 0, skuTotals: {} as Record<string, number> }
   );
+
+  const formatWholeDollars = (amount: number) =>
+    new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(amount);
 
   // Count by status
   const statusSummary = data.reduce((acc, item) => {
@@ -218,7 +228,12 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
         </CardDescription>
       </CardHeader>
       <CardContent className="p-0">
-        {data.length === 0 ? (
+        {loadError ? (
+          <div className="flex flex-col items-center justify-center gap-1 py-12 text-center">
+            <p className="font-medium text-red-600">Could not load {orderSeries} data</p>
+            <p className="text-sm text-muted-foreground">Please refresh the page. If this keeps happening, contact support.</p>
+          </div>
+        ) : data.length === 0 ? (
           <div className="flex items-center justify-center py-12 text-muted-foreground">
             No Purchase Orders with {orderSeries} order series
           </div>
@@ -327,6 +342,8 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
                   <TableHead className="text-right whitespace-nowrap">Qty Delivered</TableHead>
                   <TableHead className="text-right whitespace-nowrap">Outstanding Qty</TableHead>
                   <TableHead className="text-right whitespace-nowrap">Invoice Amt</TableHead>
+                  <TableHead className="text-center whitespace-nowrap">Commission Only</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Commission Amt</TableHead>
                   <TableHead className="whitespace-nowrap min-w-[150px]">Delivery Address</TableHead>
                   <TableHead className="whitespace-nowrap">
                     <button onClick={() => handleSort('status')} className="flex items-center gap-1 hover:text-primary">
@@ -508,6 +525,16 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
                         maximumFractionDigits: 0,
                       }).format(item.invoiceAmount) : '-'}
                     </TableCell>
+                    <TableCell className="text-center">
+                      {item.isCommissionOnly ? (
+                        <span className="font-semibold text-violet-700">YES</span>
+                      ) : (
+                        <span className="text-muted-foreground">NO</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {item.isCommissionOnly ? formatWholeDollars(item.commissionAmount || 0) : '-'}
+                    </TableCell>
                     <TableCell className="max-w-[200px]">
                       {item.deliveryAddress ? (
                         expandedAddressId === item.id ? (
@@ -562,6 +589,11 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
                       )}
                     </TableCell>
                     <TableCell className="max-w-[150px]">
+                      {item.isCommissionOnly && (
+                        <Badge variant="outline" className="mb-1 text-xs bg-violet-50 text-violet-700 border-violet-200">
+                          Commission Only
+                        </Badge>
+                      )}
                       {item.actionRequired ? (
                         expandedNotesId === item.id ? (
                           <div className="text-xs text-muted-foreground">
@@ -581,7 +613,7 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
                           </div>
                         )
                       ) : (
-                        <span className="text-xs text-muted-foreground">-</span>
+                        !item.isCommissionOnly && <span className="text-xs text-muted-foreground">-</span>
                       )}
                     </TableCell>
                     <TableCell className={`relative sticky right-0 z-20 w-[100px] ${getStickyBgClass(item.status)} border-l shadow-[-2px_0_5px_-2px_rgba(0,0,0,0.1)] after:absolute after:inset-0 after:w-[100px] after:bg-inherit after:-z-10`}>
@@ -620,7 +652,7 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
                     </TableCell>
                   ))}
                   <TableCell className="text-right">{totals.total}</TableCell>
-                  {/* Empty cells for remaining columns: Customer, Supplier, ETA to US Port, Confirmed ETA, Expected Delivery, Actual Delivery, Qty Delivered, Outstanding Qty, Invoice Amt, Delivery Address, Status, Notes, Edit */}
+                  {/* Customer, Supplier, ETA to US Port, Confirmed ETA, Expected Delivery, Actual Delivery, Qty Delivered, Outstanding Qty, Invoice Amt, Commission Only */}
                   <TableCell></TableCell>
                   <TableCell></TableCell>
                   <TableCell></TableCell>
@@ -628,6 +660,14 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, onView, onEdi
                   <TableCell></TableCell>
                   <TableCell></TableCell>
                   <TableCell></TableCell>
+                  <TableCell></TableCell>
+                  <TableCell></TableCell>
+                  <TableCell></TableCell>
+                  {/* Commission Amt */}
+                  <TableCell className="text-right">
+                    {totals.commissionTotal > 0 ? formatWholeDollars(totals.commissionTotal) : '-'}
+                  </TableCell>
+                  {/* Delivery Address, Status, Fulfillment Source, Allocated To, Notes */}
                   <TableCell></TableCell>
                   <TableCell></TableCell>
                   <TableCell></TableCell>

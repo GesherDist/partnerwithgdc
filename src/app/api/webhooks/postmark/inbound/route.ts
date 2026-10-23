@@ -65,9 +65,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Extract the local part of the "To" email to identify the user/purpose
+    // Extract the local part of the inbound address to identify the user/purpose
     // e.g., "user123@inbound.gesher.dev-build.in" -> "user123"
-    const toEmail = payload.To;
+    // OriginalRecipient is the inbound address the email was delivered to. The
+    // "To" header is kept as-is by auto-forwarding (Gmail filters), so it still
+    // shows the original recipient (e.g. jenny@...) and would route wrongly.
+    const toEmail = payload.OriginalRecipient || payload.ToFull?.[0]?.Email || payload.To;
     const localPart = toEmail.split('@')[0];
 
     // Initialize Supabase admin client

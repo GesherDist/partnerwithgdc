@@ -23,8 +23,10 @@ import type {
   SalesOrderListItem,
   OrderStatus,
   CreateSalesOrderItemDTO,
+  UpdateSalesOrderCommissionDTO,
 } from '../types';
 import { db } from '@/shared/lib/supabase/database';
+import { auditService } from '@/shared/lib/audit';
 import { getCurrentUser, hasPermission, hasAnyPermission } from '@/shared/lib/auth';
 import type { AppUser } from '@/shared/stores/auth.store';
 
@@ -1841,19 +1843,57 @@ export async function releaseSalesOrderHold(
       throw updateError;
     }
 
-    // Update pending approval event to approved
-    await db
+    // Record the release on the pending credit_release approval event
+    const decidedAt = new Date().toISOString();
+    const decisionNote = note || 'Credit hold released by finance';
+    const { data: decidedEvents, error: approvalError } = await db
       .from('approval_events')
       .update({
         status: 'approved',
         decided_by: auth.user.id,
-        decided_at: new Date().toISOString(),
-        note: note || 'Credit hold released by finance',
+        decided_at: decidedAt,
+        decision_note: decisionNote,
+        updated_at: decidedAt,
       })
       .eq('subject_type', 'sales_order')
       .eq('subject_id', orderId)
-      .eq('type', 'credit_release')
-      .eq('status', 'pending');
+      .eq('event_type', 'credit_release')
+      .eq('status', 'pending')
+      .select('id');
+
+    if (approvalError) {
+      console.error('Failed to record credit hold release:', approvalError);
+    } else if (!decidedEvents || decidedEvents.length === 0) {
+      // Holds placed before the pending event was logged correctly have no
+      // pending row; record the release as its own approved event.
+      const { error: insertError } = await db.from('approval_events').insert({
+        event_type: 'credit_release',
+        subject_type: 'sales_order',
+        subject_id: orderId,
+        status: 'approved',
+        requested_by: auth.user.id,
+        requested_at: decidedAt,
+        decided_by: auth.user.id,
+        decided_at: decidedAt,
+        reason: 'Credit hold (no pending request was recorded)',
+        decision_note: decisionNote,
+      });
+      if (insertError) {
+        console.error('Failed to record credit hold release:', insertError);
+      }
+    }
+
+    auditService.logUpdate(
+      'sales_orders',
+      'SalesOrder',
+      orderId,
+      { creditStatus: 'hold' },
+      { creditStatus: 'ok', note: decisionNote },
+      { userId: auth.user.id },
+      `Released credit hold on sales order: ${order.order_number}`
+    ).catch((err) => {
+      console.error('Failed to log credit hold release audit:', err);
+    });
 
     revalidatePath('/sales-orders');
     revalidatePath(`/sales-orders/${orderId}`);
@@ -1973,6 +2013,188 @@ export async function updateSalesOrderSeries(
   } catch (error) {
     console.error('updateSalesOrderSeries error:', error);
     return { success: false, error: 'Failed to update order series' };
+  }
+}
+
+/**
+ * Tires on a sales order allocated to Manufacturer (Direct) fulfillment.
+ * Only these tires can earn commission: Galileo ships and invoices them.
+ * Tires from GDC inventory or platinum dealers are invoiced by Gesher.
+ */
+async function countDirectTires(salesOrderId: string): Promise<number> {
+  const { data, error } = await db
+    .from('fulfillment_allocations')
+    .select('quantity, status, sales_order_items!inner (sales_order_id, products:product_id (item_type))')
+    .eq('sales_order_items.sales_order_id', salesOrderId)
+    .eq('fulfillment_source', 'direct');
+
+  if (error) {
+    throw error;
+  }
+
+  return (data || []).reduce((sum, row) => {
+    if (row.status === 'cancelled') {
+      return sum;
+    }
+    const item = row.sales_order_items as unknown as { products: { item_type: string | null } | null } | null;
+    return item?.products?.item_type === 'service' ? sum : sum + (row.quantity || 0);
+  }, 0);
+}
+
+/**
+ * Number of tires on a sales order that are allocated to Manufacturer (Direct)
+ * fulfillment. The commission section uses it to enable "Commission only".
+ */
+export async function getSalesOrderDirectTireCount(
+  salesOrderId: string
+): Promise<ActionResult<{ directTireCount: number; commissionInvoiceNumber: string | null }>> {
+  const auth = await authorizeAny(['orders.view_detail', 'orders.edit']);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
+  try {
+    const directTireCount = await countDirectTires(salesOrderId);
+
+    // Invoice number of the commission invoice that billed this order, if any
+    let commissionInvoiceNumber: string | null = null;
+    const { data: order } = await db
+      .from('sales_orders')
+      .select('commission_invoice_id')
+      .eq('id', salesOrderId)
+      .maybeSingle();
+    if (order?.commission_invoice_id) {
+      const { data: invoice } = await db
+        .from('invoices')
+        .select('invoice_number')
+        .eq('id', order.commission_invoice_id)
+        .maybeSingle();
+      commissionInvoiceNumber = invoice?.invoice_number || null;
+    }
+
+    return { success: true, data: { directTireCount, commissionInvoiceNumber } };
+  } catch (error) {
+    console.error('getSalesOrderDirectTireCount error:', error);
+    return { success: false, error: 'Failed to read fulfillment allocations' };
+  }
+}
+
+/**
+ * Mark a sales order as commission-only (or not) and recalculate the commission.
+ * Commission = tires allocated to Manufacturer (Direct) fulfillment x rate per tire.
+ * Galileo invoices the customer for these tires; Gesher bills Galileo the commission.
+ */
+export async function updateSalesOrderCommission(
+  salesOrderId: string,
+  input: UpdateSalesOrderCommissionDTO
+): Promise<ActionResult<{ commissionAmount: number; tireCount: number }>> {
+  const auth = await authorize('orders.edit');
+  if (!auth.ok) {
+    return auth.result;
+  }
+
+  const rate = Math.round(Number(input.commissionRate));
+  if (!Number.isFinite(rate) || rate < 0 || rate > 1_000_000) {
+    return { success: false, error: 'Commission rate must be between $0 and $10,000 per tire' };
+  }
+
+  const galileoInvoiceNumber = input.galileoInvoiceNumber?.trim() || null;
+  if (galileoInvoiceNumber && galileoInvoiceNumber.length > 50) {
+    return { success: false, error: 'Galileo invoice number must be 50 characters or less' };
+  }
+
+  try {
+    const { data: order, error: orderError } = await db
+      .from('sales_orders')
+      .select('id, order_number, status, is_commission_only, commission_rate, commission_amount, galileo_invoice_number, commission_invoice_id')
+      .eq('id', salesOrderId)
+      .is('deleted_at', null)
+      .single();
+
+    if (orderError || !order) {
+      return { success: false, error: 'Sales order not found' };
+    }
+
+    if (order.status === 'cancelled') {
+      return { success: false, error: 'Cannot change commission on a cancelled order' };
+    }
+
+    if (order.commission_invoice_id) {
+      return {
+        success: false,
+        error: 'Commission is already billed to Galileo. Cancel that commission invoice first to change it.',
+      };
+    }
+
+    let tireCount: number;
+    try {
+      tireCount = await countDirectTires(salesOrderId);
+    } catch (countError) {
+      console.error('updateSalesOrderCommission allocations error:', countError);
+      return { success: false, error: 'Failed to read fulfillment allocations' };
+    }
+
+    if (input.isCommissionOnly && tireCount === 0) {
+      return {
+        success: false,
+        error: 'Commission only needs a Manufacturer (Direct) fulfillment allocation on this order',
+      };
+    }
+
+    const commissionAmount = input.isCommissionOnly ? tireCount * rate : 0;
+
+    // commission_amount is an INTEGER (cents) column
+    if (commissionAmount > 2_147_483_647) {
+      return { success: false, error: 'Commission amount is too large' };
+    }
+
+    const { error: updateError } = await db
+      .from('sales_orders')
+      .update({
+        is_commission_only: input.isCommissionOnly,
+        commission_rate: rate,
+        commission_amount: commissionAmount,
+        galileo_invoice_number: input.isCommissionOnly ? galileoInvoiceNumber : null,
+        updated_at: new Date().toISOString(),
+        updated_by: auth.user.id,
+      })
+      .eq('id', salesOrderId)
+      .is('deleted_at', null);
+
+    if (updateError) {
+      console.error('updateSalesOrderCommission error:', updateError);
+      return { success: false, error: 'Failed to update commission' };
+    }
+
+    auditService.logUpdate(
+      'sales_orders',
+      'SalesOrder',
+      salesOrderId,
+      {
+        isCommissionOnly: order.is_commission_only === true,
+        commissionRate: order.commission_rate,
+        commissionAmount: order.commission_amount,
+        galileoInvoiceNumber: order.galileo_invoice_number,
+      },
+      {
+        isCommissionOnly: input.isCommissionOnly,
+        commissionRate: rate,
+        commissionAmount,
+        galileoInvoiceNumber: input.isCommissionOnly ? galileoInvoiceNumber : null,
+      },
+      { userId: auth.user.id },
+      `Updated commission for sales order: ${order.order_number}`
+    ).catch((err) => {
+      console.error('Failed to log commission update audit:', err);
+    });
+
+    revalidatePath('/sales-orders');
+    revalidatePath(`/sales-orders/${salesOrderId}`);
+
+    return { success: true, data: { commissionAmount, tireCount } };
+  } catch (error) {
+    console.error('updateSalesOrderCommission error:', error);
+    return { success: false, error: 'Failed to update commission' };
   }
 }
 

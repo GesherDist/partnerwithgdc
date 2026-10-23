@@ -393,6 +393,15 @@ export function ProfitabilityTables() {
             ]}
           />
           <SpecTable
+            id="2.1b"
+            title="Commission Revenue"
+            description={`Commission from Galileo on commission-only orders, kept separate from tire revenue and gross profit. Not billed yet: ${
+              m.commission.unbilled.value === null ? '—' : formatValue(m.commission.unbilled.value, 'money')
+            } on ${m.commission.unbilledOrders} order${m.commission.unbilledOrders === 1 ? '' : 's'}.`}
+            columns={C4}
+            rows={[{ label: 'Commission Billed', format: 'money', cells: m.commission.billed }]}
+          />
+          <SpecTable
             id="2.2"
             title="Per Tire Economics"
             columns={C4}
@@ -422,7 +431,7 @@ export function ProfitabilityTables() {
             <SpecTable
               id="3.1"
               title="Backlog Summary"
-              description="Firm sales orders (confirmed → delivered), tires not yet invoiced."
+              description="Firm sales orders (confirmed or processing), tires not yet invoiced. Commission-only orders excluded."
               columns={AVG}
               rows={[
                 { label: 'Backlog Tires', format: 'count', cells: m.backlog.tires },

@@ -10,8 +10,15 @@ import { db } from '@/shared/lib/supabase/database';
 export type EntityType = 'customer' | 'quote' | 'sales_order' | 'purchase_order' | 'shipment';
 
 export interface CascadeDeleteOptions {
+  /** Ignored: audit logs are always kept (see DELETE_AUDIT_LOGS). Kept for API compatibility. */
   deleteAuditLogs?: boolean;
 }
+
+/**
+ * The audit trail is never deleted (build brief: no hard deletes, full audit trail;
+ * audit_logs also has a no-delete trigger). Cascade deletes always keep audit logs.
+ */
+const DELETE_AUDIT_LOGS = false;
 
 export interface CascadeDeleteResult {
   success: boolean;
@@ -110,14 +117,14 @@ export async function previewCascadeDelete(
  */
 export async function deleteCustomerCascade(
   customerId: string,
-  options: CascadeDeleteOptions = { deleteAuditLogs: true }
+  _options: CascadeDeleteOptions = {}
 ): Promise<CascadeDeleteResult> {
   try {
     const supabase = db;
 
     const { data, error } = await supabase.rpc('delete_customer_cascade', {
       p_customer_id: customerId,
-      p_delete_audit_logs: options.deleteAuditLogs ?? true,
+      p_delete_audit_logs: DELETE_AUDIT_LOGS,
     });
 
     if (error) {
@@ -148,14 +155,14 @@ export async function deleteCustomerCascade(
  */
 export async function deleteQuoteCascade(
   quoteId: string,
-  options: CascadeDeleteOptions = { deleteAuditLogs: true }
+  _options: CascadeDeleteOptions = {}
 ): Promise<CascadeDeleteResult> {
   try {
     const supabase = db;
 
     const { data, error } = await supabase.rpc('delete_quote_cascade', {
       p_quote_id: quoteId,
-      p_delete_audit_logs: options.deleteAuditLogs ?? true,
+      p_delete_audit_logs: DELETE_AUDIT_LOGS,
     });
 
     if (error) {
@@ -186,14 +193,14 @@ export async function deleteQuoteCascade(
  */
 export async function deleteSalesOrderCascade(
   salesOrderId: string,
-  options: CascadeDeleteOptions = { deleteAuditLogs: true }
+  _options: CascadeDeleteOptions = {}
 ): Promise<CascadeDeleteResult> {
   try {
     const supabase = db;
 
     const { data, error } = await supabase.rpc('delete_sales_order_cascade', {
       p_sales_order_id: salesOrderId,
-      p_delete_audit_logs: options.deleteAuditLogs ?? true,
+      p_delete_audit_logs: DELETE_AUDIT_LOGS,
     });
 
     if (error) {
@@ -224,14 +231,14 @@ export async function deleteSalesOrderCascade(
  */
 export async function deletePurchaseOrderCascade(
   purchaseOrderId: string,
-  options: CascadeDeleteOptions = { deleteAuditLogs: true }
+  _options: CascadeDeleteOptions = {}
 ): Promise<CascadeDeleteResult> {
   try {
     const supabase = db;
 
     const { data, error } = await supabase.rpc('delete_purchase_order_cascade', {
       p_purchase_order_id: purchaseOrderId,
-      p_delete_audit_logs: options.deleteAuditLogs ?? true,
+      p_delete_audit_logs: DELETE_AUDIT_LOGS,
     });
 
     if (error) {
@@ -262,14 +269,14 @@ export async function deletePurchaseOrderCascade(
  */
 export async function deleteShipmentCascade(
   shipmentId: string,
-  options: CascadeDeleteOptions = { deleteAuditLogs: true }
+  _options: CascadeDeleteOptions = {}
 ): Promise<CascadeDeleteResult> {
   try {
     const supabase = db;
 
     const { data, error } = await supabase.rpc('delete_shipment_cascade', {
       p_shipment_id: shipmentId,
-      p_delete_audit_logs: options.deleteAuditLogs ?? true,
+      p_delete_audit_logs: DELETE_AUDIT_LOGS,
     });
 
     if (error) {
@@ -301,7 +308,7 @@ export async function deleteShipmentCascade(
 export async function cascadeDelete(
   entityType: EntityType,
   entityId: string,
-  options: CascadeDeleteOptions = { deleteAuditLogs: true }
+  options: CascadeDeleteOptions = {}
 ): Promise<CascadeDeleteResult> {
   switch (entityType) {
     case 'customer':

@@ -457,6 +457,7 @@ export default function OperationsPage() {
                 orderSeries={series.name}
                 data={gdcData?.items || []}
                 uniqueSkus={gdcData?.uniqueSkus || []}
+                loadError={gdcData?.error}
                 onView={handleViewGDCItem}
                 onEdit={handleEditGDCItem}
               />

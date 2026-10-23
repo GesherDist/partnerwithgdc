@@ -7,7 +7,7 @@
  * Supports date range filtering for all data fetches.
  */
 
-import { createClient } from '@/shared/lib/supabase/server';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
 import * as dashboardRepo from '../repositories';
 import type { UnitsBySKUChartData, ChannelPerformanceDataPoint, InventoryByLocation, DashboardStat, MarginDataPoint, RevenueDataPoint, DateRange, CommissionRevenueStats } from '../types';
 
@@ -22,16 +22,30 @@ interface ActionResult<T> {
 }
 
 /**
+ * Overview KPIs and charts include revenue and margin: the page shows them only
+ * with dashboard.view_analytics, so the actions check the same permission.
+ * Inventory by location only needs dashboard access.
+ */
+async function requireDashboardPermission(
+  permission: string
+): Promise<{ success: false; error: string } | null> {
+  const user = await getCurrentUser();
+  if (!user) {
+    return { success: false, error: 'Authentication required' };
+  }
+  if (!hasPermission(user, permission)) {
+    return { success: false, error: `Permission denied: ${permission}` };
+  }
+  return null;
+}
+
+/**
  * Get units sold by ALL products grouped by month
  */
 export async function getUnitsBySKUData(dateRange?: DateRange): Promise<ActionResult<UnitsBySKUChartData>> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const denied = await requireDashboardPermission('dashboard.view_analytics');
+  if (denied) {
+    return denied;
   }
 
   const data = await dashboardRepo.getUnitsBySKU(dateRange);
@@ -50,13 +64,9 @@ export async function getUnitsBySKUData(dateRange?: DateRange): Promise<ActionRe
  * Get channel performance data (OEM vs Dealer)
  */
 export async function getChannelPerformanceData(dateRange?: DateRange): Promise<ActionResult<ChannelPerformanceDataPoint[]>> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const denied = await requireDashboardPermission('dashboard.view_analytics');
+  if (denied) {
+    return denied;
   }
 
   const data = await dashboardRepo.getChannelPerformance(dateRange);
@@ -75,13 +85,9 @@ export async function getChannelPerformanceData(dateRange?: DateRange): Promise<
  * Get inventory overview by location
  */
 export async function getInventoryByLocationData(): Promise<ActionResult<InventoryByLocation[]>> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const denied = await requireDashboardPermission('dashboard.view_module');
+  if (denied) {
+    return denied;
   }
 
   const data = await dashboardRepo.getInventoryByLocation();
@@ -100,13 +106,9 @@ export async function getInventoryByLocationData(): Promise<ActionResult<Invento
  * Get dashboard KPI stats
  */
 export async function getDashboardStatsData(dateRange?: DateRange): Promise<ActionResult<DashboardStat[]>> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const denied = await requireDashboardPermission('dashboard.view_analytics');
+  if (denied) {
+    return denied;
   }
 
   const data = await dashboardRepo.getDashboardStats(dateRange);
@@ -125,13 +127,9 @@ export async function getDashboardStatsData(dateRange?: DateRange): Promise<Acti
  * Get margin analysis data for last 6 months
  */
 export async function getMarginAnalysisData(dateRange?: DateRange): Promise<ActionResult<MarginDataPoint[]>> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const denied = await requireDashboardPermission('dashboard.view_analytics');
+  if (denied) {
+    return denied;
   }
 
   const data = await dashboardRepo.getMarginAnalysis(dateRange);
@@ -150,13 +148,9 @@ export async function getMarginAnalysisData(dateRange?: DateRange): Promise<Acti
  * Get revenue trend data for last 8 months
  */
 export async function getRevenueTrendData(dateRange?: DateRange): Promise<ActionResult<RevenueDataPoint[]>> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const denied = await requireDashboardPermission('dashboard.view_analytics');
+  if (denied) {
+    return denied;
   }
 
   const data = await dashboardRepo.getRevenueTrend(dateRange);
@@ -176,13 +170,9 @@ export async function getRevenueTrendData(dateRange?: DateRange): Promise<Action
  * Tracks expected and actual commission from service items
  */
 export async function getCommissionStatsData(): Promise<ActionResult<CommissionRevenueStats>> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const denied = await requireDashboardPermission('dashboard.view_analytics');
+  if (denied) {
+    return denied;
   }
 
   const data = await dashboardRepo.getCommissionRevenue();

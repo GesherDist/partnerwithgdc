@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import {
   Sheet,
@@ -16,7 +16,8 @@ import { Pencil, CreditCard, Building2, MapPin, Package, Calendar, FileText, Use
 import { PdfViewerModal } from '@/shared/components/pdf-viewer/PdfViewerModal';
 import { cn } from '@/shared/lib/utils';
 import { useInvoice } from '../hooks/useInvoice';
-import { pushInvoiceToQuickBooks } from '../actions';
+import { pushInvoiceToQuickBooks, getInvoiceCommissionOrders } from '../actions';
+import type { BillableCommissionOrder } from '../services/invoice.service';
 import { INVOICE_STATUS_COLORS, INVOICE_STATUS_LABELS, INVOICE_TYPE_LABELS } from '../types';
 import type { ViewInvoiceDrawerProps } from '../types';
 
@@ -38,6 +39,45 @@ export function ViewInvoiceDrawer({
   const { data: invoice, isLoading, refetch } = useInvoice(open ? invoiceId : null);
   const [showPdfModal, setShowPdfModal] = useState(false);
   const [isPushingToQbo, setIsPushingToQbo] = useState(false);
+
+  // Commission invoice: the customer orders the commission is billed for
+  const isCommissionInvoice = invoice?.invoiceType === 'commission';
+  const [commissionOrders, setCommissionOrders] = useState<BillableCommissionOrder[] | null>(null);
+
+  useEffect(() => {
+    if (!open || !invoiceId || !isCommissionInvoice) {
+      setCommissionOrders(null);
+      return;
+    }
+    let cancelled = false;
+    getInvoiceCommissionOrders(invoiceId).then((result) => {
+      if (!cancelled) {
+        setCommissionOrders(result.success && result.data ? result.data : []);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, invoiceId, isCommissionInvoice]);
+
+  // One entry per end customer (an invoice can bill several customers' orders)
+  const commissionCustomers = (commissionOrders || []).reduce<
+    Array<{ key: string; name: string; code: string | null; poNumbers: string[]; shipTo: string[] }>
+  >((list, order) => {
+    const key = order.customerId || order.customerName;
+    let entry = list.find((c) => c.key === key);
+    if (!entry) {
+      entry = { key, name: order.customerName, code: order.customerCode, poNumbers: [], shipTo: [] };
+      list.push(entry);
+    }
+    if (order.customerPoNumber && !entry.poNumbers.includes(order.customerPoNumber)) {
+      entry.poNumbers.push(order.customerPoNumber);
+    }
+    if (order.shipToAddress && !entry.shipTo.includes(order.shipToAddress)) {
+      entry.shipTo.push(order.shipToAddress);
+    }
+    return list;
+  }, []);
 
   const handleViewPdf = () => {
     if (!invoiceId || !invoice) return;
@@ -96,7 +136,7 @@ export function ViewInvoiceDrawer({
             {/* Customer Information */}
             <div className="space-y-3">
               <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-                Customer
+                {isCommissionInvoice ? 'Billed To (Supplier)' : 'Customer'}
               </h3>
               <div className="flex items-start gap-2 text-sm">
                 <Building2 className="h-4 w-4 text-muted-foreground mt-0.5" />
@@ -208,9 +248,50 @@ export function ViewInvoiceDrawer({
               <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
                 Order Information
               </h3>
-              <div className="grid grid-cols-3 gap-4 text-sm">
-                {/* Sales Order */}
-                {invoice.salesOrder ? (
+              <div
+                className={cn(
+                  'grid gap-4 text-sm',
+                  invoice.salesOrder
+                    ? 'grid-cols-3'
+                    : isCommissionInvoice && commissionCustomers.length > 0
+                      ? 'grid-cols-1 sm:grid-cols-2'
+                      : 'grid-cols-1'
+                )}
+              >
+                {/* Commission invoice: the end customer(s) the commission is for */}
+                {isCommissionInvoice && commissionCustomers.length > 0 && (
+                  <div className="space-y-3">
+                    {commissionCustomers.map((customer) => (
+                      <div key={customer.key} className="flex items-start gap-2">
+                        <Building2 className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                        <div className="min-w-0">
+                          <p className="text-muted-foreground">Customer</p>
+                          <p className="font-medium">{customer.name}</p>
+                          {customer.code && (
+                            <p className="text-muted-foreground font-mono text-xs">{customer.code}</p>
+                          )}
+                          {customer.poNumbers.length > 0 && (
+                            <p className="mt-1">
+                              <span className="text-muted-foreground">Customer PO: </span>
+                              <span className="font-medium">{customer.poNumbers.join(', ')}</span>
+                            </p>
+                          )}
+                          {customer.shipTo.length > 0 && (
+                            <div className="mt-1">
+                              <p className="text-muted-foreground">Ship To</p>
+                              {customer.shipTo.map((address) => (
+                                <p key={address} className="font-medium break-words">{address}</p>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Sales Order (customer invoices; commission orders are listed below) */}
+                {invoice.salesOrder && (
                   <div className="flex items-start gap-2">
                     <FileText className="h-4 w-4 text-muted-foreground mt-0.5" />
                     <div>
@@ -218,21 +299,21 @@ export function ViewInvoiceDrawer({
                       <p className="font-medium">{invoice.salesOrder.orderNumber}</p>
                     </div>
                   </div>
-                ) : (
-                  <div />
                 )}
 
                 {/* Customer PO */}
-                {invoice.salesOrder?.customerPoNumber ? (
-                  <div className="flex items-start gap-2">
-                    <FileText className="h-4 w-4 text-muted-foreground mt-0.5" />
-                    <div>
-                      <p className="text-muted-foreground">Customer PO</p>
-                      <p className="font-medium">{invoice.salesOrder.customerPoNumber}</p>
+                {invoice.salesOrder && (
+                  invoice.salesOrder.customerPoNumber ? (
+                    <div className="flex items-start gap-2">
+                      <FileText className="h-4 w-4 text-muted-foreground mt-0.5" />
+                      <div>
+                        <p className="text-muted-foreground">Customer PO</p>
+                        <p className="font-medium">{invoice.salesOrder.customerPoNumber}</p>
+                      </div>
                     </div>
-                  </div>
-                ) : (
-                  <div />
+                  ) : (
+                    <div />
+                  )
                 )}
 
                 {/* Bill To */}
@@ -292,6 +373,61 @@ export function ViewInvoiceDrawer({
 
             <Separator />
 
+            {/* Commission Orders: which customer orders this commission is billed for */}
+            {isCommissionInvoice && (
+              <>
+                <div className="space-y-3">
+                  <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                    Commission Orders{commissionOrders ? ` (${commissionOrders.length})` : ''}
+                  </h3>
+                  {commissionOrders === null ? (
+                    <Skeleton className="h-16 w-full" />
+                  ) : commissionOrders.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      {invoice.status === 'cancelled'
+                        ? 'This invoice is cancelled; its orders were released and can be billed again.'
+                        : 'No sales orders are linked to this invoice (manual commission lines).'}
+                    </p>
+                  ) : (
+                    <div className="rounded-lg border overflow-hidden">
+                      <table className="w-full text-sm">
+                        <thead className="bg-muted/50 text-xs text-muted-foreground">
+                          <tr>
+                            <th className="px-3 py-2 text-left font-medium">Sales Order</th>
+                            <th className="px-3 py-2 text-left font-medium">Customer</th>
+                            <th className="px-3 py-2 text-right font-medium">Tires</th>
+                            <th className="px-3 py-2 text-right font-medium">Commission</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {commissionOrders.map((order) => (
+                            <tr key={order.id} className="border-t align-top">
+                              <td className="px-3 py-2">
+                                <p className="font-medium">{order.orderNumber}</p>
+                                {order.customerPoNumber && (
+                                  <p className="text-xs text-muted-foreground">PO {order.customerPoNumber}</p>
+                                )}
+                              </td>
+                              <td className="px-3 py-2">{order.customerName}</td>
+                              <td className="px-3 py-2 text-right whitespace-nowrap">
+                                {order.tireCount}
+                                <p className="text-xs text-muted-foreground">x ${formatCurrency(order.commissionRate)}</p>
+                              </td>
+                              <td className="px-3 py-2 text-right font-medium whitespace-nowrap">
+                                ${formatCurrency(order.commissionAmount)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                <Separator />
+              </>
+            )}
+
             {/* Items */}
             <div className="space-y-3">
               <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
@@ -303,18 +439,18 @@ export function ViewInvoiceDrawer({
                     key={item.id}
                     className="flex items-start gap-3 p-3 bg-muted/50 rounded-lg"
                   >
-                    <Package className="h-4 w-4 text-muted-foreground mt-0.5" />
+                    <Package className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
                           <p className="font-medium text-sm">{item.sku}</p>
                           {item.description && (
-                            <p className="text-xs text-muted-foreground truncate">
+                            <p className="text-xs text-muted-foreground break-words">
                               {item.description}
                             </p>
                           )}
                         </div>
-                        <p className="text-sm font-medium">
+                        <p className="text-sm font-medium shrink-0 whitespace-nowrap">
                           ${formatCurrency(item.lineTotal)}
                         </p>
                       </div>
