@@ -229,6 +229,92 @@ export async function markPurchaseOrderReceived(id: string) {
   return result;
 }
 
+/**
+ * Data for the "Receive into Warehouse" dialog (pending qty per item,
+ * suggested qty, physical warehouses)
+ */
+export async function getPurchaseOrderReceivingInfo(id: string) {
+  const auth = await authorize('purchase_orders.receive');
+  if (!auth.ok) {
+    return auth.result;
+  }
+
+  const { poReceivingService } = await import('@/features/inventory/services/po-receiving.service');
+  return poReceivingService.getReceivingInfo(id);
+}
+
+/**
+ * Operations dashboard rows carry a shipment id or a PO id. Returns the PO id
+ * to receive against, or null (e.g. warehouse / sales-order rows).
+ */
+export async function findReceivablePurchaseOrderId(rowId: string): Promise<ActionResult<string | null>> {
+  const auth = await authorize('purchase_orders.receive');
+  if (!auth.ok) {
+    return auth.result;
+  }
+
+  const { db } = await import('@/shared/lib/supabase/database');
+
+  const { data: shipment } = await db
+    .from('shipments')
+    .select('purchase_order_id')
+    .eq('id', rowId)
+    .maybeSingle();
+
+  if (shipment) {
+    return { success: true, data: shipment.purchase_order_id || null };
+  }
+
+  const { data: po } = await db
+    .from('purchase_orders')
+    .select('id')
+    .eq('id', rowId)
+    .is('deleted_at', null)
+    .maybeSingle();
+
+  return { success: true, data: po?.id || null };
+}
+
+/**
+ * Receive tires from a PO into a warehouse (inventory on_hand += qty)
+ */
+export async function receivePurchaseOrderIntoStock(input: {
+  purchaseOrderId: string;
+  locationId: string;
+  lines: { poItemId: string; quantity: number }[];
+  notes?: string;
+}) {
+  const auth = await authorize('purchase_orders.receive');
+  if (!auth.ok) {
+    return auth.result;
+  }
+
+  if (!input?.purchaseOrderId || !input.locationId || !Array.isArray(input.lines) || input.lines.length > 200) {
+    return { success: false, error: 'Invalid receive request' };
+  }
+
+  const { poReceivingService } = await import('@/features/inventory/services/po-receiving.service');
+  const result = await poReceivingService.receivePurchaseOrder({
+    purchaseOrderId: input.purchaseOrderId,
+    locationId: input.locationId,
+    lines: input.lines.map((l) => ({ poItemId: String(l.poItemId), quantity: Number(l.quantity) })),
+    notes: input.notes?.slice(0, 500),
+    userId: auth.user.id,
+    source: 'manual',
+  });
+
+  if (result.success) {
+    revalidatePath('/purchase-orders');
+    revalidatePath(`/purchase-orders/${input.purchaseOrderId}`);
+    revalidatePath('/inventory');
+    revalidatePath('/master-inventory');
+    revalidatePath('/operations');
+    revalidatePath('/dashboard');
+  }
+
+  return result;
+}
+
 export async function cancelPurchaseOrder(id: string) {
   const auth = await authorize('purchase_orders.cancel');
   if (!auth.ok) {

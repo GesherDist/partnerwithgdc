@@ -77,7 +77,7 @@ export async function processShippingEmail(
     // Step 1: Extract shipping info using AI
     console.log(`[Shipping] Processing email: ${subject.substring(0, 50)}...`);
 
-    const extraction = await extractShippingInfo(subject, body);
+    const extraction = await extractShippingInfo(subject, body, eventTimestamp);
 
     console.log(`[Shipping] Extracted:`, {
       container: extraction.containerNumber,
@@ -128,6 +128,10 @@ export async function processShippingEmail(
 
     if (shipment) {
       console.log(`[Shipping] Matched to shipment: ${shipment.shipment_number}`);
+
+      // Read before the update: stock is received only on the change to delivered
+      const { poReceivingService } = await import('@/features/inventory/services/po-receiving.service');
+      const wasDelivered = await poReceivingService.isShipmentDelivered(shipment.id);
 
       // Determine the active container number
       // For transload scenarios, prefer the NEW container as the active one
@@ -230,6 +234,11 @@ export async function processShippingEmail(
             `[Shipping] Sales Order status updated based on tracking: ${extraction.detectedStatus} → ${newOrderStatus}`
           );
         }
+      }
+
+      // Step 10: Container delivered - put clear stock POs into warehouse stock (once)
+      if (extraction.detectedStatus === 'delivered' && !wasDelivered) {
+        await poReceivingService.autoReceiveForShipment(shipment.id);
       }
 
       return {
@@ -365,7 +374,8 @@ export async function reprocessShippingEmail(
   // Note: This creates a new extraction but doesn't duplicate the shipping_email record
   const extraction = await extractShippingInfo(
     inboundEmail.subject,
-    (inboundEmail as { text_body?: string }).text_body || ''
+    (inboundEmail as { text_body?: string }).text_body || '',
+    (inboundEmail as { received_at?: string }).received_at
   );
 
   // Try to match with shipment

@@ -8,17 +8,15 @@
  * - "Sync with Pipedrive": two-way sync of the customer and its contacts with
  *   the Pipedrive organization and people (ERP wins when both changed)
  * - "Publish purchase history": pinned tire purchase-history note on the org
- * - "Sync LTV to Pipedrive": existing lifetime-value push
  *
  * Server actions enforce permissions (customers.edit for sync/publish).
  */
 
 import { useTransition } from 'react';
-import { Link2, Loader2, RefreshCw, Unlink, History } from 'lucide-react';
+import { Link2, Loader2, Unlink, History } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/shared/components/ui/button';
-import { pushCustomerLTVToPipedrive } from '@/features/pipedrive/actions';
 import { syncCustomerWithPipedriveAction, publishPurchaseHistoryAction } from '@/features/pipedrive/gdc/actions';
 import { describeTwoWaySync } from '@/features/pipedrive/gdc/two-way-sync.format';
 import { getCustomer } from '../actions';
@@ -43,7 +41,6 @@ const HISTORY_MESSAGES: Record<string, string> = {
 export function CustomerPipedriveSection({ customer, canEdit, onCustomerUpdated }: CustomerPipedriveSectionProps) {
   const [isSyncing, startSync] = useTransition();
   const [isPublishing, startPublish] = useTransition();
-  const [isPushingLTV, startPushLTV] = useTransition();
 
   const isLinked = Boolean(customer.pipedriveOrgId || customer.pipedrivePersonId || customer.pipedriveDealId);
   const linkedIds = [
@@ -84,19 +81,6 @@ export function CustomerPipedriveSection({ customer, canEdit, onCustomerUpdated 
     });
   };
 
-  const handlePushLTV = () => {
-    startPushLTV(async () => {
-      const result = await pushCustomerLTVToPipedrive(customer.id);
-      if (result.success && result.data) {
-        toast.success('LTV synced to Pipedrive', {
-          description: `Revenue: $${result.data.ltv.totalRevenue.toLocaleString()} | Orders: ${result.data.ltv.orderCount}`,
-        });
-      } else {
-        toast.error('Failed to sync LTV', { description: result.error || 'Unknown error' });
-      }
-    });
-  };
-
   return (
     <div className="space-y-4">
       <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-2">
@@ -130,12 +114,6 @@ export function CustomerPipedriveSection({ customer, canEdit, onCustomerUpdated 
             <Button variant="outline" size="sm" onClick={handlePublish} disabled={isPublishing}>
               {isPublishing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <History className="mr-2 h-4 w-4" />}
               Publish purchase history
-            </Button>
-          )}
-          {isLinked && (
-            <Button variant="outline" size="sm" onClick={handlePushLTV} disabled={isPushingLTV}>
-              {isPushingLTV ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-              Sync LTV to Pipedrive
             </Button>
           )}
         </div>

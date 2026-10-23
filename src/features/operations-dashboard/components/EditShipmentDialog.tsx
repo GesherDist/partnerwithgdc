@@ -8,7 +8,7 @@
  */
 
 import { useState, useEffect, useTransition } from 'react';
-import { Loader2, Save, Truck, Package, FileText, Calendar, Container } from 'lucide-react';
+import { Loader2, Save, Truck, Package, FileText, Calendar, Container, PackageCheck } from 'lucide-react';
 
 import {
   Dialog,
@@ -33,6 +33,9 @@ import { Badge } from '@/shared/components/ui/badge';
 import { toast } from 'sonner';
 
 import { updateShipmentOrOrder } from '../actions';
+import { findReceivablePurchaseOrderId } from '@/features/purchase-orders/actions';
+import { ReceivePurchaseOrderDialog } from '@/features/purchase-orders/components/ReceivePurchaseOrderDialog';
+import { useAuthStore } from '@/shared/stores';
 import type { ShipmentStatus } from '../types';
 
 // ============================================
@@ -160,6 +163,30 @@ export function EditShipmentDialog({
   const [qtyDelivered, setQtyDelivered] = useState<number>(shipment?.qtyDelivered || 0);
   const [outstandingQty, setOutstandingQty] = useState<number>(shipment?.outstandingQty || 0);
   const [containerNumber, setContainerNumber] = useState(shipment?.containerNumber || '');
+
+  // Receive into Warehouse (rows backed by a purchase order)
+  const { hasPermission } = useAuthStore();
+  const canReceive = hasPermission('purchase_orders.receive');
+  const [receivePoId, setReceivePoId] = useState<string | null>(null);
+  const [showReceiveDialog, setShowReceiveDialog] = useState(false);
+
+  useEffect(() => {
+    setReceivePoId(null);
+    if (!open || !shipment || !canReceive) {
+      return;
+    }
+    let cancelled = false;
+    findReceivablePurchaseOrderId(shipment.id)
+      .then((result) => {
+        if (!cancelled && result.success) {
+          setReceivePoId(result.data || null);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [open, shipment, canReceive]);
 
   // Reset form when shipment changes
   useEffect(() => {
@@ -416,6 +443,17 @@ export function EditShipmentDialog({
         </div>
 
         <DialogFooter>
+          {receivePoId && (
+            <Button
+              variant="outline"
+              onClick={() => setShowReceiveDialog(true)}
+              disabled={isPending}
+              className="sm:mr-auto"
+            >
+              <PackageCheck className="mr-2 h-4 w-4" />
+              Receive into Warehouse
+            </Button>
+          )}
           <Button
             variant="outline"
             onClick={() => onOpenChange(false)}
@@ -438,6 +476,13 @@ export function EditShipmentDialog({
           </Button>
         </DialogFooter>
       </DialogContent>
+
+      <ReceivePurchaseOrderDialog
+        open={showReceiveDialog}
+        purchaseOrderId={receivePoId}
+        onClose={() => setShowReceiveDialog(false)}
+        onSuccess={() => onSuccess?.()}
+      />
     </Dialog>
   );
 }

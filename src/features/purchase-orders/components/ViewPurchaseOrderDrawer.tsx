@@ -37,7 +37,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/shared/components/ui/select';
-import { Pencil, Building2, MapPin, Send, Loader2, Calendar, X, Layers, Warehouse } from 'lucide-react';
+import { Pencil, Building2, MapPin, Send, Loader2, Calendar, X, Layers, Warehouse, PackageCheck } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/shared/lib/utils';
 import { usePurchaseOrder } from '../hooks/usePurchaseOrder';
@@ -47,6 +47,11 @@ import type { ViewPurchaseOrderDrawerProps, SupplierSummary } from '../types';
 import { ORDER_SERIES } from '@/shared/lib/global-data';
 import { LOAD_STATUS_COLORS, LOAD_STATUS_LABELS } from '@/features/shipments/types';
 import { updateSalesOrderSeries } from '@/features/sales-orders/actions';
+import { useAuthStore } from '@/shared/stores';
+import { ReceivePurchaseOrderDialog } from './ReceivePurchaseOrderDialog';
+
+/** PO statuses from which delivered tires can be received into a warehouse */
+const RECEIVABLE_STATUSES = ['confirmed', 'in_production', 'ready_to_ship', 'in_transit', 'partial', 'received'];
 
 // ============================================
 // HELPER FUNCTIONS
@@ -71,6 +76,8 @@ export function ViewPurchaseOrderDrawer({
   const { data: po, isLoading, refetch } = usePurchaseOrder(open ? poId : null);
   const [isPending, startTransition] = useTransition();
   const [showSendDialog, setShowSendDialog] = useState(false);
+  const [showReceiveDialog, setShowReceiveDialog] = useState(false);
+  const { hasPermission } = useAuthStore();
 
   // Inline editing state
   const [suppliers, setSuppliers] = useState<SupplierSummary[]>([]);
@@ -546,6 +553,19 @@ export function ViewPurchaseOrderDrawer({
             {/* Actions */}
             <Separator />
             <div className="flex gap-2">
+              {hasPermission('purchase_orders.receive') &&
+                RECEIVABLE_STATUSES.includes(po.status) &&
+                po.items.some((item) => item.quantityOrdered > item.quantityReceived) && (
+                <Button
+                  variant="outline"
+                  onClick={() => setShowReceiveDialog(true)}
+                  className="flex-1"
+                  disabled={isPending}
+                >
+                  <PackageCheck className="mr-2 h-4 w-4" />
+                  Receive into Warehouse
+                </Button>
+              )}
               {onEdit && ['draft', 'sent'].includes(po.status) && (
                 <Button
                   variant="outline"
@@ -589,6 +609,14 @@ export function ViewPurchaseOrderDrawer({
             Purchase order not found
           </div>
         )}
+
+        {/* Receive into Warehouse Dialog */}
+        <ReceivePurchaseOrderDialog
+          open={showReceiveDialog}
+          purchaseOrderId={po?.id ?? null}
+          onClose={() => setShowReceiveDialog(false)}
+          onSuccess={() => refetch()}
+        />
 
         {/* Send Confirmation Dialog */}
         <AlertDialog open={showSendDialog} onOpenChange={setShowSendDialog}>

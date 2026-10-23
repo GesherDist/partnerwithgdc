@@ -364,6 +364,7 @@ export interface CreateShipmentDTO {
 }
 
 export interface UpdateShipmentDTO {
+  shipmentNumber?: string;
   shipmentDate?: Date;
   estimatedArrival?: Date | null;
   actualArrival?: Date | null;

@@ -360,6 +360,10 @@ export async function updateShipmentFromCmaCgm(
   estimatedArrival?: string
 ): Promise<boolean> {
   try {
+    // Read before the update: stock is received only on the change to delivered
+    const { poReceivingService } = await import('@/features/inventory/services/po-receiving.service');
+    const wasDelivered = await poReceivingService.isShipmentDelivered(shipmentId);
+
     // Update shipment tracking info. The current location is kept in the
     // status history only - final_destination is the real delivery destination.
     // vessel_name gets mapped to carrier in the repository.
@@ -413,6 +417,11 @@ export async function updateShipmentFromCmaCgm(
       if (poStatus) {
         await updatePurchaseOrderStatus(purchaseOrderId, poStatus);
       }
+    }
+
+    // Container delivered: put clear stock POs into warehouse stock (once)
+    if (mappedStatus.trackingStatus === 'delivered' && !wasDelivered) {
+      await poReceivingService.autoReceiveForShipment(shipmentId);
     }
 
     // Calculate is_delayed field

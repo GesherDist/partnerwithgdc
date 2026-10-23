@@ -76,6 +76,7 @@ export type CreatePOInput = z.infer<typeof createPurchaseOrderSchema>;
 // ============================================
 
 export const updatePurchaseOrderSchema = z.object({
+  poNumber: z.string().trim().min(1, 'PO # is required').max(50, 'PO # must be 50 characters or less').optional(),
   poDate: z.coerce.date().optional(),
   expectedDeliveryDate: z.coerce.date().nullable().optional(),
   warehouseId: z.string().uuid().nullable().optional(),

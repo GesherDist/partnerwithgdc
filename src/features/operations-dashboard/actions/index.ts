@@ -11,6 +11,7 @@ import { revalidatePath, unstable_noStore as noStore } from 'next/cache';
 import { db } from '@/shared/lib/supabase/database';
 import { createAdminClient } from '@/shared/lib/supabase/admin';
 import { getCurrentUser } from '@/shared/lib/auth';
+import { poReceivingService } from '@/features/inventory/services/po-receiving.service';
 
 /**
  * Pipedrive deal of the shipment's sales order: ERP Order Status, Shipment ETA
@@ -326,6 +327,9 @@ export async function updateShipmentStatus(
       updateData.notes = input.notes;
     }
 
+    // Read before the update: stock is received only on the change to delivered
+    const wasDelivered = await poReceivingService.isShipmentDelivered(input.shipmentId);
+
     const { error } = await db
       .from('shipments')
       .update(updateData)
@@ -334,6 +338,12 @@ export async function updateShipmentStatus(
     if (error) {
       console.error('Error updating shipment:', error);
       return { success: false, error: error.message };
+    }
+
+    // Container delivered: put clear stock POs into warehouse stock (once)
+    if (input.loadStatus === 'DELIVERED' && !wasDelivered) {
+      await poReceivingService.autoReceiveForShipment(input.shipmentId, user.id);
+      revalidatePath('/inventory');
     }
 
     // Revalidate operations dashboard
@@ -608,6 +618,9 @@ export async function updateShipment(
       updateData.notes = input.notes || null;
     }
 
+    // Read before the update: stock is received only on the change to delivered
+    const wasDelivered = await poReceivingService.isShipmentDelivered(input.shipmentId);
+
     const { error } = await db
       .from('shipments')
       .update(updateData)
@@ -616,6 +629,12 @@ export async function updateShipment(
     if (error) {
       console.error('Error updating shipment:', error);
       return { success: false, error: error.message };
+    }
+
+    // Container delivered: put clear stock POs into warehouse stock (once)
+    if (input.loadStatus === 'delivered' && !wasDelivered) {
+      await poReceivingService.autoReceiveForShipment(input.shipmentId, user.id);
+      revalidatePath('/inventory');
     }
 
     // Revalidate operations dashboard
@@ -764,6 +783,9 @@ export async function updateShipmentOrOrder(
         updateData.container_number = containerNumber;
       }
 
+      // Read before the update: stock is received only on the change to delivered
+      const wasDelivered = await poReceivingService.isShipmentDelivered(shipment.id);
+
       const { error } = await supabase
         .from('shipments')
         .update(updateData)
@@ -838,6 +860,12 @@ export async function updateShipmentOrOrder(
       } else {
         console.log('[updateShipmentOrOrder] No related PO found for this shipment');
       }
+
+      // Container delivered: put clear stock POs into warehouse stock (once)
+      if (loadStatus === 'delivered' && !wasDelivered && shipmentWithPO?.purchase_order_id) {
+        await poReceivingService.autoReceiveForPurchaseOrder(shipmentWithPO.purchase_order_id, user.id);
+        revalidatePath('/inventory');
+      }
     } else {
       // ============================================
       // Try purchase_orders directly
@@ -881,6 +909,9 @@ export async function updateShipmentOrOrder(
 
         console.log('[PO Update] Updating PO:', input.id, 'with data:', updateData);
 
+        // Read before the update: stock is received only on the change to delivered
+        const poWasDelivered = await poReceivingService.isPurchaseOrderDelivered(input.id);
+
         const { error } = await supabase
           .from('purchase_orders')
           .update(updateData)
@@ -892,6 +923,12 @@ export async function updateShipmentOrOrder(
         }
 
         console.log('[PO Update] Successfully updated PO:', input.id);
+
+        // Delivered: put clear stock POs into warehouse stock (once)
+        if (loadStatus === 'delivered' && !poWasDelivered) {
+          await poReceivingService.autoReceiveForPurchaseOrder(input.id, user.id);
+          revalidatePath('/inventory');
+        }
 
         // ============================================
         // NEW: Also update related Sales Order if it exists

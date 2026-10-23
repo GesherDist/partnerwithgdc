@@ -350,6 +350,10 @@ async function updateShipment(
   matchingResults: FreightUpdateMatchingResults
 ): Promise<boolean> {
   try {
+    // Read before the update: stock is received only on the change to delivered
+    const { poReceivingService } = await import('@/features/inventory/services/po-receiving.service');
+    const wasDelivered = await poReceivingService.isShipmentDelivered(shipmentId);
+
     const updateData: any = {};
 
     // Update container info
@@ -471,6 +475,11 @@ ${parsedData.notes}
 
       // Create status history entry
       await createStatusHistory(supabase, shipmentId, parsedData);
+
+      // Container delivered: put clear stock POs into warehouse stock (once)
+      if (updateData.tracking_status === 'delivered' && !wasDelivered) {
+        await poReceivingService.autoReceiveForShipment(shipmentId);
+      }
 
       return true;
     }

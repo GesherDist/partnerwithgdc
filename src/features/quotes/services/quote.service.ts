@@ -22,7 +22,7 @@ import type {
   QuoteStatus,
   CreateQuoteItemDTO,
 } from '../types';
-import { QUOTE_STATUS_TRANSITIONS as STATUS_TRANSITIONS } from '../types';
+import { QUOTE_STATUS_TRANSITIONS as STATUS_TRANSITIONS, isQuoteEditable } from '../types';
 import { auditService } from '@/shared/lib/audit';
 
 /**
@@ -33,6 +33,21 @@ function syncPipedriveOrderStatus(quoteId: string): void {
   void import('@/features/pipedrive/gdc/order-status.service')
     .then(({ syncOrderStatusInBackground }) => syncOrderStatusInBackground({ quoteId }))
     .catch((error) => console.error('[Pipedrive] Order status sync could not start:', error));
+}
+
+/** True when products, quantities, prices, discounts or tax differ (order-sensitive) */
+function quoteItemsChanged(current: QuoteWithItems['items'], next: CreateQuoteItemDTO[]): boolean {
+  if (current.length !== next.length) {return true;}
+  const sorted = [...current].sort((a, b) => a.sortOrder - b.sortOrder);
+  return sorted.some((item, index) => {
+    const other = next[index];
+    return !other
+      || item.productId !== other.productId
+      || Number(item.quantity) !== Number(other.quantity)
+      || Math.round(Number(item.unitPrice)) !== Math.round(Number(other.unitPrice))
+      || Number(item.discountPercent) !== Number(other.discountPercent)
+      || Number(item.taxRate) !== Number(other.taxRate);
+  });
 }
 
 // Helper to convert quote to audit data (exclude large/sensitive fields)
@@ -295,11 +310,11 @@ export const quoteService = {
         };
       }
 
-      // Check if quote can be edited (only draft)
-      if (existing.status !== 'draft') {
+      // Check if quote can be edited (until converted)
+      if (!isQuoteEditable(existing.status)) {
         return {
           success: false,
-          error: `Cannot edit quote in ${existing.status} status. Only draft quotes can be edited.`,
+          error: 'Cannot edit a converted quote.',
         };
       }
 
@@ -363,11 +378,11 @@ export const quoteService = {
         };
       }
 
-      // Check if quote can be edited (only draft)
-      if (existing.status !== 'draft') {
+      // Check if quote can be edited (until converted)
+      if (!isQuoteEditable(existing.status)) {
         return {
           success: false,
-          error: `Cannot edit items for quote in ${existing.status} status. Only draft quotes can be edited.`,
+          error: 'Cannot edit items for a converted quote.',
         };
       }
 
@@ -381,6 +396,11 @@ export const quoteService = {
 
       // Replace items
       await quoteRepository.replaceItems(id, items, userId);
+
+      // Approved quote with changed items/prices needs approval again
+      if (existing.status === 'approved' && quoteItemsChanged(existing.items, items)) {
+        await this.reopenApproval(existing, userId);
+      }
 
       // Return updated quote
       const quote = await quoteRepository.findById(id);
@@ -450,6 +470,43 @@ export const quoteService = {
   // ==========================================
   // STATUS TRANSITIONS
   // ==========================================
+
+  /**
+   * Send an edited approved quote back to approval (approved -> pending_approval)
+   * Creates a new 'quote_approval' event with the updated total
+   */
+  async reopenApproval(existing: Quote, userId?: string): Promise<void> {
+    const updated = await quoteRepository.findById(existing.id);
+    const { approvalEventRepository } = await import('@/features/approval-events/repositories/approval-event.repository');
+    await approvalEventRepository.create({
+      eventType: 'quote_approval',
+      subjectType: 'quote',
+      subjectId: existing.id,
+      reason: `Quote ${existing.quoteNumber} edited after approval`,
+      metadata: {
+        quoteNumber: existing.quoteNumber,
+        customerId: existing.customerId,
+        grandTotal: updated?.grandTotal ?? existing.grandTotal,
+      },
+    }, userId);
+
+    await quoteRepository.updateStatus(existing.id, 'pending_approval', userId);
+    // Pipedrive deal: ERP Order Status (background, linked quotes only)
+    syncPipedriveOrderStatus(existing.id);
+
+    auditService.log({
+      action: 'update', // status_change
+      module: 'quotes',
+      entityType: 'Quote',
+      entityId: existing.id,
+      oldData: { status: existing.status, grandTotal: existing.grandTotal },
+      newData: { status: 'pending_approval', grandTotal: updated?.grandTotal },
+      userId,
+      description: `Quote ${existing.quoteNumber} items changed after approval; sent back for approval`,
+    }).catch((err) => {
+      console.error('Failed to log quote reopen audit:', err);
+    });
+  },
 
   /**
    * Submit quote for approval (draft -> pending_approval)

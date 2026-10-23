@@ -59,6 +59,7 @@ export type CreateShipmentInput = z.infer<typeof createShipmentSchema>;
 // ============================================
 
 export const updateShipmentSchema = z.object({
+  shipmentNumber: z.string().trim().min(1, 'Shipment # is required').max(50, 'Shipment # must be 50 characters or less').optional(),
   shipmentDate: z.coerce.date().optional(),
   estimatedArrival: z.coerce.date().nullable().optional(),
   actualArrival: z.coerce.date().nullable().optional(),

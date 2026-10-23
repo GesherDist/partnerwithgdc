@@ -336,6 +336,7 @@ export interface UpdatePOItemDTO {
 }
 
 export interface UpdatePurchaseOrderDTO {
+  poNumber?: string;
   poDate?: Date;
   expectedDeliveryDate?: Date | null;
   warehouseId?: string | null;

@@ -473,6 +473,7 @@ class PurchaseOrderRepositoryImpl {
     if (data.expectedDeliveryDate !== undefined) {
       updateData.expected_delivery_date = data.expectedDeliveryDate?.toISOString().split('T')[0] || null;
     }
+    if (data.poNumber !== undefined) {updateData.po_number = data.poNumber;}
     if (data.warehouseId !== undefined) {updateData.warehouse_id = data.warehouseId;}
     if (data.currencyCode !== undefined) {updateData.currency_code = data.currencyCode;}
     if (data.orderSeries !== undefined) {updateData.order_series = data.orderSeries;}

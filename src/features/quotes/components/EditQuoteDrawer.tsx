@@ -155,6 +155,7 @@ export function EditQuoteDrawer({ open, onClose, quoteId, onSuccess }: EditQuote
         customerNotes: dto.customerNotes,
         internalNotes: dto.internalNotes,
         termsAndConditions: dto.termsAndConditions,
+        customerPoNumber: dto.customerPoNumber,
       });
 
       if (!headerResult.success) {

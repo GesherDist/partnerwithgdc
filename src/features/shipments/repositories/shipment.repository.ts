@@ -465,12 +465,32 @@ class ShipmentRepositoryImpl {
   /**
    * Update an existing shipment
    */
+  /**
+   * True when another live shipment already uses this shipment number
+   */
+  async isShipmentNumberTaken(shipmentNumber: string, excludeId: string): Promise<boolean> {
+    const { data, error } = await db
+      .from('shipments')
+      .select('id')
+      .eq('shipment_number', shipmentNumber)
+      .is('deleted_at', null)
+      .neq('id', excludeId)
+      .limit(1);
+
+    if (error) {
+      throw new Error(`Failed to check shipment number: ${error.message}`);
+    }
+
+    return (data?.length ?? 0) > 0;
+  }
+
   async update(id: string, data: UpdateShipmentDTO, userId?: string): Promise<Shipment> {
     const updateData: Record<string, unknown> = {
       updated_by: userId || null,
       updated_at: new Date().toISOString(),
     };
 
+    if (data.shipmentNumber !== undefined) {updateData.shipment_number = data.shipmentNumber;}
     if (data.shipmentDate !== undefined) {
       updateData.shipment_date = data.shipmentDate.toISOString().split('T')[0];
     }

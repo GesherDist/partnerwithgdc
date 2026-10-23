@@ -85,6 +85,7 @@ export function EditPurchaseOrderDrawer({
   const form = useForm({
     resolver: zodResolver(poFormSchema),
     defaultValues: {
+      poNumber: '',
       poDate: new Date().toISOString().split('T')[0],
       expectedDeliveryDate: '',
       salesOrderId: '',
@@ -143,6 +144,7 @@ export function EditPurchaseOrderDrawer({
           setPO(result.data);
           // Pre-fill form with PO data
           form.reset({
+            poNumber: result.data.poNumber,
             poDate: new Date(result.data.poDate).toISOString().split('T')[0],
             expectedDeliveryDate: result.data.expectedDeliveryDate
               ? new Date(result.data.expectedDeliveryDate).toISOString().split('T')[0]
@@ -348,7 +350,14 @@ export function EditPurchaseOrderDrawer({
 
     startTransition(async () => {
       try {
+        const poNumber = ((data.poNumber as string) || '').trim();
+        if (!poNumber) {
+          form.setError('poNumber', { message: 'PO # is required' });
+          return;
+        }
+
         const result = await updatePurchaseOrder(poId, {
+          poNumber,
           poDate: new Date(data.poDate as string),
           expectedDeliveryDate: data.expectedDeliveryDate
             ? new Date(data.expectedDeliveryDate as string)
@@ -378,10 +387,14 @@ export function EditPurchaseOrderDrawer({
         });
 
         if (result.success) {
-          toast.success(`Purchase Order ${po.poNumber} updated successfully`);
+          toast.success(`Purchase Order ${poNumber} updated successfully`);
           await onSuccess?.();
           onClose();
         } else {
+          const numberError = 'errors' in result ? result.errors?.poNumber?.[0] : undefined;
+          if (numberError) {
+            form.setError('poNumber', { message: numberError });
+          }
           toast.error(result.error || 'Failed to update Purchase Order');
         }
       } catch (error) {
@@ -442,6 +455,22 @@ export function EditPurchaseOrderDrawer({
                         This is an unallocated PO (no linked Sales Order). Select Order Series for GDC tracking.
                       </p>
                     )}
+                    <FormField
+                      control={form.control}
+                      name="poNumber"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>PO # *</FormLabel>
+                          <FormControl>
+                            <Input {...field} />
+                          </FormControl>
+                          <p className="text-xs text-muted-foreground">
+                            Must be unique. The shipment for this PO is numbered from it.
+                          </p>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
                     <div className="grid grid-cols-2 gap-4">
                       <FormField
                         control={form.control}

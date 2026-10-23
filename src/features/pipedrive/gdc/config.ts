@@ -104,6 +104,7 @@ export const GDC_CUSTOM_FIELDS = [
   { key: 'deal_erp_order_status', entity: 'deal', name: 'ERP Order Status', fieldType: 'varchar' },
   { key: 'deal_shipment_eta', entity: 'deal', name: 'Shipment ETA', fieldType: 'varchar' },
   { key: 'deal_container_status', entity: 'deal', name: 'Container Status', fieldType: 'varchar' },
+  { key: 'deal_invoice_status', entity: 'deal', name: 'Invoice Status', fieldType: 'varchar' },
   { key: 'deal_customer_po', entity: 'deal', name: 'Customer PO #', fieldType: 'varchar' },
   { key: 'deal_tire_count', entity: 'deal', name: 'Tire Count', fieldType: 'double' },
 ] as const satisfies readonly GdcFieldDefinition[];

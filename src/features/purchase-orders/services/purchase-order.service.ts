@@ -262,6 +262,18 @@ export const purchaseOrderService = {
         };
       }
 
+      const poNumber = validation.data.poNumber;
+      if (poNumber !== undefined && poNumber !== existing.poNumber) {
+        const duplicate = await purchaseOrderRepository.findByPONumber(poNumber);
+        if (duplicate && duplicate.id !== id) {
+          return {
+            success: false,
+            error: `Purchase order number "${poNumber}" already exists.`,
+            errors: { poNumber: [`PO number "${poNumber}" already exists`] },
+          };
+        }
+      }
+
       // Capture old data for audit before update
       const oldAuditData = purchaseOrderToAuditData(existing);
 
@@ -685,6 +697,12 @@ export const purchaseOrderService = {
         console.error('Failed to log purchase order status change audit:', err);
       });
 
+      // Marked received: put clear stock POs into warehouse stock (once)
+      if (newStatus === 'received') {
+        const { poReceivingService } = await import('@/features/inventory/services/po-receiving.service');
+        await poReceivingService.autoReceiveForPurchaseOrder(id, userId);
+      }
+
       return {
         success: true,
         data: po,
@@ -823,6 +841,12 @@ export const purchaseOrderService = {
       }).catch((err) => {
         console.error('Failed to log purchase order status change audit:', err);
       });
+
+      // Marked received: put clear stock POs into warehouse stock (once)
+      if (newStatus === 'received') {
+        const { poReceivingService } = await import('@/features/inventory/services/po-receiving.service');
+        await poReceivingService.autoReceiveForPurchaseOrder(id, userId);
+      }
 
       return {
         success: true,

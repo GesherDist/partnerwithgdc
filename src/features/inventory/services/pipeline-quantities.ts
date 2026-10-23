@@ -3,7 +3,8 @@
  *
  * Shared by the Inventory page and the Master Inventory page so both show the
  * same numbers. Nothing is counted twice: a PO whose container is moving is
- * counted as In Transit, not On Order.
+ * counted as In Transit, not On Order, and tires already received into a
+ * warehouse (purchase_order_items.quantity_received) count as On Hand only.
  */
 
 import type { SupabaseClient } from '@/shared/lib/supabase/types';
@@ -50,10 +51,38 @@ export async function getPipelineQuantities(client: SupabaseClient): Promise<Pip
     throw shipmentError;
   }
 
-  let inTransit = (movingShipments || []).reduce((sum, row) => sum + (row.total_qty || 0), 0);
   const inTransitPoIds = new Set(
     (movingShipments || []).map((row) => row.purchase_order_id).filter((id): id is string => !!id)
   );
+
+  // Tires already received into a warehouse are On Hand, not In Transit
+  const receivedByPo = new Map<string, number>();
+  if (inTransitPoIds.size > 0) {
+    const { data: receivedItems, error: receivedError } = await client
+      .from('purchase_order_items')
+      .select('purchase_order_id, quantity_received')
+      .in('purchase_order_id', [...inTransitPoIds])
+      .gt('quantity_received', 0);
+
+    if (receivedError) {
+      throw receivedError;
+    }
+
+    for (const item of receivedItems || []) {
+      receivedByPo.set(item.purchase_order_id, (receivedByPo.get(item.purchase_order_id) || 0) + (item.quantity_received || 0));
+    }
+  }
+
+  let inTransit = 0;
+  for (const row of movingShipments || []) {
+    const qty = row.total_qty || 0;
+    const received = row.purchase_order_id ? receivedByPo.get(row.purchase_order_id) || 0 : 0;
+    const deducted = Math.min(qty, received);
+    if (row.purchase_order_id && deducted > 0) {
+      receivedByPo.set(row.purchase_order_id, received - deducted);
+    }
+    inTransit += qty - deducted;
+  }
 
   // 2. POs the supplier marked "in transit" that have no moving shipment yet
   const { data: shippedPoItems, error: shippedError } = await client

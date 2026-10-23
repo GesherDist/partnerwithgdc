@@ -37,7 +37,7 @@ import { resendSalesOrderToPipedrive } from '@/features/pipedrive/gdc/actions';
 import { getInventoryByProductIds } from '@/features/inventory/actions';
 import type { InventoryListItem } from '@/features/inventory/types';
 import type { QuoteWithItems } from '../types';
-import { QUOTE_STATUS_LABELS, QUOTE_STATUS_COLORS } from '../types';
+import { QUOTE_STATUS_LABELS, QUOTE_STATUS_COLORS, isQuoteEditable } from '../types';
 
 // ============================================
 // TYPES
@@ -316,8 +316,8 @@ export function ViewQuoteDrawer({
     }
   };
 
-  // Can only edit draft quotes (and must have permission)
-  const canEdit = quote && quote.status === 'draft' && canEditPermission;
+  // Can edit until converted (and must have permission)
+  const canEdit = quote && isQuoteEditable(quote.status) && canEditPermission;
   // Can submit draft quotes for approval (and must have submit_for_approval permission)
   const canSubmitForApproval = quote && quote.status === 'draft' && canSubmitForApprovalPermission;
   // Can approve/reject pending_approval quotes (and must have approve permission)

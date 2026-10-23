@@ -250,6 +250,17 @@ async function releaseCommissionOrders(invoiceId: string): Promise<void> {
 }
 
 // Helper to convert invoice to audit data (exclude large/sensitive fields)
+/**
+ * Update the "Invoice Status" of the Pipedrive deal the invoice's sales order
+ * came from, if any. Background; never fails the invoice change
+ * (gdc/order-status.service).
+ */
+function syncPipedriveInvoiceStatus(invoiceId: string): void {
+  void import('@/features/pipedrive/gdc/order-status.service')
+    .then(({ syncInvoiceDealInBackground }) => syncInvoiceDealInBackground(invoiceId))
+    .catch((error) => console.error('[Pipedrive] Invoice status sync could not start:', error));
+}
+
 function invoiceToAuditData(invoice: Invoice | InvoiceWithItems): Record<string, unknown> {
   return {
     id: invoice.id,
@@ -411,6 +422,8 @@ export const invoiceService = {
         console.error('Failed to log invoice create audit:', err);
       });
 
+      // Pipedrive deal: Invoice Status (background, orders from linked deals only)
+      syncPipedriveInvoiceStatus(invoice.id);
       return {
         success: true,
         data: invoice,
@@ -563,6 +576,8 @@ export const invoiceService = {
         console.error('Failed to log invoice create audit:', err);
       });
 
+      // Pipedrive deal: Invoice Status (background, orders from linked deals only)
+      syncPipedriveInvoiceStatus(invoice.id);
       return {
         success: true,
         data: invoice,
@@ -631,6 +646,8 @@ export const invoiceService = {
         console.error('Failed to log invoice update audit:', err);
       });
 
+      // Pipedrive deal: Invoice Status (background, orders from linked deals only)
+      syncPipedriveInvoiceStatus(id);
       return {
         success: true,
         data: invoice,
@@ -679,6 +696,8 @@ export const invoiceService = {
         console.error('Failed to log invoice delete audit:', err);
       });
 
+      // Pipedrive deal: Invoice Status (background, orders from linked deals only)
+      syncPipedriveInvoiceStatus(id);
       return {
         success: true,
         data: invoice,
@@ -759,6 +778,8 @@ export const invoiceService = {
         console.error('Failed to log invoice payment audit:', err);
       });
 
+      // Pipedrive deal: Invoice Status (background, orders from linked deals only)
+      syncPipedriveInvoiceStatus(id);
       return {
         success: true,
         data: payment,
@@ -898,6 +919,8 @@ export const invoiceService = {
       }
 
       const invoice = await invoiceRepository.updateStatus(id, newStatus, userId);
+      // Pipedrive deal: Invoice Status (background, orders from linked deals only)
+      syncPipedriveInvoiceStatus(id);
 
       if (newStatus === 'cancelled') {
         await releaseCommissionOrders(id);

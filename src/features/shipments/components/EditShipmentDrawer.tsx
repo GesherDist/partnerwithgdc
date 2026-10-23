@@ -76,6 +76,7 @@ interface EditShipmentDrawerProps {
 }
 
 const editShipmentSchema = z.object({
+  shipmentNumber: z.string().trim().min(1, 'Shipment # is required').max(50, 'Shipment # must be 50 characters or less'),
   shipmentDate: z.string().min(1, 'Shipment date is required'),
   estimatedArrival: z.string(),
   actualArrival: z.string(),
@@ -149,6 +150,7 @@ export function EditShipmentDrawer({
   const form = useForm<EditShipmentForm>({
     resolver: zodResolver(editShipmentSchema),
     defaultValues: {
+      shipmentNumber: '',
       shipmentDate: '',
       estimatedArrival: '',
       actualArrival: '',
@@ -189,6 +191,7 @@ export function EditShipmentDrawer({
         const data = result.data as ShipmentWithItems;
         setShipment(data);
         form.reset({
+          shipmentNumber: data.shipmentNumber || '',
           shipmentDate: toDateInput(data.shipmentDate),
           estimatedArrival: toDateInput(data.estimatedArrival),
           actualArrival: toDateInput(data.actualArrival),
@@ -239,6 +242,7 @@ export function EditShipmentDrawer({
     setIsSubmitting(true);
     try {
       const result = await updateShipment(shipmentId, {
+        shipmentNumber: data.shipmentNumber,
         shipmentDate: new Date(data.shipmentDate),
         estimatedArrival: data.estimatedArrival ? new Date(data.estimatedArrival) : null,
         actualArrival: data.actualArrival ? new Date(data.actualArrival) : null,
@@ -263,6 +267,10 @@ export function EditShipmentDrawer({
       });
 
       if (!result.success) {
+        const numberError = 'errors' in result ? result.errors?.shipmentNumber?.[0] : undefined;
+        if (numberError) {
+          form.setError('shipmentNumber', { message: numberError });
+        }
         toast.error(result.error || 'Failed to update shipment');
         return;
       }
@@ -385,6 +393,24 @@ export function EditShipmentDrawer({
                 onSubmit={form.handleSubmit(handleSubmit)}
                 className="space-y-6"
               >
+                {/* Shipment # */}
+                <FormField
+                  control={form.control}
+                  name="shipmentNumber"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Shipment #</FormLabel>
+                      <FormControl>
+                        <Input disabled={isLocked} {...field} />
+                      </FormControl>
+                      <p className="text-xs text-muted-foreground">
+                        Freight update emails are matched by this number. It must be unique.
+                      </p>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
                 {/* Dates */}
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <FormField

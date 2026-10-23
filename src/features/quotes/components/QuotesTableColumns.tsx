@@ -13,7 +13,7 @@ import { DataTableColumnHeader } from '@/shared/components/data-table/DataTableC
 import { DataTableRowActions, createCommonRowActions } from '@/shared/components/data-table/DataTableRowActions';
 
 import type { QuoteListItem } from '../types';
-import { QUOTE_STATUS_LABELS, QUOTE_STATUS_COLORS } from '../types';
+import { QUOTE_STATUS_LABELS, QUOTE_STATUS_COLORS, isQuoteEditable } from '../types';
 
 // ============================================
 // TYPES
@@ -221,7 +221,7 @@ export function getQuotesTableColumns(
         const quote = row.original;
         // ONLY Super Admin can convert (from any status except already converted)
         const canConvert = options.isSuperAdmin === true && quote.status !== 'converted';
-        const canEdit = quote.status === 'draft';
+        const canEdit = isQuoteEditable(quote.status);
         const canDelete = quote.status === 'draft';
         const canSubmitForApproval = quote.status === 'draft';
         const canApproveReject = quote.status === 'pending_approval';

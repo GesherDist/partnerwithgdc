@@ -31,7 +31,6 @@ import {
 import { getCustomer } from '../actions';
 import { formatCreditLimit } from '../lib/schemas';
 import { CustomerContactsList } from './CustomerContactsList';
-import { pushCustomerLTVToPipedrive } from '@/features/pipedrive/actions';
 import { syncCustomerWithPipedriveAction, publishPurchaseHistoryAction } from '@/features/pipedrive/gdc/actions';
 import { describeTwoWaySync } from '@/features/pipedrive/gdc/two-way-sync.format';
 import type { Customer } from '../types';
@@ -128,28 +127,12 @@ function AddressCard({ label, address, icon }: {
 // ============================================
 
 function CustomerDetailsTab({ customer }: { customer: Customer }) {
-  const [isPushingLTV, startPushLTV] = useTransition();
   const [isSyncingOrg, startSyncOrg] = useTransition();
   const [isPublishingHistory, startPublishHistory] = useTransition();
 
   const isPipedriveLinked = Boolean(
     customer.pipedrivePersonId || customer.pipedriveDealId || customer.pipedriveOrgId
   );
-
-  const handlePushLTV = () => {
-    startPushLTV(async () => {
-      const result = await pushCustomerLTVToPipedrive(customer.id);
-      if (result.success && result.data) {
-        toast.success('LTV synced to Pipedrive', {
-          description: `Revenue: $${result.data.ltv.totalRevenue.toLocaleString()} | Orders: ${result.data.ltv.orderCount}`,
-        });
-      } else {
-        toast.error('Failed to sync LTV', {
-          description: result.error || 'Unknown error',
-        });
-      }
-    });
-  };
 
   const handleSyncOrganization = () => {
     startSyncOrg(async () => {
@@ -396,24 +379,6 @@ function CustomerDetailsTab({ customer }: { customer: Customer }) {
               </Button>
             )}
           </div>
-
-          {isPipedriveLinked && (
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handlePushLTV}
-                disabled={isPushingLTV}
-              >
-                {isPushingLTV ? (
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                ) : (
-                  <RefreshCw className="h-4 w-4 mr-2" />
-                )}
-                Sync LTV to Pipedrive
-              </Button>
-            </div>
-          )}
         </div>
       </Section>
     </div>

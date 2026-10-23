@@ -201,6 +201,22 @@ export async function transitionPackingListStatus(id: string, status: PackingLis
     // Packing list itself tracks delivery (tracking number, carrier, delivered date)
     // Only supplier/dropship orders create shipments (from PO confirmation)
 
+    // Full packing path: reduce on_hand/allocated at the warehouse when the
+    // packing list ships (quick ship does this in completePicking).
+    // 'shipped' is reachable only once (packed → shipped), so this runs once.
+    if (status === 'shipped') {
+      try {
+        const { PickTicketService } = await import('../services');
+        const { shipInventoryForPickTicket } = await import('../services/inventory-ship.service');
+        const ptResult = await PickTicketService.getPickTicketById(result.data.pickTicketId);
+        if (ptResult.success && ptResult.data) {
+          await shipInventoryForPickTicket(ptResult.data, userId);
+        }
+      } catch (error) {
+        console.error('[transitionPackingListStatus] Failed to ship inventory:', error);
+      }
+    }
+
     // When transitioning to 'delivered', update sales order status
     if (status === 'delivered') {
       try {

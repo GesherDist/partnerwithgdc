@@ -18,6 +18,13 @@ import type {
 
 const MODEL = 'gpt-4o';
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+// A date without a year is placed between 90 days before and ~9 months
+// after the email date: recent past events (delivered, discharged, LFD just
+// passed) keep this year, an early-year date in a late-year email is next year.
+const RECENT_PAST_DAYS = 90;
+const FUTURE_DAYS = 275;
+
 // Status keywords for fallback detection
 const STATUS_KEYWORDS: Record<ShipmentTrackingStatus, string[]> = {
   booked: ['booked', 'booking confirmed', 'booking received'],
@@ -101,6 +108,11 @@ ISSUE TYPES (if any issue detected):
 - additional_charges: Extra fees needed
 
 DATE FORMAT: Return dates as YYYY-MM-DD (e.g., 2025-08-25)
+- SEAIR is a US office: a date like 11/04 is MM/DD (November 4). Read it as DD/MM only when the first number is above 12 (e.g., 23/11).
+- If the email gives no year, use the EMAIL DATE (given with the email) to pick it:
+  - the date is on/after the email date, or up to 90 days before it -> the email date's year
+  - the date is more than 90 days before the email date -> the next year
+  - e.g., email date 2026-10-23: "11/04" -> 2026-11-04, "10/21" -> 2026-10-21, "01/20" -> 2027-01-20
 
 Return ONLY valid JSON in this exact format:
 {
@@ -138,18 +150,26 @@ Return ONLY valid JSON in this exact format:
  */
 export async function extractShippingInfo(
   emailSubject: string,
-  emailBody: string
+  emailBody: string,
+  emailDate?: string
 ): Promise<ShippingEmailExtraction> {
+  const parsedEmailDate = emailDate ? new Date(emailDate) : new Date();
+  const referenceDate = isNaN(parsedEmailDate.getTime()) ? new Date() : parsedEmailDate;
+  const finish = (extraction: ShippingEmailExtraction) =>
+    normalizeExtractionDates(extraction, referenceDate);
+
   try {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
       console.error('[Shipping] OPENAI_API_KEY not configured');
-      return fallbackExtraction(emailSubject, emailBody);
+      return finish(fallbackExtraction(emailSubject, emailBody));
     }
 
     const openai = new OpenAI({ apiKey });
 
     const userPrompt = `Extract shipping information from this forwarded email:
+
+EMAIL DATE: ${referenceDate.toISOString().slice(0, 10)}
 
 SUBJECT: ${emailSubject}
 
@@ -171,7 +191,7 @@ Return ONLY valid JSON, no markdown code blocks or additional text.`;
     const content = response.choices[0]?.message?.content;
     if (!content) {
       console.error('[Shipping] No response from OpenAI');
-      return fallbackExtraction(emailSubject, emailBody);
+      return finish(fallbackExtraction(emailSubject, emailBody));
     }
 
     // Parse JSON response
@@ -207,11 +227,65 @@ Return ONLY valid JSON, no markdown code blocks or additional text.`;
       }
     }
 
-    return extracted;
+    return finish(extracted);
   } catch (error) {
     console.error('[Shipping] Extraction error:', error);
-    return fallbackExtraction(emailSubject, emailBody);
+    return finish(fallbackExtraction(emailSubject, emailBody));
   }
+}
+
+// ============================================
+// DATE YEAR CORRECTION
+// ============================================
+
+/**
+ * Keep a YYYY-MM-DD date when it falls in the expected window around the
+ * email date; otherwise (wrong or guessed year, e.g. 2023 for "11/04") move it
+ * to the year that puts it in that window.
+ */
+export function resolveDateYear(value: string | null | undefined, emailDate: Date): string | null {
+  if (!value) {
+    return null;
+  }
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) {
+    return value;
+  }
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const reference = Date.UTC(emailDate.getUTCFullYear(), emailDate.getUTCMonth(), emailDate.getUTCDate());
+  const inWindow = (time: number) => {
+    const days = (time - reference) / DAY_MS;
+    return days >= -RECENT_PAST_DAYS && days <= FUTURE_DAYS;
+  };
+
+  if (inWindow(Date.UTC(Number(match[1]), month - 1, day))) {
+    return value;
+  }
+
+  const baseYear = emailDate.getUTCFullYear();
+  for (const year of [baseYear, baseYear + 1, baseYear - 1]) {
+    const time = Date.UTC(year, month - 1, day);
+    const date = new Date(time);
+    // Skip a day that does not exist in that year (Feb 29)
+    if (date.getUTCMonth() === month - 1 && date.getUTCDate() === day && inWindow(time)) {
+      return `${year}-${match[2]}-${match[3]}`;
+    }
+  }
+  return value;
+}
+
+function normalizeExtractionDates(
+  extraction: ShippingEmailExtraction,
+  emailDate: Date
+): ShippingEmailExtraction {
+  return {
+    ...extraction,
+    etaPort: resolveDateYear(extraction.etaPort, emailDate),
+    etaRamp: resolveDateYear(extraction.etaRamp, emailDate),
+    lfdDate: resolveDateYear(extraction.lfdDate, emailDate),
+    deliveryDate: resolveDateYear(extraction.deliveryDate, emailDate),
+  };
 }
 
 // ============================================

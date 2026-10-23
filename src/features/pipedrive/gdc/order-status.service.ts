@@ -5,8 +5,9 @@
  * from it (sales_orders.quote_id) give the deal's "ERP Order Status" field,
  * e.g. "Quote pending approval · QT-2026-00058" or "Shipped · SO-2600045".
  * The order's shipments give "Shipment ETA" (earliest open ETA, or
- * "Delivered") and "Container Status" (one entry per container). These two
- * are display only: they are never read back from Pipedrive.
+ * "Delivered") and "Container Status" (one entry per container), and its
+ * invoices give "Invoice Status" (e.g. "INV-2600012 · Paid"). These are
+ * display only: they are never read back from Pipedrive.
  *
  * The text is always computed from the ERP records, so every call writes the
  * current state and repeating a call is harmless; an unchanged field is not
@@ -131,6 +132,55 @@ export function shipmentFieldsText(shipments: ShipmentRow[]): { eta: string; con
   return { eta, containers: containers.length > 255 ? `${containers.slice(0, 252)}...` : containers };
 }
 
+// ============================================
+// INVOICE STATUS
+// ============================================
+
+export interface InvoiceRow {
+  invoice_number: string;
+  status: string;
+  grand_total: number | null;
+  balance_due: number | null;
+  due_date: string | null;
+}
+
+/** ERP amounts are integer cents */
+const money = (cents: number | null) =>
+  `$${((cents ?? 0) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/**
+ * Deal "Invoice Status": one entry per invoice of the order, e.g.
+ * "INV-2600012 · Sent · $60,000.00 due 2026-11-30" or "INV-2600012 · Paid".
+ * A sent / partly paid invoice past its due date shows as Overdue.
+ * No order yet: "". Order without an invoice: "Not invoiced yet".
+ * It reflects the ERP invoices; payments recorded only in QuickBooks show
+ * once they reach the ERP.
+ */
+export function invoiceStatusText(hasOrder: boolean, invoices: InvoiceRow[], today = new Date().toISOString().slice(0, 10)): string {
+  if (!hasOrder) {
+    return '';
+  }
+  const live = invoices.filter((i) => i.status !== 'cancelled');
+  const shown = live.length > 0 ? live : invoices;
+  if (shown.length === 0) {
+    return 'Not invoiced yet';
+  }
+  const text = shown
+    .map((i) => {
+      const due = i.due_date?.slice(0, 10) ?? null;
+      const open = ['sent', 'partial', 'overdue'].includes(i.status);
+      const overdue = i.status === 'overdue' || (open && due !== null && due < today);
+      if (i.status === 'paid') {return `${i.invoice_number} · Paid`;}
+      if (i.status === 'cancelled') {return `${i.invoice_number} · Cancelled`;}
+      if (i.status === 'draft') {return `${i.invoice_number} · Draft · ${money(i.grand_total)}`;}
+      if (overdue) {return `${i.invoice_number} · Overdue · ${money(i.balance_due)} open${due ? ` (due ${due})` : ''}`;}
+      if (i.status === 'partial') {return `${i.invoice_number} · Partially paid · ${money(i.balance_due)} open${due ? ` (due ${due})` : ''}`;}
+      return `${i.invoice_number} · Sent · ${money(i.balance_due ?? i.grand_total)}${due ? ` due ${due}` : ''}`;
+    })
+    .join(' | ');
+  return text.length > 255 ? `${text.slice(0, 252)}...` : text;
+}
+
 /**
  * Write the current ERP order status on one Pipedrive deal.
  */
@@ -148,6 +198,7 @@ export async function syncDealOrderStatus(dealId: number): Promise<OrderStatusSy
   }
   const etaField = fields.deal_shipment_eta?.code;
   const containerField = fields.deal_container_status?.code;
+  const invoiceField = fields.deal_invoice_status?.code;
 
   const { data: quote, error } = await db
     .from('quotes')
@@ -196,6 +247,22 @@ export async function syncDealOrderStatus(dealId: number): Promise<OrderStatusSy
     if (etaField) {desired[etaField] = shipping.eta;}
     if (containerField) {desired[containerField] = shipping.containers;}
   }
+  if (invoiceField) {
+    let invoices: InvoiceRow[] = [];
+    if (order) {
+      const { data, error: invoiceError } = await db
+        .from('invoices')
+        .select('invoice_number, status, grand_total, balance_due, due_date')
+        .eq('sales_order_id', order.id)
+        .is('deleted_at', null)
+        .order('created_at', { ascending: true });
+      if (invoiceError) {
+        throw new Error(`Failed to load the invoices of ${order.order_number}: ${invoiceError.message}`);
+      }
+      invoices = (data ?? []) as InvoiceRow[];
+    }
+    desired[invoiceField] = invoiceStatusText(Boolean(order), invoices);
+  }
 
   let current: Record<string, unknown>;
   try {
@@ -220,6 +287,24 @@ export async function syncDealOrderStatus(dealId: number): Promise<OrderStatusSy
     pipedriveProvider.request(connectionId, 'PATCH', `deals/${dealId}`, { custom_fields: changes })
   );
   return { status: 'written', message: `Deal ${dealId}: "${text}"`, text };
+}
+
+/**
+ * After an invoice change (created, sent, payment, cancelled, ...): update the
+ * deal of its sales order in the background. Never throws.
+ */
+export function syncInvoiceDealInBackground(invoiceId: string): void {
+  void (async () => {
+    try {
+      const { data } = await db.from('invoices').select('sales_order_id').eq('id', invoiceId).maybeSingle();
+      const salesOrderId = (data?.sales_order_id as string | null) ?? null;
+      if (salesOrderId) {
+        syncOrderStatusInBackground({ salesOrderId });
+      }
+    } catch (error) {
+      console.error('[Pipedrive] Invoice status sync failed:', error);
+    }
+  })();
 }
 
 /**
@@ -284,7 +369,7 @@ export async function reconcileRecentOrderStatuses(options: { sinceHours?: numbe
   failed: number;
 }> {
   const since = new Date(Date.now() - (options.sinceHours ?? 26) * 3600_000).toISOString();
-  const [quotes, orders, shipments] = await Promise.all([
+  const [quotes, orders, shipments, invoices] = await Promise.all([
     fetchAllRows<{ pipedrive_deal_id: number | null }>((from, to) =>
       db
         .from('quotes')
@@ -313,11 +398,21 @@ export async function reconcileRecentOrderStatuses(options: { sinceHours?: numbe
         .order('id', { ascending: true })
         .range(from, to)
     ),
+    // Invoices changed (payments, status, and later the QuickBooks payment pull)
+    fetchAllRows<{ sales_order_id: string | null }>((from, to) =>
+      db
+        .from('invoices')
+        .select('sales_order_id')
+        .not('sales_order_id', 'is', null)
+        .gte('updated_at', since)
+        .order('id', { ascending: true })
+        .range(from, to)
+    ),
   ]);
 
   const dealIds = new Set(quotes.map((q) => Number(q.pipedrive_deal_id)).filter((id) => id > 0));
   const quoteIds = new Set(orders.map((o) => o.quote_id).filter((id): id is string => Boolean(id)));
-  const shipmentOrderIds = [...new Set(shipments.map((s) => s.sales_order_id).filter((id): id is string => Boolean(id)))];
+  const shipmentOrderIds = [...new Set([...shipments, ...invoices].map((s) => s.sales_order_id).filter((id): id is string => Boolean(id)))];
   for (let start = 0; start < shipmentOrderIds.length; start += 200) {
     const { data, error } = await db
       .from('sales_orders')
@@ -325,7 +420,7 @@ export async function reconcileRecentOrderStatuses(options: { sinceHours?: numbe
       .in('id', shipmentOrderIds.slice(start, start + 200))
       .not('quote_id', 'is', null);
     if (error) {
-      throw new Error(`Failed to load the orders of changed shipments: ${error.message}`);
+      throw new Error(`Failed to load the orders of changed shipments / invoices: ${error.message}`);
     }
     for (const row of data ?? []) {quoteIds.add(row.quote_id as string);}
   }

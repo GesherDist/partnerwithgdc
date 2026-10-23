@@ -204,6 +204,16 @@ export const shipmentService = {
         };
       }
 
+      const shipmentNumber = validation.data.shipmentNumber;
+      if (shipmentNumber !== undefined && shipmentNumber !== existing.shipmentNumber
+        && await shipmentRepository.isShipmentNumberTaken(shipmentNumber, id)) {
+        return {
+          success: false,
+          error: `Shipment # "${shipmentNumber}" is already used by another shipment.`,
+          errors: { shipmentNumber: [`Shipment # "${shipmentNumber}" already exists`] },
+        };
+      }
+
       // Capture old data for audit before update
       const oldAuditData = shipmentToAuditData(existing);
 

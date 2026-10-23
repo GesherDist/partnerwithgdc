@@ -54,6 +54,11 @@ export const QUOTE_STATUS_TRANSITIONS: Record<QuoteStatus, QuoteStatus[]> = {
   converted: [],
 };
 
+/** A quote can be edited until it is converted to a sales order */
+export function isQuoteEditable(status: QuoteStatus): boolean {
+  return status !== 'converted';
+}
+
 // ============================================
 // DATABASE ENTITY TYPES
 // ============================================

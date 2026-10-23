@@ -9,6 +9,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { shipmentService } from '../services/shipment.service';
+import { poReceivingService } from '@/features/inventory/services/po-receiving.service';
 import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
 import type { AppUser } from '@/shared/stores/auth.store';
 import type { ShipmentListParams } from '../types';
@@ -213,9 +214,16 @@ export async function markShipmentDelivered(id: string) {
   if (!auth.ok) return auth.result;
 
   const userId = auth.user.id;
+  // Read before the update: stock is received only on the change to delivered
+  const wasDelivered = await poReceivingService.isShipmentDelivered(id);
   const result = await shipmentService.markDelivered(id, userId);
 
   if (result.success) {
+    // Container delivered: put clear stock POs into warehouse stock (once)
+    if (!wasDelivered) {
+      await poReceivingService.autoReceiveForShipment(id, userId);
+      revalidatePath('/inventory');
+    }
     revalidatePath('/shipments');
     revalidatePath(`/shipments/${id}`);
     syncShipmentToPipedrive(id);
@@ -312,6 +320,9 @@ export async function updateShipmentTrackingStatus(
       updateData.load_status = 'in_transit';
     }
 
+    // Read before the update: stock is received only on the change to delivered
+    const wasDelivered = await poReceivingService.isShipmentDelivered(id);
+
     const { error } = await db
       .from('shipments')
       .update(updateData)
@@ -321,6 +332,12 @@ export async function updateShipmentTrackingStatus(
     if (error) {
       console.error('updateShipmentTrackingStatus error:', error);
       return { success: false, error: 'Failed to update shipment status' };
+    }
+
+    // Container delivered: put clear stock POs into warehouse stock (once)
+    if (status === 'delivered' && !wasDelivered) {
+      await poReceivingService.autoReceiveForShipment(id, auth.user.id);
+      revalidatePath('/inventory');
     }
 
     revalidatePath('/shipments');
