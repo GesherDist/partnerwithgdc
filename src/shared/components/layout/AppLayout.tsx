@@ -9,6 +9,7 @@
 import { cn } from '@/shared/lib/utils';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
+import { SupportWidget } from '../support/SupportWidget';
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -39,6 +40,8 @@ export function AppLayout({ children, className, fullWidth = false }: AppLayoutP
           </div>
         </main>
       </div>
+
+      <SupportWidget />
     </div>
   );
 }
