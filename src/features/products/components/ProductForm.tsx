@@ -278,7 +278,7 @@ export function ProductForm({
               name="baseCost"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Base Cost *</FormLabel>
+                  <FormLabel>Purchase Cost *</FormLabel>
                   <FormControl>
                     <div className="relative">
                       <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
@@ -305,7 +305,7 @@ export function ProductForm({
               name="basePrice"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Base Price *</FormLabel>
+                  <FormLabel>Selling Price *</FormLabel>
                   <FormControl>
                     <div className="relative">
                       <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">

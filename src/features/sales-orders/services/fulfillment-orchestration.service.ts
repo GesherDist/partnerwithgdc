@@ -23,6 +23,7 @@ import {
   type MultiSourceAllocationRequest,
 } from './allocation-validation.service';
 import { db } from '@/shared/lib/supabase/database';
+import { productCycleCostRepository } from '@/features/products/repositories/product-cycle-cost.repository';
 import {
   logInventoryMovement,
   logDealerInventoryMovement,
@@ -82,6 +83,95 @@ export interface BatchAllocationResult {
 }
 
 // ============================================
+// LINE COST (sales_order_items.unit_cost)
+// ============================================
+
+/**
+ * The sales order line's cost is set once, by its first fulfillment
+ * allocation, and is not changed by later allocations:
+ * - Manufacturer (direct): the linked PO's order cycle cost (else the base cost)
+ * - GDC inventory / Platinum dealer: the sales order's order cycle cost (else
+ *   the base cost); these sources need an order series on the sales order
+ */
+type LineCostPlan =
+  | { ok: false; error: string }
+  | { ok: true; unitCost: number | null };
+
+async function planLineCost(
+  salesOrderItemId: string,
+  productId: string,
+  allocations: Array<{ fulfillmentSource: FulfillmentSource; purchaseOrderId?: string }>
+): Promise<LineCostPlan> {
+  const { data: item, error } = await db
+    .from('sales_order_items')
+    .select('unit_cost, sales_orders(order_series)')
+    .eq('id', salesOrderItemId)
+    .single();
+
+  if (error || !item) {
+    return { ok: false, error: 'Sales order item not found' };
+  }
+
+  const order = (Array.isArray(item.sales_orders) ? item.sales_orders[0] : item.sales_orders) as
+    | { order_series: string | null }
+    | null;
+  const orderSeries = order?.order_series || null;
+
+  if (!orderSeries && allocations.some((a) => a.fulfillmentSource !== 'direct')) {
+    return {
+      ok: false,
+      error: 'Select an Order Series on the sales order before allocating from GDC Inventory or a Platinum Dealer',
+    };
+  }
+
+  // Already set by an earlier allocation
+  if (item.unit_cost !== null && item.unit_cost !== undefined) {
+    return { ok: true, unitCost: null };
+  }
+
+  const first = allocations[0];
+  if (!first) {
+    return { ok: true, unitCost: null };
+  }
+
+  // PO line prices are not used: imported customer loads carry the customer's sale price
+  if (first.fulfillmentSource === 'direct' && first.purchaseOrderId) {
+    const { data: po } = await db
+      .from('purchase_orders')
+      .select('order_series')
+      .eq('id', first.purchaseOrderId)
+      .single();
+    const costs = await productCycleCostRepository.unitCostsFor([productId], po?.order_series || null);
+    return { ok: true, unitCost: costs.get(productId) ?? null };
+  }
+
+  const costs = await productCycleCostRepository.unitCostsFor([productId], orderSeries);
+  return { ok: true, unitCost: costs.get(productId) ?? null };
+}
+
+/**
+ * Save the planned cost on the line unless another allocation set it first.
+ * No cost (0, e.g. a product without a base cost) is not saved, so a later
+ * allocation can still set it.
+ */
+async function saveLineCost(salesOrderItemId: string, unitCost: number | null): Promise<void> {
+  if (unitCost === null || unitCost <= 0) {
+    return;
+  }
+
+  const { error } = await db
+    .from('sales_order_items')
+    .update({ unit_cost: unitCost, updated_at: new Date().toISOString() })
+    .eq('id', salesOrderItemId)
+    .is('unit_cost', null);
+
+  if (error) {
+    // The allocation stands; margin falls back to the order cycle cost
+    console.error('Failed to save sales order line cost:', error);
+  }
+}
+
+// ============================================
 // ALLOCATION CREATION
 // ============================================
 
@@ -115,6 +205,11 @@ export async function createSingleAllocation(
         success: false,
         error: validation.error || 'Validation failed',
       };
+    }
+
+    const costPlan = await planLineCost(params.salesOrderItemId, params.productId, [params]);
+    if (!costPlan.ok) {
+      return { success: false, error: costPlan.error };
     }
 
     // Step 2: Create allocation in database
@@ -194,6 +289,8 @@ export async function createSingleAllocation(
       };
     }
 
+    await saveLineCost(params.salesOrderItemId, costPlan.unitCost);
+
     return {
       success: true,
       data: allocation,
@@ -239,6 +336,11 @@ export async function createMultiSourceAllocation(
         success: false,
         error: validation.error || 'Validation failed',
       };
+    }
+
+    const costPlan = await planLineCost(params.salesOrderItemId, params.productId, params.allocations);
+    if (!costPlan.ok) {
+      return { success: false, error: costPlan.error };
     }
 
     // Step 2: Create all allocations
@@ -293,6 +395,8 @@ export async function createMultiSourceAllocation(
         error: failedInventory.error || 'Failed to allocate inventory',
       };
     }
+
+    await saveLineCost(params.salesOrderItemId, costPlan.unitCost);
 
     return {
       success: true,

@@ -15,6 +15,8 @@ import { createClient } from '@/shared/lib/supabase/server';
 import { getCurrentUser, hasPermission, hasAnyPermission } from '@/shared/lib/auth';
 import type { AppUser } from '@/shared/stores/auth.store';
 import type { POListParams, SupplierSummary } from '../types';
+import { productCycleCostRepository } from '@/features/products/repositories/product-cycle-cost.repository';
+import { ORDER_SERIES } from '@/shared/lib/global-data';
 import type {
   CreatePOInput,
   UpdatePOInput,
@@ -934,6 +936,29 @@ export async function getNextPONumber(): Promise<ActionResult<string>> {
   } catch (err) {
     console.error('[getNextPONumber] Error:', err);
     return { success: false, error: 'Failed to generate PO number' };
+  }
+}
+
+// ============================================
+// COST BY ORDER CYCLE (default PO line price)
+// ============================================
+
+/** Product cost (cents) by product id for one order series; products without one use their base cost */
+export async function getCycleCostsForOrderSeries(orderSeries: string): Promise<ActionResult<Record<string, number>>> {
+  const auth = await authorizeAny(['purchase_orders.create', 'purchase_orders.edit']);
+  if (!auth.ok) {
+    return auth.result;
+  }
+  if (!ORDER_SERIES.some((s) => s.code === orderSeries)) {
+    return { success: false, error: `Unknown order series: ${orderSeries}` };
+  }
+
+  try {
+    const costs = await productCycleCostRepository.mapBySeries(orderSeries);
+    return { success: true, data: costs };
+  } catch (err) {
+    console.error('[getCycleCostsForOrderSeries] Error:', err);
+    return { success: false, error: 'Failed to load order series costs' };
   }
 }
 

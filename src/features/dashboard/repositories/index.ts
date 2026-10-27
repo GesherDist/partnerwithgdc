@@ -8,6 +8,7 @@
  */
 
 import { createAdminClient } from '@/shared/lib/supabase/admin';
+import { productCycleCostRepository } from '@/features/products/repositories/product-cycle-cost.repository';
 import type { UnitsBySKUDataPoint, UnitsBySKUChartData, ProductLegendItem, ChannelPerformanceDataPoint, InventoryByLocation, DashboardStat, MarginDataPoint, RevenueDataPoint, DateRange, CommissionRevenueStats } from '../types';
 
 // Helper to format date as YYYY-MM-DD string
@@ -746,15 +747,17 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
         unit_cost,
         sku,
         description,
+        product_id,
         products (
           rim_size,
           name,
           base_cost,
           item_type
         ),
-        sales_orders ( is_commission_only )
+        sales_orders ( is_commission_only, order_series )
       `)
       .in('sales_order_id', ytdShipmentIds);
+    const cycleCost = await productCycleCostRepository.loadLookup();
 
     if (ytdItemsData) {
       // Helper function to check if item is a commission item
@@ -800,13 +803,14 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
         const quantity = item.quantity || 0;
         const unitPrice = item.unit_price || 0;
         const product = item.products as unknown as { rim_size: string | null; name: string | null; base_cost: number | null; item_type: string | null } | null;
-        // Use saved unit_cost if available, else fall back to product's base_cost
-        const itemCost = (item as { unit_cost?: number | null }).unit_cost ?? product?.base_cost ?? 0;
+        const order = item.sales_orders as unknown as { is_commission_only: boolean | null; order_series: string | null } | null;
+        // Saved unit_cost (cost snapshot) first, else the order cycle's cost, else products.base_cost
+        const itemCost = (item as { unit_cost?: number | null }).unit_cost ?? cycleCost(item.product_id, order?.order_series, product?.base_cost || 0);
 
         ytdUnits += quantity;
 
         // EXCLUDE commission items and commission-only orders (Galileo invoices the customer) from margin
-        const commissionOnlyOrder = (item.sales_orders as unknown as { is_commission_only: boolean | null } | null)?.is_commission_only === true;
+        const commissionOnlyOrder = order?.is_commission_only === true;
         if (!isCommissionItem(item) && !commissionOnlyOrder) {
           ytdTotalRevenue += unitPrice * quantity;
           ytdTotalCost += itemCost * quantity;
@@ -837,13 +841,15 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
         unit_cost,
         sku,
         description,
+        product_id,
         products (
           base_cost,
           item_type
         ),
-        sales_orders ( is_commission_only )
+        sales_orders ( is_commission_only, order_series )
       `)
       .in('sales_order_id', lastYearYtdShipmentIds);
+    const cycleCost = await productCycleCostRepository.loadLookup();
 
     if (lastYearYtdItemsData) {
       // Helper function to check if item is a commission item
@@ -870,13 +876,14 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
         const quantity = item.quantity || 0;
         const unitPrice = item.unit_price || 0;
         const product = item.products as unknown as { base_cost: number | null; item_type: string | null } | null;
-        // Use saved unit_cost if available, else fall back to product's base_cost
-        const itemCost = (item as { unit_cost?: number | null }).unit_cost ?? product?.base_cost ?? 0;
+        const order = item.sales_orders as unknown as { is_commission_only: boolean | null; order_series: string | null } | null;
+        // Saved unit_cost (cost snapshot) first, else the order cycle's cost, else products.base_cost
+        const itemCost = (item as { unit_cost?: number | null }).unit_cost ?? cycleCost(item.product_id, order?.order_series, product?.base_cost || 0);
 
         lastYearYtdUnits += quantity;
 
         // EXCLUDE commission items and commission-only orders (Galileo invoices the customer) from margin
-        const commissionOnlyOrder = (item.sales_orders as unknown as { is_commission_only: boolean | null } | null)?.is_commission_only === true;
+        const commissionOnlyOrder = order?.is_commission_only === true;
         if (!isCommissionItem(item) && !commissionOnlyOrder) {
           lastYearYtdTotalRevenue += unitPrice * quantity;
           lastYearYtdTotalCost += itemCost * quantity;
@@ -977,7 +984,7 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
     {
       id: 'blended-margin',
       title: 'Blended Margin (YTD)',
-      // (YTD revenue − YTD cost at products.base_cost) ÷ YTD revenue, commission lines excluded
+      // (YTD revenue − YTD cost at the order cycle's cost, else products.base_cost) ÷ YTD revenue, commission lines excluded
       value: ytdTotalRevenue > 0 ? `${ytdBlendedMargin.toFixed(1)}%` : '—',
       change: `${marginChange >= 0 ? '+' : ''}${marginChange.toFixed(1)}%`,
       trend: marginChange >= 0 ? 'up' : 'down',
@@ -1029,7 +1036,7 @@ export async function getMarginAnalysis(dateRange?: DateRange): Promise<MarginDa
   // Query sales_order_items with products for cost data
   // Ankur's Definition 3.2: Gross Profit = Revenue - COGS
   // Only count RECOGNIZED revenue (delivered/invoiced orders)
-  // unit_cost = saved cost snapshot at order creation (falls back to base_cost if null)
+  // unit_cost = cost saved by the first fulfillment allocation (null: order cycle cost, else base_cost)
   const { data, error } = await supabase
     .from('sales_order_items')
     .select(`
@@ -1040,13 +1047,16 @@ export async function getMarginAnalysis(dateRange?: DateRange): Promise<MarginDa
       sales_orders!inner (
         order_date,
         status,
-        deleted_at
+        deleted_at,
+        order_series,
+        is_commission_only
       ),
       products (
         id,
         base_cost,
         rim_size,
-        name
+        name,
+        item_type
       )
     `)
     .gte('sales_orders.order_date', startDate)
@@ -1058,6 +1068,8 @@ export async function getMarginAnalysis(dateRange?: DateRange): Promise<MarginDa
     console.error('Error fetching margin data:', error);
     return [];
   }
+
+  const cycleCost = await productCycleCostRepository.loadLookup();
 
   // Initialize monthly data structure
   interface MonthlyMarginData {
@@ -1108,10 +1120,13 @@ export async function getMarginAnalysis(dateRange?: DateRange): Promise<MarginDa
   // Process results
   if (data) {
     for (const item of data) {
-      const salesOrder = item.sales_orders as unknown as { order_date: string } | null;
-      const product = item.products as unknown as { id: string; base_cost: number; rim_size: string | null; name: string | null } | null;
+      const salesOrder = item.sales_orders as unknown as { order_date: string; order_series: string | null; is_commission_only: boolean | null } | null;
+      const product = item.products as unknown as { id: string; base_cost: number; rim_size: string | null; name: string | null; item_type: string | null } | null;
 
       if (!salesOrder?.order_date) continue;
+
+      // Tire margin only: no service lines (commission, handling) and no commission-only orders (Galileo invoices them)
+      if (product?.item_type === 'service' || salesOrder.is_commission_only === true) continue;
 
       const date = new Date(salesOrder.order_date);
       const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
@@ -1120,8 +1135,8 @@ export async function getMarginAnalysis(dateRange?: DateRange): Promise<MarginDa
 
       const quantity = item.quantity || 0;
       const unitPrice = item.unit_price || 0; // Selling price in cents
-      // Use saved unit_cost if available, else fall back to product's base_cost
-      const itemCost = (item as { unit_cost?: number | null }).unit_cost ?? product?.base_cost ?? 0;
+      // Saved unit_cost (cost snapshot) first, else the order cycle's cost, else products.base_cost (cents)
+      const itemCost = (item as { unit_cost?: number | null }).unit_cost ?? cycleCost(item.product_id, salesOrder.order_series, product?.base_cost || 0);
 
       const lineRevenue = unitPrice * quantity;
       const lineCost = itemCost * quantity;

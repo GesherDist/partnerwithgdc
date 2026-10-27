@@ -7,8 +7,9 @@
  * Similar to Sales Order's OrderItemsTable.
  */
 
-import { memo, useCallback, useState, useEffect } from 'react';
+import { memo, useCallback, useState, useEffect, useRef } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
+import { toast } from 'sonner';
 
 import { Button } from '@/shared/components/ui/button';
 import { Input } from '@/shared/components/ui/input';
@@ -30,6 +31,8 @@ import {
 } from '@/shared/components/ui/table';
 
 import { getProducts } from '@/features/products/actions';
+import { getCycleCostsForOrderSeries } from '../actions';
+import { priceLinesForSeries, seriesUnitCost } from '../lib/series-pricing';
 import { UNITS } from '@/shared/lib/global-data';
 import type { CreatePOItemDTO } from '../types';
 
@@ -53,6 +56,8 @@ interface ProductOption {
 interface POItemsTableProps {
   items: POItem[];
   onItemsChange: (items: POItem[]) => void;
+  /** Selected order series: line prices default to the product's cost for it */
+  orderSeries?: string;
 }
 
 interface POItemRowProps {
@@ -255,9 +260,15 @@ const POItemRow = memo(function POItemRow({
 function POItemsTableComponent({
   items,
   onItemsChange,
+  orderSeries,
 }: POItemsTableProps) {
   const [products, setProducts] = useState<ProductOption[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  // Product costs for the selected order series (cents by product id)
+  const [seriesCosts, setSeriesCosts] = useState<{ series: string; costs: Record<string, number> } | null>(null);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const pricedSeriesRef = useRef<string | null>(null);
 
   // Fetch products on mount
   useEffect(() => {
@@ -286,6 +297,48 @@ function POItemsTableComponent({
     }
   };
 
+  // Load the product costs of the selected order series
+  useEffect(() => {
+    if (!orderSeries) {
+      setSeriesCosts(null);
+      pricedSeriesRef.current = null;
+      return;
+    }
+    let cancelled = false;
+    getCycleCostsForOrderSeries(orderSeries).then((result) => {
+      if (cancelled) {
+        return;
+      }
+      if (result.success && result.data) {
+        setSeriesCosts({ series: orderSeries, costs: result.data });
+      } else {
+        setSeriesCosts(null);
+        toast.error(result.error || `Could not load ${orderSeries} costs, purchase cost is used`);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [orderSeries]);
+
+  const costFor = useCallback(
+    (product: ProductOption) => seriesUnitCost(product, seriesCosts?.costs),
+    [seriesCosts]
+  );
+
+  // When an order series is picked, set the price of tire lines to that series' cost
+  useEffect(() => {
+    if (!seriesCosts || isLoading || pricedSeriesRef.current === seriesCosts.series) {
+      return;
+    }
+    pricedSeriesRef.current = seriesCosts.series;
+    const { lines, changed } = priceLinesForSeries(itemsRef.current, products, seriesCosts.costs);
+    if (changed > 0) {
+      onItemsChange(lines);
+      toast.info(`Unit prices set to ${seriesCosts.series} cost`);
+    }
+  }, [seriesCosts, isLoading, products, onItemsChange]);
+
   // Handlers
   const handleAddLine = useCallback(() => {
     const newItem = createEmptyPOItem();
@@ -313,7 +366,7 @@ function POItemsTableComponent({
           if (product) {
             updatedItem.sku = product.sku;
             updatedItem.description = product.name;
-            updatedItem.unitPrice = product.baseCost;
+            updatedItem.unitPrice = costFor(product);
             updatedItem.itemType = product.itemType;
 
             // Set quantity to 1 for service/non_inventory
@@ -331,7 +384,7 @@ function POItemsTableComponent({
         return updatedItem;
       })
     );
-  }, [items, onItemsChange, products]);
+  }, [items, onItemsChange, products, costFor]);
 
   // ----------------------------------------
   // RENDER

@@ -108,8 +108,9 @@ export function RevenueChart({ data }: RevenueChartProps) {
 (Ankur's Definition 3.1: Recognized Revenue Only)
 
 Database Sources:
-• Sales Orders: grand_total WHERE status IN (delivered)
+• Sales Orders: grand_total WHERE status IN (delivered) (all lines, incl. tax and shipping)
 
+Excludes: commission-only orders (Galileo invoices the customer)
 Filtered by: order_date (Order Date)
 Status: delivered (recognized revenue only)
 Target: $220,000/month (hardcoded)
@@ -120,7 +121,7 @@ Last Year: Same period previous year`}
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Notes</p>
                     <div className="flex gap-2">
                       <div className="mt-0.5 h-4 w-0.5 rounded-full bg-primary/40 flex-shrink-0" />
-                      <p className="text-xs text-muted-foreground leading-relaxed">Monthly recognized revenue (delivered/invoiced orders only) vs target. Data grouped by month based on order date.</p>
+                      <p className="text-xs text-muted-foreground leading-relaxed">Monthly revenue of sales orders with status Delivered vs target. Data grouped by month based on order date.</p>
                     </div>
                   </div>
                 </div>
@@ -344,6 +345,7 @@ Database Sources:
 • Units: sales_order_items.quantity
 • Channel: customers.channel (OEM or Dealer)
 
+Excludes: commission-only orders (Galileo invoices the customer)
 Filtered by: order_date (Order Date)
 Status: delivered (recognized revenue only)`}
                     </div>
@@ -352,7 +354,7 @@ Status: delivered (recognized revenue only)`}
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Notes</p>
                     <div className="flex gap-2">
                       <div className="mt-0.5 h-4 w-0.5 rounded-full bg-primary/40 flex-shrink-0" />
-                      <p className="text-xs text-muted-foreground leading-relaxed">Recognized revenue (delivered/invoiced only) by channel. OEM = Original Equipment Manufacturers, Dealer = Independent dealers.</p>
+                      <p className="text-xs text-muted-foreground leading-relaxed">Revenue of sales orders with status Delivered, by channel. OEM = Original Equipment Manufacturers, Dealer = Independent dealers.</p>
                     </div>
                   </div>
                 </div>
@@ -471,12 +473,13 @@ export function MarginChart({ data }: MarginChartProps) {
 
 Where:
 • Revenue = sales_order_items.unit_price × quantity
-• COGS = products.base_cost × quantity
+• COGS = line cost saved by the first fulfillment allocation (sales_order_items.unit_cost), else the order cycle cost (product_cycle_costs), else products.base_cost × quantity
 
 Database Sources:
 • Sales: sales_order_items (unit_price, quantity)
-• Cost: products.base_cost
+• Cost: sales_order_items.unit_cost, else product_cycle_costs (by order cycle), else products.base_cost
 
+Excludes: service lines (commission, handling) and commission-only orders
 Filtered by: order_date (Order Date)
 Status: delivered (recognized revenue only)
 Target: 30% (hardcoded benchmark)`}
@@ -486,7 +489,7 @@ Target: 30% (hardcoded benchmark)`}
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Notes</p>
                     <div className="flex gap-2">
                       <div className="mt-0.5 h-4 w-0.5 rounded-full bg-primary/40 flex-shrink-0" />
-                      <p className="text-xs text-muted-foreground leading-relaxed">Gross profit margin on recognized revenue (delivered/invoiced orders). Target is 30% margin. Excludes service items and commissions.</p>
+                      <p className="text-xs text-muted-foreground leading-relaxed">Gross profit margin on the tire lines of sales orders with status Delivered. Target is 30% margin. Excludes service items and commission-only orders.</p>
                     </div>
                   </div>
                 </div>

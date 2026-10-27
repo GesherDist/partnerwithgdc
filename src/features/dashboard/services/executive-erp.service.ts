@@ -1,19 +1,29 @@
 /**
  * Executive dashboard — ERP figures (Ankur's spec, Oct 12 call decisions)
  *
- * Recognition rule: revenue, COGS and tire units come from the same
- * population — recognized customer invoices (not draft/cancelled) by invoice
- * date, tire lines only (product item_type 'inventory'). Credit notes
- * (issued/applied) reduce revenue on their credit-note date.
+ * Recognition rule (Ankur, Definitions 3.1-3.4 and 4.1-4.2): revenue, COGS
+ * and tire units come from the same population. A firm sales order's tires are
+ * recognized when the order is fulfilled (delivered); until then they are
+ * backlog. Delivery date: sales_orders.actual_delivery_date, else the latest
+ * actual_arrival of its delivered/invoiced shipments, else the order date for
+ * an order with status delivered. Revenue = tire line totals (net of line
+ * discounts, excl. tax) of the orders delivered in the period − credit notes
+ * (issued/applied) on their credit-note date.
  *
- * COGS calculation (updated Oct 27, 2026):
- * 1. Use saved unit_cost from sales_order_items if available (cost snapshot at order creation)
- * 2. Fall back to product's ERP cost (products.base_cost)
- * This ensures historical margins don't change when product costs change.
+ * COGS (client confirmation, Oct 21, 2026: "COGS from the ERP"), per tire:
+ * 1. the cost saved on the sales order line (sales_order_items.unit_cost,
+ *    set by the line's first fulfillment allocation: the order cycle cost of
+ *    the linked PO for manufacturer, else of the sales order), so historical
+ *    margins do not change when product costs change;
+ * 2. else the product's ERP cost for the sales order's order cycle
+ *    (product_cycle_costs; Ankur, Oct 23: costs vary by cycle);
+ * 3. else products.base_cost.
  * Tires with no cost make the figure incomplete (cogsComplete false).
+ * FIFO by container needs the real purchase cost per PO line, which the ERP
+ * does not record yet.
  *
  * Backlog (client confirmation): firm orders with status confirmed or
- * processing, less the tires already invoiced. Commission-only orders are not
+ * processing that are not delivered yet. Commission-only orders are not
  * Gesher revenue (Galileo invoices the customer) and are left out.
  *
  * Commission (Ankur, Sep 8 email / Sep 25 call): reported separately from tire
@@ -24,6 +34,7 @@
  */
 
 import { db } from '@/shared/lib/supabase/database';
+import { productCycleCostRepository } from '@/features/products/repositories/product-cycle-cost.repository';
 import {
   addDays,
   businessToday,
@@ -70,7 +81,7 @@ export interface ErpExecutiveFigures {
   asOf: string;
   periods: Record<PeriodKey, DateRange>;
   sales: Record<PeriodKey, SalesFigures>;
-  /** All recognized invoice sales (incl. non-tire lines) less credits — DSO denominator */
+  /** All recognized sales (delivered orders, incl. non-tire lines) less credits — DSO denominator */
   creditSales: Record<PeriodKey, number>;
   /** Purchase order totals by PO date — DPO denominator */
   purchases: Record<PeriodKey, number>;
@@ -93,17 +104,22 @@ export interface ErpExecutiveFigures {
   };
 }
 
-interface InvoiceLine {
+/** A recognized sale: a line of a firm sales order, dated by the order's delivery */
+interface SaleLine {
   date: string;
   order: string;
   productId: string | null;
-  salesOrderItemId: string | null;
+  salesOrderItemId: string;
+  orderSeries: string | null;
   quantity: number;
   lineTotal: number;
   isTire: boolean;
-  /** Line of a commission invoice (Gesher's commission from Galileo) */
-  isCommission: boolean;
 }
+
+/** Sales order statuses whose delivered tires are recognized */
+const RECOGNIZABLE_SO_STATUSES = ['confirmed', 'processing', 'shipped', 'delivered'];
+/** Shipment load statuses that mean the load reached the customer */
+const DELIVERED_LOAD_STATUSES = ['delivered', 'invoiced'];
 
 // ============================================
 // BUILD
@@ -119,12 +135,15 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
   const periods = getPeriods(asOf);
   const keys = Object.keys(periods) as PeriodKey[];
 
+  const cycleCostPromise = productCycleCostRepository.loadLookup();
   const [productsRes, invoicesRes, creditsRes, poRes, soRes, shipmentsRes, inventoryRes] = await Promise.all([
     db.from('products').select('id, item_type, base_cost'),
+    // Commission invoices to Galileo only; tire revenue comes from delivered sales orders
     db
       .from('invoices')
-      .select('invoice_number, invoice_date, status, invoice_type, invoice_items(product_id, sales_order_item_id, quantity, line_total)')
+      .select('invoice_number, invoice_date, status, invoice_type, invoice_items(line_total)')
       .is('deleted_at', null)
+      .eq('invoice_type', 'commission')
       .not('status', 'in', `(${NOT_RECOGNIZED.join(',')})`)
       .lte('invoice_date', asOf),
     db.from('credit_notes').select('credit_note_date, status, subtotal').in('status', ['issued', 'applied']),
@@ -135,12 +154,12 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
       .not('status', 'in', `(${OPEN_PO_EXCLUDED.join(',')})`),
     db
       .from('sales_orders')
-      .select('order_number, order_date, status, order_series, is_commission_only, commission_amount, commission_invoice_id, sales_order_items(id, product_id, quantity, customer_qty, line_total, unit_cost)')
+      .select('id, order_number, order_date, status, order_series, actual_delivery_date, is_commission_only, commission_amount, commission_invoice_id, sales_order_items(id, product_id, quantity, customer_qty, line_total, unit_cost)')
       .is('deleted_at', null)
       .not('status', 'in', '(draft,cancelled)'),
     db
       .from('shipments')
-      .select('purchase_order_id, container_number, eta_port_tracking, confirmed_eta, eta_to_port, estimated_arrival')
+      .select('purchase_order_id, sales_order_id, load_status, actual_arrival, container_number, eta_port_tracking, confirmed_eta, eta_to_port, estimated_arrival')
       .is('deleted_at', null),
     db.from('inventory').select('product_id, on_hand, allocated'),
   ]);
@@ -151,10 +170,11 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
   }
 
   const tireIds = new Set((productsRes.data ?? []).filter((p) => p.item_type === 'inventory').map((p) => String(p.id)));
-  // ERP cost per tire (cents); 0 = no cost recorded (fallback from products.base_cost)
+  // ERP cost per tire (cents); 0 = no cost recorded
   const productBaseCost = new Map((productsRes.data ?? []).map((p) => [String(p.id), Number(p.base_cost ?? 0)]));
+  const cycleCost = await cycleCostPromise;
 
-  // Build map of sales_order_item_id → saved unit_cost (cost snapshot at order creation)
+  // Build map of sales_order_item_id → saved unit_cost (set by the first fulfillment allocation)
   const itemSavedCost = new Map<string, number | null>();
   for (const so of soRes.data ?? []) {
     for (const item of (so.sales_order_items ?? []) as Array<Record<string, unknown>>) {
@@ -166,8 +186,13 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
     }
   }
 
-  // Cost lookup: uses saved unit_cost from sales_order_item if available, else product's base_cost
-  const costOf = (productId: string, qty: number, salesOrderItemId?: string | null): { cost: number | null; complete: boolean } => {
+  // Cost lookup: saved unit_cost of the sales order line, else the order cycle's cost, else the base cost
+  const costOf = (
+    productId: string,
+    qty: number,
+    salesOrderItemId: string | null,
+    orderSeries: string | null
+  ): { cost: number | null; complete: boolean } => {
     // Priority 1: Use saved unit_cost from sales_order_item
     if (salesOrderItemId && itemSavedCost.has(salesOrderItemId)) {
       const savedCost = itemSavedCost.get(salesOrderItemId);
@@ -175,41 +200,79 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
         return { cost: savedCost * qty, complete: true };
       }
     }
-    // Priority 2: Fall back to product's base_cost
-    const c = productBaseCost.get(productId) ?? 0;
+    // Priority 2 and 3: the order cycle's cost, else products.base_cost
+    const c = cycleCost(productId, orderSeries, productBaseCost.get(productId) ?? 0);
     return c > 0 ? { cost: c * qty, complete: true } : { cost: null, complete: false };
   };
+  // ---------- delivery date of each sales order (revenue recognition) ----------
+  const shipmentDelivery = new Map<string, string>();
+  for (const s of (shipmentsRes.data ?? []) as Array<Record<string, unknown>>) {
+    if (!s.sales_order_id || !s.actual_arrival || !DELIVERED_LOAD_STATUSES.includes(String(s.load_status))) {
+      continue;
+    }
+    const soId = String(s.sales_order_id);
+    const arrival = String(s.actual_arrival).slice(0, 10);
+    if (arrival > (shipmentDelivery.get(soId) ?? '')) {
+      shipmentDelivery.set(soId, arrival);
+    }
+  }
+  const deliveredOn = (so: Record<string, unknown>): string | null => {
+    if (!RECOGNIZABLE_SO_STATUSES.includes(String(so.status))) {
+      return null;
+    }
+    if (so.actual_delivery_date) {
+      return String(so.actual_delivery_date).slice(0, 10);
+    }
+    const fromShipment = shipmentDelivery.get(String(so.id));
+    if (fromShipment) {
+      return fromShipment;
+    }
+    return so.status === 'delivered' && so.order_date ? String(so.order_date).slice(0, 10) : null;
+  };
 
-  // ---------- invoice lines (recognized) ----------
-  const lines: InvoiceLine[] = [];
-  for (const inv of invoicesRes.data ?? []) {
-    for (const item of (inv.invoice_items ?? []) as Array<Record<string, unknown>>) {
+  // ---------- recognized sales: lines of delivered firm orders ----------
+  // Commission-only orders are Galileo's sales (Gesher earns the commission only)
+  const lines: SaleLine[] = [];
+  for (const so of soRes.data ?? []) {
+    const date = so.is_commission_only === true ? null : deliveredOn(so as Record<string, unknown>);
+    if (!date || date > asOf) {
+      continue;
+    }
+    for (const item of (so.sales_order_items ?? []) as Array<Record<string, unknown>>) {
       const productId = item.product_id ? String(item.product_id) : null;
       lines.push({
-        date: String(inv.invoice_date),
-        order: String(inv.invoice_number),
+        date,
+        order: String(so.order_number),
         productId,
-        salesOrderItemId: item.sales_order_item_id ? String(item.sales_order_item_id) : null,
+        salesOrderItemId: String(item.id),
+        orderSeries: so.order_series ? String(so.order_series) : null,
+        // Same quantity the line total is priced on
         quantity: Number(item.quantity ?? 0),
         lineTotal: Number(item.line_total ?? 0),
-        // Tire revenue: tire lines on customer invoices (commission invoices are not tire sales)
-        isTire: Boolean(productId && tireIds.has(productId)) && inv.invoice_type !== 'commission',
-        isCommission: inv.invoice_type === 'commission',
+        isTire: Boolean(productId && tireIds.has(productId)),
       });
     }
   }
   lines.sort((a, b) => a.date.localeCompare(b.date) || a.order.localeCompare(b.order));
+  const recognizedItems = new Set(lines.map((l) => l.salesOrderItemId));
+
+  // Commission invoice lines to Galileo (reported apart from tire revenue)
+  const commissionLines = (invoicesRes.data ?? []).flatMap((inv) =>
+    ((inv.invoice_items ?? []) as Array<Record<string, unknown>>).map((item) => ({
+      date: String(inv.invoice_date),
+      lineTotal: Number(item.line_total ?? 0),
+    }))
+  );
 
   const pos = [...(poRes.data ?? [])].sort(
     (a, b) => String(a.po_date).localeCompare(String(b.po_date)) || String(a.po_number).localeCompare(String(b.po_number))
   );
 
   // ---------- sales per period ----------
-  const lineCost = new Map<InvoiceLine, { cost: number | null; complete: boolean }>();
+  const lineCost = new Map<SaleLine, { cost: number | null; complete: boolean }>();
   for (const line of lines) {
     if (line.isTire && line.productId) {
-      // Pass salesOrderItemId to use saved unit_cost if available
-      lineCost.set(line, costOf(line.productId, line.quantity, line.salesOrderItemId));
+      lineCost.set(line, costOf(line.productId, line.quantity, line.salesOrderItemId, line.orderSeries));
     }
   }
   const credits = (creditsRes.data ?? []).map((c) => ({ date: String(c.credit_note_date), amount: Number(c.subtotal ?? 0) }));
@@ -254,7 +317,7 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
   const commission = {} as Record<PeriodKey, number>;
   for (const key of keys) {
     commission[key] = cents(
-      lines.filter((l) => l.isCommission && inRange(l.date, periods[key])).reduce((s, l) => s + l.lineTotal, 0)
+      commissionLines.filter((l) => inRange(l.date, periods[key])).reduce((s, l) => s + l.lineTotal, 0)
     );
   }
 
@@ -270,13 +333,7 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
     purchases[key] = cents(total);
   }
 
-  // ---------- backlog: firm orders not yet invoiced ----------
-  const invoicedBySoItem = new Map<string, number>();
-  for (const line of lines) {
-    if (line.salesOrderItemId) {
-      invoicedBySoItem.set(line.salesOrderItemId, (invoicedBySoItem.get(line.salesOrderItemId) ?? 0) + line.quantity);
-    }
-  }
+  // ---------- backlog: firm orders not delivered yet ----------
   const sos = [...(soRes.data ?? [])].sort((a, b) => String(a.order_date).localeCompare(String(b.order_date)));
   let backlogTires = 0;
   let backlogRevenue = 0;
@@ -303,8 +360,8 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
       if (!productId || !tireIds.has(productId)) {
         continue;
       }
-      const ordered = Number(item.customer_qty ?? item.quantity ?? 0);
-      const remaining = Math.max(0, ordered - (invoicedBySoItem.get(String(item.id)) ?? 0));
+      // A delivered order's tires are recognized revenue, not backlog
+      const remaining = recognizedItems.has(String(item.id)) ? 0 : Number(item.customer_qty ?? item.quantity ?? 0);
       if (remaining === 0) {
         continue;
       }
@@ -312,8 +369,7 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
       const unitNet = qty > 0 ? Number(item.line_total ?? 0) / qty : 0;
       backlogTires += remaining;
       backlogRevenue += remaining * unitNet;
-      // Pass item.id to use saved unit_cost if available
-      const c = costOf(productId, remaining, item.id ? String(item.id) : null);
+      const c = costOf(productId, remaining, item.id ? String(item.id) : null, so.order_series ? String(so.order_series) : null);
       if (c.cost !== null) {
         backlogCogs += c.cost;
         backlogAnyCost = true;

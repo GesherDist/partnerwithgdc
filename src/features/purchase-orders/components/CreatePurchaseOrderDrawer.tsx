@@ -125,6 +125,8 @@ export function CreatePurchaseOrderDrawer({
 
   // Watch PO Date for Expected Delivery Date validation
   const poDate = form.watch('poDate');
+  // Line prices default to the selected order series' product cost
+  const orderSeries = form.watch('orderSeries');
 
   // Load suppliers on mount
   useEffect(() => {
@@ -413,6 +415,9 @@ export function CreatePurchaseOrderDrawer({
                               ))}
                             </SelectContent>
                           </Select>
+                          <p className="text-xs text-muted-foreground">
+                            Tire prices are set to this series&apos; cost
+                          </p>
                           <FormMessage />
                         </FormItem>
                       )}
@@ -458,6 +463,7 @@ export function CreatePurchaseOrderDrawer({
                 <POItemsTable
                   items={items}
                   onItemsChange={setItems}
+                  orderSeries={orderSeries as string}
                 />
 
                 <Separator />

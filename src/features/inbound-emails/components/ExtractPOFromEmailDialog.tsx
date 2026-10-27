@@ -1100,7 +1100,7 @@ export function ExtractPOFromEmailDialog({
                                         {/* Base Cost and Base Price */}
                                         <div className="grid grid-cols-2 gap-2">
                                           <div className="space-y-1">
-                                            <Label className="text-xs text-muted-foreground">Base Cost</Label>
+                                            <Label className="text-xs text-muted-foreground">Purchase Cost</Label>
                                             <Input
                                               type="number"
                                               step="0.01"
@@ -1119,7 +1119,7 @@ export function ExtractPOFromEmailDialog({
                                             )}
                                           </div>
                                           <div className="space-y-1">
-                                            <Label className="text-xs text-muted-foreground">Base Price</Label>
+                                            <Label className="text-xs text-muted-foreground">Selling Price</Label>
                                             <Input
                                               type="number"
                                               step="0.01"

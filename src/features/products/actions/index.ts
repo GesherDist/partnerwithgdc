@@ -16,6 +16,9 @@ import { createProductSchema, updateProductSchema, productFormSchema, formToCrea
 import type { ProductListParams, Product, ProductTableRow, ProductWithFormattedPrices } from '../types';
 import { getCurrentUser, hasPermission, hasAnyPermission } from '@/shared/lib/auth';
 import type { AppUser } from '@/shared/stores/auth.store';
+import { productCycleCostRepository, type ProductCycleCost } from '../repositories/product-cycle-cost.repository';
+import { ORDER_SERIES } from '@/shared/lib/global-data';
+import { auditService } from '@/shared/lib/audit/audit-service';
 
 // ============================================
 // TYPES
@@ -532,5 +535,94 @@ export async function lookupQboAccountNames(accountIds: string[]): Promise<Actio
   } catch (error) {
     console.error('lookupQboAccountNames error:', error);
     return { success: false, error: 'Failed to lookup account names' };
+  }
+}
+
+// ============================================
+// COST BY ORDER CYCLE
+// ============================================
+
+const MAX_CYCLE_COST_DOLLARS = 1_000_000;
+
+/**
+ * Get the purchase cost per order cycle for a product
+ */
+export async function getProductCycleCosts(productId: string): Promise<ActionResult<ProductCycleCost[]>> {
+  const auth = await authorizeAny(['products.view_detail', 'products.edit']);
+  if (!auth.ok) {return auth.result;}
+
+  try {
+    const costs = await productCycleCostRepository.listByProduct(productId);
+    return { success: true, data: costs };
+  } catch (error) {
+    console.error('getProductCycleCosts error:', error);
+    return { success: false, error: 'Failed to load cycle costs' };
+  }
+}
+
+/**
+ * Set a product's cost for one order cycle (dollars). Pass null to remove it,
+ * so the cycle uses the product's base cost again.
+ */
+export async function saveProductCycleCost(
+  productId: string,
+  orderSeries: string,
+  costDollars: number | null
+): Promise<ActionResult<ProductCycleCost | null>> {
+  const auth = await authorize('products.edit');
+  if (!auth.ok) {return auth.result;}
+
+  if (!ORDER_SERIES.some((s) => s.code === orderSeries)) {
+    return { success: false, error: `Unknown order cycle: ${orderSeries}` };
+  }
+  if (costDollars !== null && (!Number.isFinite(costDollars) || costDollars < 0 || costDollars > MAX_CYCLE_COST_DOLLARS)) {
+    return { success: false, error: 'Cost must be a number between 0 and 1,000,000' };
+  }
+
+  try {
+    const product = await productService.getById(productId);
+    if (!product.success || !product.data) {
+      return { success: false, error: 'Product not found' };
+    }
+
+    const existing = await productCycleCostRepository.findOne(productId, orderSeries);
+    const userId = auth.user.id;
+    const label = `${product.data.sku} ${orderSeries}`;
+
+    if (costDollars === null) {
+      if (existing) {
+        await productCycleCostRepository.remove(productId, orderSeries);
+        auditService.logUpdate(
+          'products',
+          'Product',
+          productId,
+          { [`cycleCost_${orderSeries}`]: existing.cost },
+          { [`cycleCost_${orderSeries}`]: null },
+          { userId },
+          `Removed cycle cost: ${label}`
+        ).catch((err) => console.error('Failed to log cycle cost audit:', err));
+      }
+      return { success: true, data: null };
+    }
+
+    const cost = Math.round(costDollars * 100);
+    const saved = existing
+      ? await productCycleCostRepository.updateCost(existing.id, cost, userId)
+      : await productCycleCostRepository.create(productId, orderSeries, cost, userId);
+
+    auditService.logUpdate(
+      'products',
+      'Product',
+      productId,
+      { [`cycleCost_${orderSeries}`]: existing?.cost ?? null },
+      { [`cycleCost_${orderSeries}`]: cost },
+      { userId },
+      `Set cycle cost: ${label}`
+    ).catch((err) => console.error('Failed to log cycle cost audit:', err));
+
+    return { success: true, data: saved };
+  } catch (error) {
+    console.error('saveProductCycleCost error:', error);
+    return { success: false, error: 'Failed to save cycle cost' };
   }
 }

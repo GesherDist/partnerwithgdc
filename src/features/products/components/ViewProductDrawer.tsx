@@ -27,6 +27,7 @@ import { getProduct } from '../actions';
 // import { lookupQboAccountNames } from '../actions'; // COMMENTED OUT - QBO disabled
 import type { ProductWithFormattedPrices, ProductStatus, ProductItemType } from '../types';
 import { ProductPriceMatrix } from '@/features/price-matrix/components';
+import { ProductCycleCosts } from './ProductCycleCosts';
 
 // ============================================
 // TYPES
@@ -281,14 +282,14 @@ export function ViewProductDrawer({
                 </Section>
 
                 {/* Base Pricing */}
-                <Section title="Base Pricing">
+                <Section title="Pricing">
                   <div className="grid grid-cols-2 gap-4">
                     <InfoItem
-                      label="Base Cost"
+                      label="Purchase Cost"
                       value={<span className="text-lg font-bold">{product.formattedBaseCost}</span>}
                     />
                     <InfoItem
-                      label="Base Price"
+                      label="Selling Price"
                       value={<span className="text-lg font-bold">{product.formattedBasePrice}</span>}
                     />
                     <InfoItem
@@ -314,6 +315,10 @@ export function ViewProductDrawer({
                     />
                   </div>
                 </Section>
+
+                {product.itemType === 'inventory' && (
+                  <ProductCycleCosts productId={product.id} baseCost={product.baseCost} canEdit={canEdit} />
+                )}
 
                 {/* Channel Pricing (Price Matrix) */}
                 <ProductPriceMatrix productId={product.id} />

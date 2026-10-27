@@ -24,7 +24,6 @@ import type {
 } from '../types';
 import { DEFAULT_COMMISSION_RATE_CENTS } from '../types';
 import { calculateOrderTotals, calculateLineTotal } from '../lib/schemas';
-import { getCurrentUnitCosts } from '@/features/products/lib/cycle-cost';
 
 // ============================================
 // DATABASE ROW TYPES
@@ -512,11 +511,7 @@ class SalesOrderRepositoryImpl {
       throw new Error(`Failed to create sales order: ${orderError.message}`);
     }
 
-    // Get product costs for cost snapshot (Decision D1-A: use base_cost)
-    const productIds = data.items.map((item) => item.productId);
-    const productCosts = await getCurrentUnitCosts(productIds);
-
-    // Insert items with cost snapshot
+    // unit_cost stays empty until the line's first fulfillment allocation sets it
     const itemsToInsert = data.items.map((item, index) => ({
       sales_order_id: order.id,
       product_id: item.productId,
@@ -526,7 +521,7 @@ class SalesOrderRepositoryImpl {
       customer_qty: item.customerQty || item.quantity, // Default to quantity if not provided
       unit_code: item.unitCode,
       unit_price: item.unitPrice,
-      unit_cost: productCosts.get(item.productId) ?? null, // Cost snapshot at order creation
+      unit_cost: null,
       discount_percent: item.discountPercent,
       tax_rate: item.taxRate,
       line_total: calculateLineTotal(item.quantity, item.unitPrice, item.discountPercent),
@@ -737,10 +732,6 @@ class SalesOrderRepositoryImpl {
 
     const sortOrder = (maxSortData?.sort_order || 0) + 1;
 
-    // Get product cost for cost snapshot
-    const productCosts = await getCurrentUnitCosts([item.productId]);
-    const unitCost = productCosts.get(item.productId) ?? null;
-
     const { data, error } = await db
       .from('sales_order_items')
       .insert({
@@ -751,7 +742,7 @@ class SalesOrderRepositoryImpl {
         quantity: item.quantity,
         unit_code: item.unitCode,
         unit_price: item.unitPrice,
-        unit_cost: unitCost, // Cost snapshot at item creation
+        unit_cost: null, // Set by the line's first fulfillment allocation
         discount_percent: item.discountPercent,
         tax_rate: item.taxRate,
         line_total: calculateLineTotal(item.quantity, item.unitPrice, item.discountPercent),
@@ -811,11 +802,9 @@ class SalesOrderRepositoryImpl {
     if (data.batchNumber !== undefined) {updateData.batch_number = data.batchNumber;}
     if (data.serialNumber !== undefined) {updateData.serial_number = data.serialNumber;}
 
-    // Update unit_cost ONLY when product changes (Decision D2)
-    // When quantity or price changes, the cost stays the same
+    // A new product clears the saved cost; quantity or price changes keep it
     if (data.productId !== undefined && data.productId !== currentItem.product_id) {
-      const productCosts = await getCurrentUnitCosts([data.productId]);
-      updateData.unit_cost = productCosts.get(data.productId) ?? null;
+      updateData.unit_cost = null;
     }
 
     // Recalculate line total
@@ -889,7 +878,7 @@ class SalesOrderRepositoryImpl {
     // Step 1: Get existing items (including unit_cost for preservation)
     const { data: existingItems, error: fetchError } = await db
       .from('sales_order_items')
-      .select('*, unit_cost')
+      .select('*')
       .eq('sales_order_id', orderId)
       .order('sort_order');
 
@@ -902,10 +891,6 @@ class SalesOrderRepositoryImpl {
     const existingItemsMap = new Map(
       (existingItems || []).map((item) => [item.id, item])
     );
-
-    // Get product costs for all items upfront (for new items and product changes)
-    const allProductIds = items.map((item: any) => item.productId);
-    const productCosts = await getCurrentUnitCosts(allProductIds);
 
     // Step 2: Delete items that are no longer in the list
     const newItemIds = items
@@ -954,18 +939,10 @@ class SalesOrderRepositoryImpl {
       const existsInDB = isValidUUID && existingItemsMap.has(item.id);
       const existingItem = existsInDB ? existingItemsMap.get(item.id) : null;
 
-      // Determine unit_cost:
-      // - For existing items where product didn't change: keep existing unit_cost
-      // - For existing items where product changed: get new cost
-      // - For new items: get cost from productCosts map
-      let unitCost: number | null;
-      if (existsInDB && existingItem && existingItem.product_id === item.productId) {
-        // Product didn't change - keep existing cost
-        unitCost = existingItem.unit_cost;
-      } else {
-        // New item or product changed - get new cost
-        unitCost = productCosts.get(item.productId) ?? null;
-      }
+      // Keep the saved cost while the product is unchanged; new lines and product
+      // changes start empty until a fulfillment allocation sets the cost
+      const unitCost: number | null =
+        existsInDB && existingItem && existingItem.product_id === item.productId ? existingItem.unit_cost : null;
 
       const itemData = {
         product_id: item.productId,
@@ -975,7 +952,7 @@ class SalesOrderRepositoryImpl {
         customer_qty: item.customerQty || item.quantity,
         unit_code: item.unitCode,
         unit_price: item.unitPrice,
-        unit_cost: unitCost, // Cost snapshot (preserved if product unchanged)
+        unit_cost: unitCost,
         discount_percent: item.discountPercent,
         tax_rate: item.taxRate,
         line_total: calculateLineTotal(item.quantity, item.unitPrice, item.discountPercent),

@@ -104,7 +104,7 @@ export function getProductsTableColumns(options: ColumnOptions = {}): ColumnDef<
     },
     {
       accessorKey: 'formattedBaseCost',
-      header: ({ column }) => <DataTableColumnHeader column={column} title="Cost" />,
+      header: ({ column }) => <DataTableColumnHeader column={column} title="Purchase Cost" />,
       cell: ({ row }) => (
         <div className="text-right font-mono text-sm">
           {row.getValue('formattedBaseCost')}
@@ -113,7 +113,7 @@ export function getProductsTableColumns(options: ColumnOptions = {}): ColumnDef<
     },
     {
       accessorKey: 'formattedBasePrice',
-      header: ({ column }) => <DataTableColumnHeader column={column} title="Price" />,
+      header: ({ column }) => <DataTableColumnHeader column={column} title="Selling Price" />,
       cell: ({ row }) => (
         <div className="text-right font-mono text-sm">
           {row.getValue('formattedBasePrice')}

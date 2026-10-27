@@ -7,3 +7,4 @@ export { ProductFormDialog } from './ProductFormDialog';
 export { ProductsTable } from './ProductsTable';
 export { getProductsTableColumns } from './ProductsTableColumns';
 export { ViewProductDrawer } from './ViewProductDrawer';
+export { ProductCycleCosts } from './ProductCycleCosts';

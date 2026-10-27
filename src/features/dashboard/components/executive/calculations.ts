@@ -15,7 +15,7 @@ export interface CalcItem {
 }
 
 const QB_COA = 'QuickBooks, using Settings › QuickBooks › Chart of Accounts';
-const ERP_COST = 'ERP product cost (products.base_cost) × tires, per client confirmation (COGS from the ERP). The note "Some tires have no ERP cost" means a tire product has no cost entered';
+const ERP_COST = 'ERP cost per tire × tires, per client confirmation (COGS from the ERP): the cost saved on the sales order line by its first fulfillment allocation (order cycle cost of the linked PO for Manufacturer, else of the sales order), else the sales order cycle cost (Products › Cost by Order Cycle), else the purchase cost. The note "Some tires have no ERP cost" means a tire product has no cost entered';
 const PY_NOTE = 'PY: "since go-live" — shown as — while the ERP has no prior-year data';
 
 export const CALCULATIONS: Record<string, CalcItem[]> = {
@@ -65,7 +65,7 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
     {
       kpi: 'DSO',
       formula: '= average AR ÷ net credit sales × days in the period',
-      source: 'Average AR: QuickBooks month-end balances (PY: prior-year month-ends) · Credit sales: ERP invoices (not draft/cancelled) − credit notes',
+      source: 'Average AR: QuickBooks month-end balances (PY: prior-year month-ends) · Credit sales: delivered sales orders (all lines, commission-only orders excluded) − credit notes',
       status: 'live',
     },
     {
@@ -100,11 +100,11 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
   '2.1': [
     {
       kpi: 'Revenue',
-      formula: '= Σ tire line totals on customer invoices (not draft/cancelled) dated in the period, net of line discounts, excl. tax − credit notes (issued/applied) in the period',
-      source: 'ERP invoices · tires = products of type Inventory; commission invoices excluded',
+      formula: '= Σ tire line totals of firm sales orders delivered in the period (Ankur 3.1: recognized when fulfilled), net of line discounts, excl. tax − credit notes (issued/applied) in the period',
+      source: 'ERP sales orders · delivery date = actual delivery date, else delivered shipment arrival, else order date when status is Delivered · tires = products of type Inventory · commission-only orders excluded',
       status: 'live',
     },
-    { kpi: 'COGS', formula: '= ERP cost of the same invoiced tires (tires × product cost)', source: ERP_COST, status: 'live' },
+    { kpi: 'COGS', formula: '= ERP cost of the same delivered tires (tires × product cost)', source: ERP_COST, status: 'live' },
     { kpi: 'Gross Profit', formula: '= Revenue − COGS; % = Gross Profit ÷ Revenue', source: 'Calculated', status: 'live' },
     {
       kpi: 'OPEX',
@@ -135,7 +135,7 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
     },
   ],
   '2.2': [
-    { kpi: 'Tires Sold', formula: '= Σ quantity of the same invoiced tire lines used for Revenue', source: 'ERP invoices', status: 'live' },
+    { kpi: 'Tires Sold', formula: '= Σ quantity of the same delivered tire lines used for Revenue', source: 'ERP sales orders', status: 'live' },
     { kpi: 'Revenue / Tire', formula: '= Revenue ÷ Tires Sold', source: 'Calculated', status: 'live' },
     { kpi: 'OPEX / Tire', formula: '= OPEX ÷ Tires Sold', source: 'QuickBooks OPEX ÷ ERP tires', status: 'live' },
     { kpi: 'COGS / GP / OP per Tire', formula: '= each line ÷ Tires Sold', source: 'Calculated', status: 'live' },
@@ -154,8 +154,8 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
   '3.1': [
     {
       kpi: 'Backlog Tires',
-      formula: '= Σ (tires ordered − tires already invoiced) on firm sales orders still confirmed or processing (client definition)',
-      source: 'ERP sales orders + invoices · no quotes or pipeline · commission-only orders excluded (Galileo invoices the customer; see Commission Revenue)',
+      formula: '= Σ tires on firm sales orders still confirmed or processing and not delivered yet (Ankur 4.1: firm ordered − fulfilled)',
+      source: 'ERP sales orders · no quotes or pipeline · commission-only orders excluded (Galileo invoices the customer; see Commission Revenue)',
       status: 'live',
     },
     { kpi: 'Backlog Revenue', formula: '= remaining tires × net unit price of the sales order line', source: 'ERP sales orders', status: 'live' },
@@ -179,7 +179,7 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
     },
     {
       kpi: 'Arrival Window',
-      formula: '= earliest – latest ETA of the cycle’s shipments (tracking ETA, else confirmed ETA, else ETA to port; PO date if no shipment)',
+      formula: '= earliest – latest ETA of the cycle’s shipments (tracking ETA, else confirmed ETA, else ETA to port, else estimated arrival); a PO without a shipment ETA uses its confirmed ETA, else its expected delivery date',
       source: 'ERP shipments / CMA tracking',
       status: 'live',
     },
@@ -196,7 +196,7 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
       source: 'ERP sales orders',
       status: 'live',
     },
-    { kpi: 'Projected Uncommitted at Arrival', formula: '= max(0, Unsold − Actual Velocity × Weeks Left)', source: 'Calculated', status: 'live' },
+    { kpi: 'Projected Uncommitted at Arrival', formula: '= max(0, Unsold − Actual Velocity × Weeks Left); = Unsold once the arrival window has started', source: 'Calculated', status: 'live' },
   ],
   '4.2': [
     {
@@ -210,8 +210,8 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
     { kpi: 'Uncommitted Inventory', formula: '= max(0, tires on hand − tires allocated to orders)', source: 'ERP inventory', status: 'live' },
     {
       kpi: 'Uncommitted Months of Supply',
-      formula: '= Uncommitted ÷ average monthly invoiced tires over the last 3 completed months',
-      source: 'ERP inventory + invoices',
+      formula: '= Uncommitted ÷ average monthly delivered tires over the last 3 completed months',
+      source: 'ERP inventory + sales orders',
       status: 'live',
     },
     {

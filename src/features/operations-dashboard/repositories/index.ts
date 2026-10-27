@@ -6,6 +6,7 @@
  */
 
 import { createAdminClient } from '@/shared/lib/supabase/admin';
+import { ORDER_SERIES } from '@/shared/lib/global-data';
 import type {
   OperationsStats,
   SKUBreakdown,
@@ -2421,8 +2422,6 @@ export function getAllGDCInventories(filters?: OperationsFilters): Promise<GDCIn
 }
 
 async function fetchAllGDCInventories(filters?: OperationsFilters): Promise<GDCInventoryData[]> {
-  const { ORDER_SERIES } = await import('@/shared/lib/global-data');
-
   return Promise.all(
     ORDER_SERIES.map(async (series) => {
       try {

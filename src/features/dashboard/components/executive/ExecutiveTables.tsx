@@ -251,7 +251,7 @@ function Status({ model }: { model: ExecutiveDashboardModel }) {
           QuickBooks sandbox
         </Badge>
       )}
-      <span>· PY = same period last year · averages use month-end balances · revenue and tires = invoiced tires</span>
+      <span>· PY = same period last year · averages use month-end balances · revenue and tires = tires on delivered orders</span>
     </div>
   );
 }
@@ -382,7 +382,7 @@ export function ProfitabilityTables() {
           <SpecTable
             id="2.1"
             title="Profitability"
-            description="Revenue = invoiced tire sales net of discounts and credit notes (excl. tax). OPEX from QuickBooks (chart of accounts)."
+            description="Revenue = tire sales on orders delivered in the period, net of discounts and credit notes (excl. tax). OPEX from QuickBooks (chart of accounts)."
             columns={C4}
             rows={[
               { label: 'Revenue', format: 'money', cells: m.profitability.revenue },
@@ -431,7 +431,7 @@ export function ProfitabilityTables() {
             <SpecTable
               id="3.1"
               title="Backlog Summary"
-              description="Firm sales orders (confirmed or processing), tires not yet invoiced. Commission-only orders excluded."
+              description="Firm sales orders (confirmed or processing), tires not delivered yet. Commission-only orders excluded."
               columns={AVG}
               rows={[
                 { label: 'Backlog Tires', format: 'count', cells: m.backlog.tires },

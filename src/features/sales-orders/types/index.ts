@@ -251,7 +251,7 @@ export interface SalesOrderItem {
   customerQty: number; // Customer's actual order quantity (NEVER changes)
   unitCode: string;
   unitPrice: number; // cents (selling price)
-  unitCost: number | null; // cents - Product cost snapshot at order creation. NULL for legacy orders (uses fallback: cycle cost or base cost)
+  unitCost: number | null; // cents - set by the first fulfillment allocation. NULL until then (uses fallback: cycle cost or base cost)
   discountPercent: number;
   taxRate: number;
   lineTotal: number; // cents
