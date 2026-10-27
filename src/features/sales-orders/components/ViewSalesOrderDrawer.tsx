@@ -43,7 +43,7 @@ import {
 } from '@/shared/components/ui/alert-dialog';
 import { Textarea } from '@/shared/components/ui/textarea';
 import { Label } from '@/shared/components/ui/label';
-import { getSalesOrder, releaseSalesOrderHold, confirmSalesOrder, cancelSalesOrder } from '../actions';
+import { getSalesOrder, releaseSalesOrderHold, confirmSalesOrder, cancelSalesOrder, updateSalesOrderSeries } from '../actions';
 import { createInvoiceFromSalesOrder, getInvoiceBySalesOrder } from '@/features/invoices/actions';
 import type { InvoiceListItem } from '@/features/invoices/types';
 import type { SalesOrderWithItems } from '../types';
@@ -52,9 +52,15 @@ import {
   ORDER_STATUS_COLORS,
   ORDER_CREDIT_STATUS_LABELS,
   ORDER_CREDIT_STATUS_COLORS,
-  ORDER_SERIES_LABELS,
-  type OrderSeries,
+  ORDER_SERIES_OPTIONS,
 } from '../types';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/shared/components/ui/select';
 import { ConfirmAllocationsModal } from './ConfirmAllocationsModal';
 import { toast } from 'sonner';
 import { AllocationManager } from './AllocationManager';
@@ -204,6 +210,7 @@ const [isReleasingHold, setIsReleasingHold] = useState(false);
   const [showPdfModal, setShowPdfModal] = useState(false);
   const [showInvoicePdfModal, setShowInvoicePdfModal] = useState(false);
   const [existingInvoice, setExistingInvoice] = useState<InvoiceListItem | null>(null);
+  const [isUpdatingOrderSeries, setIsUpdatingOrderSeries] = useState(false);
 
   // ----------------------------------------
   // EFFECTS
@@ -286,6 +293,27 @@ const handleReleaseHold = async () => {
     }
   };
 
+  const handleOrderSeriesChange = async (newValue: string) => {
+    if (!order) { return; }
+
+    setIsUpdatingOrderSeries(true);
+    try {
+      const orderSeriesValue = newValue === 'none' ? null : newValue;
+      const result = await updateSalesOrderSeries(order.id, orderSeriesValue);
+      if (result.success) {
+        toast.success('Order series updated');
+        // Refresh order data
+        await fetchOrder();
+      } else {
+        toast.error(result.error || 'Failed to update order series');
+      }
+    } catch {
+      toast.error('Failed to update order series');
+    } finally {
+      setIsUpdatingOrderSeries(false);
+    }
+  };
+
   // Check Order Series before opening confirm dialog
   const handleConfirmClick = async () => {
     if (!order) {
@@ -295,8 +323,8 @@ const handleReleaseHold = async () => {
     setIsValidating(true);
 
     try {
-      // Validation: Check all items are fully allocated
-      const { validateOrderFullyAllocatedAction } = await import('@/features/sales-orders/actions/fulfillment-allocation.actions');
+      // Validation 1: Check all items are fully allocated
+      const { validateOrderFullyAllocatedAction, checkOrderSeriesRequiredAction } = await import('@/features/sales-orders/actions/fulfillment-allocation.actions');
       const validationResult = await validateOrderFullyAllocatedAction(order.id);
 
       if (!validationResult.success) {
@@ -311,6 +339,23 @@ const handleReleaseHold = async () => {
         toast.error(
           `Cannot confirm order. ${unallocatedItems.length} item(s) need allocation. Please allocate fulfillment sources before confirming.`,
           { duration: 5000 }
+        );
+        return;
+      }
+
+      // Validation 2: Check Order Series is set if required
+      // Rule: If any allocation is non-direct (GDC/Dealer inventory), Order Series is required
+      const orderSeriesCheck = await checkOrderSeriesRequiredAction(order.id);
+
+      if (!orderSeriesCheck.success) {
+        toast.error(orderSeriesCheck.error || 'Failed to validate order series requirement');
+        return;
+      }
+
+      if (orderSeriesCheck.data?.required && !order.orderSeries) {
+        toast.error(
+          'Order Series is required. Please select an Order Series (GDC 0, GDC 1, GDC 2, or GDC 3) before confirming. This is required because the order has inventory or dealer allocations.',
+          { duration: 6000 }
         );
         return;
       }
@@ -523,13 +568,36 @@ const handleReleaseHold = async () => {
                       value={order.customerPoNumber || '-'}
                       icon={<FileText className="h-4 w-4" />}
                     />
-                    {order.orderSeries && (
-                      <InfoItem
-                        label="Order Series"
-                        value={ORDER_SERIES_LABELS[order.orderSeries as OrderSeries] || order.orderSeries}
-                        icon={<Package className="h-4 w-4" />}
-                      />
-                    )}
+                    {/* Order Series - Always visible with inline edit */}
+                    <div className="flex items-start gap-3">
+                      <div className="text-muted-foreground mt-0.5 flex-shrink-0">
+                        <Package className="h-4 w-4" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs text-muted-foreground mb-0.5">Order Series</div>
+                        <Select
+                          value={order.orderSeries || 'none'}
+                          onValueChange={handleOrderSeriesChange}
+                          disabled={isUpdatingOrderSeries}
+                        >
+                          <SelectTrigger className="h-8 w-[140px] text-sm">
+                            {isUpdatingOrderSeries ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <SelectValue placeholder="Select series" />
+                            )}
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">Not Set</SelectItem>
+                            {ORDER_SERIES_OPTIONS.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
 
                     {order.pickTickets && order.pickTickets.length > 0 && (
                       <InfoItem

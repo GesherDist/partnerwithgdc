@@ -628,6 +628,85 @@ export async function validateOrderFullyAllocatedAction(
 }
 
 // ============================================
+// ORDER SERIES VALIDATION
+// ============================================
+
+/**
+ * Check if Order Series is required for this sales order
+ *
+ * Rules:
+ * - If ALL allocations are "direct" (Manufacturer) → Order Series NOT required
+ * - If ANY allocation is non-direct (gdc_inventory, platinum_dealer_inventory, platinum_dealer_fulfillment) → Order Series IS required
+ *
+ * Reason: GDC inventory cycles need tracking, but direct manufacturer shipments don't
+ */
+export async function checkOrderSeriesRequiredAction(
+  salesOrderId: string
+): Promise<
+  ActionResult<{
+    required: boolean;
+    hasNonDirectAllocations: boolean;
+    nonDirectSources: string[];
+  }>
+> {
+  try {
+    // Get order with items
+    const { getSalesOrder } = await import('@/features/sales-orders/actions');
+    const orderResult = await getSalesOrder(salesOrderId);
+
+    if (!orderResult.success || !orderResult.data) {
+      return {
+        success: false,
+        error: 'Failed to load sales order',
+      };
+    }
+
+    const order = orderResult.data;
+    const nonDirectSources: string[] = [];
+
+    // Check each item's allocations
+    for (const item of order.items) {
+      // Skip service and non-inventory items
+      if (item.itemType === 'service' || item.itemType === 'non_inventory') {
+        continue;
+      }
+
+      // Get allocations for this item
+      const allocationResult = await getAllocationsForItem(item.id);
+
+      if (allocationResult.allocations) {
+        for (const allocation of allocationResult.allocations) {
+          // Check if allocation is non-direct (not manufacturer)
+          if (allocation.fulfillmentSource !== 'direct') {
+            if (!nonDirectSources.includes(allocation.fulfillmentSource)) {
+              nonDirectSources.push(allocation.fulfillmentSource);
+            }
+          }
+        }
+      }
+    }
+
+    const hasNonDirectAllocations = nonDirectSources.length > 0;
+
+    return {
+      success: true,
+      data: {
+        required: hasNonDirectAllocations,
+        hasNonDirectAllocations,
+        nonDirectSources,
+      },
+    };
+  } catch (error) {
+    console.error('Error in checkOrderSeriesRequiredAction:', error);
+    return {
+      success: false,
+      error:
+        error instanceof Error ? error.message : 'An unexpected error occurred',
+    };
+  }
+}
+
+// ============================================
 // UPDATE ALLOCATION STATUS
 // ============================================
 
