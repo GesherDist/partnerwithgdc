@@ -310,7 +310,7 @@ export interface GDCInventoryItem {
   notes: string;
   isUnallocated?: boolean;    // True if PO has no linked Sales Order (speculative inventory)
   // 🆕 NEW: Fulfillment allocation fields
-  fulfillmentSource: FulfillmentSource;              // Fulfillment source for this item
+  fulfillmentSource: FulfillmentSource | null;       // Fulfillment source - only set when C-SO mapped
   allocatedToDealerName: string | null;              // Dealer name if allocated
   allocatedToDealerLocation: string | null;          // Dealer location if allocated
   allocationStatus: AllocationStatus | null;         // Allocation status

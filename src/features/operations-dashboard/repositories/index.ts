@@ -1933,7 +1933,13 @@ export async function getGDCInventoryByOrderSeries(
       status,
       location:locations(name),
       platinum_dealer:platinum_dealers(dealer_name, code),
-      dealer_location:platinum_dealer_locations(location_name)
+      dealer_location:platinum_dealer_locations(location_name),
+      sales_order_item:sales_order_items(
+        sales_order:sales_orders(
+          order_number,
+          customer_po_number
+        )
+      )
     `)
     .in('purchase_order_id', poIds) : { data: [] };
 
@@ -1959,7 +1965,13 @@ export async function getGDCInventoryByOrderSeries(
         status,
         location:locations(name),
         platinum_dealer:platinum_dealers(dealer_name, code),
-        dealer_location:platinum_dealer_locations(location_name)
+        dealer_location:platinum_dealer_locations(location_name),
+        sales_order_item:sales_order_items(
+          sales_order:sales_orders(
+            order_number,
+            customer_po_number
+          )
+        )
       `)
       .in('sales_order_item_id', Array.from(soItemIdsFromAllocations));
     allSiblingAllocations = siblings || [];
@@ -2162,15 +2174,44 @@ export async function getGDCInventoryByOrderSeries(
     // Outstanding Qty = MAX(Total Qty - Qty Delivered, 0)
     const outstandingQty = Math.max(totalQty - qtyDelivered, 0);
 
+    // 🆕 Extract C-SO (Customer Sales Order) info from allocation
+    // When there's an allocation with a C-SO, show the C-SO order_number and customer_po_number
+    const allocationSalesOrderItem = primaryAllocation?.sales_order_item
+      ? toOne(primaryAllocation.sales_order_item)
+      : null;
+    const allocationCSO = allocationSalesOrderItem?.sales_order
+      ? toOne(allocationSalesOrderItem.sales_order)
+      : null;
+    const csoOrderNumber = allocationCSO?.order_number || null;
+    const csoCustomerPo = allocationCSO?.customer_po_number || null;
+    const isCSO = csoOrderNumber?.startsWith('C-SO');
+
+    // DEBUG: Log allocation data for troubleshooting
+    if (primaryAllocation) {
+      console.log(`[GDC DEBUG] PO ${po.po_number}:`, {
+        hasAllocation: !!primaryAllocation,
+        salesOrderItemId: primaryAllocation?.sales_order_item_id,
+        salesOrderItem: primaryAllocation?.sales_order_item,
+        allocationSalesOrderItem,
+        allocationCSO,
+        csoOrderNumber,
+        csoCustomerPo,
+        isCSO,
+        fulfillmentSource: primaryAllocation?.fulfillment_source,
+      });
+    }
+
     const itemData = {
       id: po.id, // Always use PO ID (not SO ID)
       no: index + 1,
-      // PO Column: Show customer PO if allocated to customer, otherwise show Purchase Order number
-      poNumber: linkedSO?.customer_po_number || po.po_number,
-      soNumber: linkedSO?.order_number || null,
+      // When C-SO allocation exists, show C-SO customer_po_number; otherwise show internal SO or PO number
+      poNumber: (isCSO && csoCustomerPo) ? csoCustomerPo : (linkedSO?.customer_po_number || po.po_number),
+      // When C-SO allocation exists, show C-SO order_number; otherwise show internal SO number
+      soNumber: isCSO ? csoOrderNumber : (linkedSO?.order_number || null),
       shipmentNumber: shipment?.shipment_number || null, // Shipment number (SO2600063)
       containerNumber: shipment?.container_number || null,
-      customerPoNumber: linkedSO?.customer_po_number || null, // Customer PO Number
+      // When C-SO allocation exists, show C-SO customer_po_number
+      customerPoNumber: (isCSO && csoCustomerPo) ? csoCustomerPo : (linkedSO?.customer_po_number || null),
       orderSeries: po.order_series,
       items: poItemsList.map(item => ({
         sku: item.sku,
@@ -2198,7 +2239,11 @@ export async function getGDCInventoryByOrderSeries(
       notes: '',
       isUnallocated: !isAllocated,
       // 🆕 NEW: Fulfillment allocation fields
-      fulfillmentSource: (primaryAllocation?.fulfillment_source as import('../types').FulfillmentSource) || 'gdc_inventory',
+      // Only show fulfillmentSource when Customer SO (C-SO) is mapped, not for internal SOs
+      // C-SO order_number starts with "C-SO-", internal SOs start with "SO"
+      fulfillmentSource: (primaryAllocation && isCSO)
+        ? (primaryAllocation.fulfillment_source as import('../types').FulfillmentSource)
+        : null,
       allocatedToDealerName: toOne(primaryAllocation?.platinum_dealer)?.dealer_name || null,
       allocatedToDealerLocation: toOne(primaryAllocation?.dealer_location)?.location_name || null,
       allocationStatus: (primaryAllocation?.status as import('../types').AllocationStatus) || null,
@@ -2374,7 +2419,11 @@ export async function getGDCInventoryByOrderSeries(
       notes: '',
       isUnallocated: false, // Always allocated (has customer)
       // Fulfillment allocation fields
-      fulfillmentSource: (primaryAllocation?.fulfillment_source as import('../types').FulfillmentSource) || 'gdc_inventory',
+      // Only show fulfillmentSource when Customer SO (C-SO), not for internal SOs
+      // C-SO order_number starts with "C-SO-", internal SOs start with "SO"
+      fulfillmentSource: (primaryAllocation && so.order_number?.startsWith('C-SO'))
+        ? (primaryAllocation.fulfillment_source as import('../types').FulfillmentSource)
+        : null,
       allocatedToDealerName: toOne(primaryAllocation?.platinum_dealer)?.dealer_name || null,
       allocatedToDealerLocation: toOne(primaryAllocation?.dealer_location)?.location_name || null,
       allocationStatus: (primaryAllocation?.status as import('../types').AllocationStatus) || null,

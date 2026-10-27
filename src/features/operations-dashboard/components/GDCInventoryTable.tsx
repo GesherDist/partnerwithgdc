@@ -34,17 +34,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/shared/components/ui/select';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/shared/components/ui/tooltip';
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/shared/components/ui/popover';
 import type { GDCInventoryItem, SKUColumnInfo } from '../types';
 
 interface GDCInventoryTableProps {
@@ -130,12 +119,12 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, loadError, on
         bVal = b.no;
         break;
       case 'soNumber':
-        aVal = a.shipmentNumber || '';
-        bVal = b.shipmentNumber || '';
+        aVal = a.soNumber || a.shipmentNumber || '';
+        bVal = b.soNumber || b.shipmentNumber || '';
         break;
       case 'customerPoNumber':
-        aVal = a.customerPoNumber || '';
-        bVal = b.customerPoNumber || '';
+        aVal = a.customerPoNumber || a.poNumber || '';
+        bVal = b.customerPoNumber || b.poNumber || '';
         break;
       case 'totalQty':
         aVal = a.totalQty;
@@ -376,8 +365,8 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, loadError, on
                     }
                   >
                     <TableCell className={`relative sticky left-0 z-20 w-[60px] font-medium ${getStickyBgClass(item.status)} after:absolute after:inset-0 after:w-[60px] after:bg-inherit after:-z-10`}>{item.no}</TableCell>
-                    <TableCell className={`relative sticky left-[60px] z-20 min-w-[120px] font-mono text-sm whitespace-nowrap ${getStickyBgClass(item.status)} after:absolute after:inset-0 after:min-w-[120px] after:bg-inherit after:-z-10`}>{item.shipmentNumber || '-'}</TableCell>
-                    <TableCell className={`relative sticky left-[180px] z-20 min-w-[140px] font-mono text-sm whitespace-nowrap ${getStickyBgClass(item.status)} border-r shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] after:absolute after:inset-0 after:min-w-[140px] after:bg-inherit after:-z-10`}>{item.poNumber || '-'}</TableCell>
+                    <TableCell className={`relative sticky left-[60px] z-20 min-w-[120px] font-mono text-sm whitespace-nowrap ${getStickyBgClass(item.status)} after:absolute after:inset-0 after:min-w-[120px] after:bg-inherit after:-z-10`}>{item.soNumber || item.shipmentNumber || '-'}</TableCell>
+                    <TableCell className={`relative sticky left-[180px] z-20 min-w-[140px] font-mono text-sm whitespace-nowrap ${getStickyBgClass(item.status)} border-r shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] after:absolute after:inset-0 after:min-w-[140px] after:bg-inherit after:-z-10`}>{item.customerPoNumber || item.poNumber || '-'}</TableCell>
                     {/* Dynamic SKU quantity columns */}
                     {uniqueSkus.map((skuInfo) => {
                       const qty = getSkuQty(item.items, skuInfo.sku);
@@ -390,118 +379,8 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, loadError, on
                     <TableCell className="text-right font-semibold">{item.totalQty}</TableCell>
                     <TableCell>{item.customer || '-'}</TableCell>
                     <TableCell className="min-w-[180px]">
-                      <TooltipProvider>
-                        {item.allocations && item.allocations.length > 0 ? (
-                          <div className="space-y-1">
-                            {/* Show first allocation supplier name */}
-                            {item.allocations[0]?.supplierName && (
-                              <div className="text-sm font-medium">
-                                {item.allocations[0]?.supplierName}
-                              </div>
-                            )}
-
-                            {/* Show "Show All Fulfillment" button with popover for multiple allocations */}
-                            {item.allocations.length > 1 ? (
-                              <Popover>
-                                <PopoverTrigger asChild>
-                                  <button className="flex items-center gap-1 text-primary hover:underline text-xs font-medium">
-                                    <Eye className="h-3 w-3" />
-                                    Show All Fulfillment
-                                  </button>
-                                </PopoverTrigger>
-                                <PopoverContent className="w-auto min-w-[400px]" align="start">
-                                  <div className="space-y-2">
-                                    <div className="font-semibold text-sm border-b pb-2">
-                                      Fulfillment Details
-                                    </div>
-                                    <table className="w-full text-sm">
-                                      <thead>
-                                        <tr className="border-b">
-                                          <th className="text-left py-1 px-2 font-medium text-muted-foreground">Source</th>
-                                          <th className="text-left py-1 px-2 font-medium text-muted-foreground">Location</th>
-                                          <th className="text-right py-1 px-2 font-medium text-muted-foreground">Qty</th>
-                                        </tr>
-                                      </thead>
-                                      <tbody>
-                                        {item.allocations.map((allocation, idx) => (
-                                          <tr key={idx} className="border-b last:border-0">
-                                            <td className="py-2 px-2">
-                                              <Badge
-                                                variant="outline"
-                                                className={
-                                                  allocation.source === 'gdc_inventory'
-                                                    ? 'bg-blue-50 text-blue-700 border-blue-200 text-xs'
-                                                    : allocation.source === 'platinum_dealer_inventory'
-                                                    ? 'bg-purple-50 text-purple-700 border-purple-200 text-xs'
-                                                    : allocation.source === 'platinum_dealer_fulfillment'
-                                                    ? 'bg-indigo-50 text-indigo-700 border-indigo-200 text-xs'
-                                                    : 'bg-gray-50 text-gray-700 border-gray-200 text-xs'
-                                                }
-                                              >
-                                                {allocation.source === 'gdc_inventory'
-                                                  ? 'GDC Inv.'
-                                                  : allocation.source === 'platinum_dealer_inventory'
-                                                  ? 'Dealer Inv.'
-                                                  : allocation.source === 'platinum_dealer_fulfillment'
-                                                  ? 'Dealer Fulfill.'
-                                                  : 'Direct'}
-                                              </Badge>
-                                            </td>
-                                            <td className="py-2 px-2">
-                                              {allocation.locationOrDealer ? (
-                                                <span className="text-sm">{allocation.locationOrDealer}</span>
-                                              ) : allocation.supplierName ? (
-                                                <span className="text-sm">{allocation.supplierName}</span>
-                                              ) : (
-                                                <span className="text-sm text-muted-foreground">-</span>
-                                              )}
-                                            </td>
-                                            <td className="py-2 px-2 text-right font-medium">{allocation.quantity}</td>
-                                          </tr>
-                                        ))}
-                                      </tbody>
-                                    </table>
-                                  </div>
-                                </PopoverContent>
-                              </Popover>
-                            ) : item.allocations[0]?.source !== 'direct' ? (
-                              /* Single non-direct allocation - show badge with tooltip */
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Badge
-                                    variant="outline"
-                                    className={
-                                      item.allocations[0]?.source === 'gdc_inventory'
-                                        ? 'bg-blue-50 text-blue-700 border-blue-200 cursor-help'
-                                        : item.allocations[0]?.source === 'platinum_dealer_inventory'
-                                        ? 'bg-purple-50 text-purple-700 border-purple-200 cursor-help'
-                                        : 'bg-indigo-50 text-indigo-700 border-indigo-200 cursor-help'
-                                    }
-                                  >
-                                    {item.allocations[0]?.source === 'gdc_inventory'
-                                      ? 'GDC Inventory'
-                                      : item.allocations[0]?.source === 'platinum_dealer_inventory'
-                                      ? 'Dealer Inventory'
-                                      : 'Dealer Fulfillment'} | {item.allocations[0]?.quantity} units
-                                  </Badge>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  <p className="text-xs">
-                                    {item.allocations[0]?.source === 'gdc_inventory'
-                                      ? 'Fulfilled from GDC warehouse inventory'
-                                      : item.allocations[0]?.source === 'platinum_dealer_inventory'
-                                      ? 'Fulfilled from Platinum Dealer existing inventory'
-                                      : 'Dealer arranges fulfillment (no stock transfer)'}
-                                  </p>
-                                </TooltipContent>
-                              </Tooltip>
-                            ) : null}
-                          </div>
-                        ) : (
-                          // No allocations array - fallback to old supplierName field
-                          <span className="text-sm">{item.supplierName || '-'}</span>
-                        )}
-                      </TooltipProvider>
+                      {/* Supplier column - shows actual supplier name from PO, not allocation info */}
+                      <span className="text-sm">{item.supplierName || '-'}</span>
                     </TableCell>
                     <TableCell>{formatDate(item.etaToUsPort)}</TableCell>
                     <TableCell>{formatDate(item.confirmedEta)}</TableCell>
@@ -562,19 +441,26 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, loadError, on
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      <Badge
-                        variant="outline"
-                        className={`text-xs ${
-                          item.fulfillmentSource === 'platinum_dealer_inventory' || item.fulfillmentSource === 'platinum_dealer_fulfillment'
-                            ? 'bg-purple-50 text-purple-700 border-purple-200'
-                            : ''
-                        }`}
-                      >
-                        {item.fulfillmentSource === 'gdc_inventory' && 'GDC Inv.'}
-                        {item.fulfillmentSource === 'platinum_dealer_inventory' && 'Dealer Inv.'}
-                        {item.fulfillmentSource === 'platinum_dealer_fulfillment' && 'Dealer Fulfill.'}
-                        {item.fulfillmentSource === 'direct' && 'Direct'}
-                      </Badge>
+                      {/* Only show Fulfillment Source when C-SO is mapped (allocation exists) */}
+                      {item.fulfillmentSource ? (
+                        <Badge
+                          variant="outline"
+                          className={`text-xs ${
+                            item.fulfillmentSource === 'platinum_dealer_inventory' || item.fulfillmentSource === 'platinum_dealer_fulfillment'
+                              ? 'bg-purple-50 text-purple-700 border-purple-200'
+                              : item.fulfillmentSource === 'gdc_inventory'
+                              ? 'bg-blue-50 text-blue-700 border-blue-200'
+                              : ''
+                          }`}
+                        >
+                          {item.fulfillmentSource === 'gdc_inventory' && 'GDC Inv.'}
+                          {item.fulfillmentSource === 'platinum_dealer_inventory' && 'Dealer Inv.'}
+                          {item.fulfillmentSource === 'platinum_dealer_fulfillment' && 'Dealer Fulfill.'}
+                          {item.fulfillmentSource === 'direct' && 'Direct'}
+                        </Badge>
+                      ) : (
+                        <span className="text-muted-foreground text-xs">-</span>
+                      )}
                     </TableCell>
                     <TableCell>
                       {item.allocatedToDealerName ? (

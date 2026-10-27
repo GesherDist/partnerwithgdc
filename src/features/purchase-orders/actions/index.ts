@@ -248,6 +248,9 @@ export async function getPurchaseOrderReceivingInfo(id: string) {
 /**
  * Operations dashboard rows carry a shipment id or a PO id. Returns the PO id
  * to receive against, or null (e.g. warehouse / sales-order rows).
+ *
+ * NOTE: If PO has a C-SO (Customer Sales Order) allocation, returns null
+ * because goods go directly to customer, not to warehouse.
  */
 export async function findReceivablePurchaseOrderId(rowId: string): Promise<ActionResult<string | null>> {
   const auth = await authorize('purchase_orders.receive');
@@ -257,6 +260,9 @@ export async function findReceivablePurchaseOrderId(rowId: string): Promise<Acti
 
   const { db } = await import('@/shared/lib/supabase/database');
 
+  let poId: string | null = null;
+
+  // Check if rowId is a shipment
   const { data: shipment } = await db
     .from('shipments')
     .select('purchase_order_id')
@@ -264,17 +270,69 @@ export async function findReceivablePurchaseOrderId(rowId: string): Promise<Acti
     .maybeSingle();
 
   if (shipment) {
-    return { success: true, data: shipment.purchase_order_id || null };
+    poId = shipment.purchase_order_id || null;
+  } else {
+    // Check if rowId is a PO directly
+    const { data: po } = await db
+      .from('purchase_orders')
+      .select('id')
+      .eq('id', rowId)
+      .is('deleted_at', null)
+      .maybeSingle();
+
+    poId = po?.id || null;
   }
 
-  const { data: po } = await db
-    .from('purchase_orders')
-    .select('id')
-    .eq('id', rowId)
-    .is('deleted_at', null)
-    .maybeSingle();
+  // If no PO found, return null
+  if (!poId) {
+    return { success: true, data: null };
+  }
 
-  return { success: true, data: po?.id || null };
+  // Check if PO has any C-SO (Customer Sales Order) allocations
+  // If yes, goods go to customer, not warehouse - don't show receive button
+  const { data: allocations } = await db
+    .from('fulfillment_allocations')
+    .select(`
+      id,
+      sales_order_item:sales_order_items(
+        sales_order:sales_orders(order_number)
+      )
+    `)
+    .eq('purchase_order_id', poId)
+    .limit(10);
+
+  // Check if any allocation has a C-SO (order_number starts with "C-SO")
+  const hasCSO = allocations?.some(alloc => {
+    const soItem = alloc.sales_order_item;
+    const so = Array.isArray(soItem) ? soItem[0]?.sales_order : (soItem as any)?.sales_order;
+    const orderNumber = Array.isArray(so) ? so[0]?.order_number : so?.order_number;
+    return orderNumber?.startsWith('C-SO');
+  });
+
+  // If C-SO exists, don't show receive button (goods go to customer)
+  if (hasCSO) {
+    return { success: true, data: null };
+  }
+
+  // Check if PO is already fully received
+  // If all items have received_quantity >= quantity_ordered, don't show button
+  const { data: poItems } = await db
+    .from('purchase_order_items')
+    .select('quantity_ordered, received_quantity')
+    .eq('purchase_order_id', poId)
+    .is('deleted_at', null);
+
+  if (poItems && poItems.length > 0) {
+    const allReceived = poItems.every(item =>
+      (item.received_quantity || 0) >= (item.quantity_ordered || 0)
+    );
+
+    if (allReceived) {
+      return { success: true, data: null };
+    }
+  }
+
+  return { success: true, data: poId };
 }
 
 /**

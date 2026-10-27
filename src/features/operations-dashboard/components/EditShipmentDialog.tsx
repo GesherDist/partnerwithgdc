@@ -252,8 +252,8 @@ export function EditShipmentDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
+      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-hidden flex flex-col">
+        <DialogHeader className="flex-shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <Truck className="h-5 w-5" />
             Edit Status
@@ -270,179 +270,184 @@ export function EditShipmentDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 py-4">
-          {/* Current Status Badge */}
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-muted-foreground">Current:</span>
-            <Badge variant="outline" className={statusOptions.find(s => s.value === shipment.status)?.color || 'bg-gray-100 text-gray-800'}>
-              {shipment.status.replace('_', ' ')}
-            </Badge>
-          </div>
+        <div className="flex-1 overflow-y-auto pr-2 -mr-2">
+          <div className="space-y-5 py-4">
+            {/* ========== STATUS SECTION ========== */}
+            <div className="space-y-3">
+              {/* Current Status Badge */}
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">Current:</span>
+                <Badge variant="outline" className={statusOptions.find(s => s.value === shipment.status)?.color || 'bg-gray-100 text-gray-800'}>
+                  {shipment.status.replace('_', ' ')}
+                </Badge>
+              </div>
 
-          {/* Status Select */}
-          <div className="space-y-2">
-            <Label htmlFor="status">
-              <span className="flex items-center gap-2">
-                <Package className="h-4 w-4" />
-                New Status
-              </span>
-            </Label>
-            <Select value={status} onValueChange={setStatus}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select status" />
-              </SelectTrigger>
-              <SelectContent>
-                {statusOptions.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    <div className="flex items-center gap-2">
-                      <div className={`w-2 h-2 rounded-full ${option.color.split(' ')[0]}`} />
-                      {option.label}
-                    </div>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+              {/* Status Select */}
+              <div className="space-y-1.5">
+                <Label htmlFor="status" className="text-sm font-medium">
+                  New Status
+                </Label>
+                <Select value={status} onValueChange={setStatus}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {statusOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        <div className="flex items-center gap-2">
+                          <div className={`w-2 h-2 rounded-full ${option.color.split(' ')[0]}`} />
+                          {option.label}
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
 
-          {/* Container Number (tracked via CMA CGM) */}
-          {shipment.hasShipment && (
-            <div className="space-y-2">
-              <Label htmlFor="containerNumber">
-                <span className="flex items-center gap-2">
-                  <Container className="h-4 w-4" />
-                  Container Number
-                </span>
-              </Label>
-              <Input
-                id="containerNumber"
-                value={containerNumber}
-                onChange={(e) => setContainerNumber(e.target.value.toUpperCase())}
-                placeholder="e.g. CMAU1234567"
-                className="font-mono"
-              />
-              <p className="text-xs text-muted-foreground">
-                Tracking starts as soon as you save.
-              </p>
+              {/* Container Number (tracked via CMA CGM) */}
+              {shipment.hasShipment && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="containerNumber" className="text-sm font-medium flex items-center gap-2">
+                    <Container className="h-4 w-4 text-muted-foreground" />
+                    Container Number
+                  </Label>
+                  <Input
+                    id="containerNumber"
+                    value={containerNumber}
+                    onChange={(e) => setContainerNumber(e.target.value.toUpperCase())}
+                    placeholder="e.g. CMAU1234567"
+                    className="font-mono"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Tracking starts as soon as you save.
+                  </p>
+                </div>
+              )}
             </div>
-          )}
 
-          {/* ETA to Port */}
-          <div className="space-y-2">
-            <Label htmlFor="etaToPort">
-              <span className="flex items-center gap-2">
+            {/* ========== DATES SECTION ========== */}
+            <div className="space-y-3 pt-2 border-t">
+              <h4 className="text-sm font-medium text-muted-foreground flex items-center gap-2">
                 <Calendar className="h-4 w-4" />
-                ETA to Port
-              </span>
-            </Label>
-            <Input
-              id="etaToPort"
-              type="date"
-              value={etaToPort}
-              onChange={(e) => setEtaToPort(e.target.value)}
-            />
-          </div>
+                Dates
+              </h4>
+              <div className="grid grid-cols-2 gap-3">
+                {/* ETA to Port */}
+                <div className="space-y-1.5">
+                  <Label htmlFor="etaToPort" className="text-xs text-muted-foreground">
+                    ETA to Port
+                  </Label>
+                  <Input
+                    id="etaToPort"
+                    type="date"
+                    value={etaToPort}
+                    onChange={(e) => setEtaToPort(e.target.value)}
+                    className="text-sm"
+                  />
+                </div>
 
-          {/* Confirmed ETA */}
-          <div className="space-y-2">
-            <Label htmlFor="confirmedEta">
-              <span className="flex items-center gap-2">
-                <Calendar className="h-4 w-4" />
-                Confirmed ETA
-              </span>
-            </Label>
-            <Input
-              id="confirmedEta"
-              type="date"
-              value={confirmedEta}
-              onChange={(e) => setConfirmedEta(e.target.value)}
-            />
-          </div>
+                {/* Confirmed ETA */}
+                <div className="space-y-1.5">
+                  <Label htmlFor="confirmedEta" className="text-xs text-muted-foreground">
+                    Confirmed ETA
+                  </Label>
+                  <Input
+                    id="confirmedEta"
+                    type="date"
+                    value={confirmedEta}
+                    onChange={(e) => setConfirmedEta(e.target.value)}
+                    className="text-sm"
+                  />
+                </div>
 
-          {/* Customer Expected Delivery */}
-          <div className="space-y-2">
-            <Label htmlFor="customerExpectedDelivery">
-              <span className="flex items-center gap-2">
-                <Calendar className="h-4 w-4" />
-                Customer Expected Delivery
-              </span>
-            </Label>
-            <Input
-              id="customerExpectedDelivery"
-              type="date"
-              value={customerExpectedDelivery}
-              onChange={(e) => setCustomerExpectedDelivery(e.target.value)}
-            />
-          </div>
+                {/* Customer Expected Delivery */}
+                <div className="space-y-1.5">
+                  <Label htmlFor="customerExpectedDelivery" className="text-xs text-muted-foreground">
+                    Customer Expected
+                  </Label>
+                  <Input
+                    id="customerExpectedDelivery"
+                    type="date"
+                    value={customerExpectedDelivery}
+                    onChange={(e) => setCustomerExpectedDelivery(e.target.value)}
+                    className="text-sm"
+                  />
+                </div>
 
-          {/* Actual Delivery Date */}
-          <div className="space-y-2">
-            <Label htmlFor="actualDeliveryDate">
-              <span className="flex items-center gap-2">
-                <Calendar className="h-4 w-4" />
-                Actual Delivery Date
-              </span>
-            </Label>
-            <Input
-              id="actualDeliveryDate"
-              type="date"
-              value={actualDeliveryDate}
-              onChange={(e) => setActualDeliveryDate(e.target.value)}
-            />
-          </div>
+                {/* Actual Delivery Date */}
+                <div className="space-y-1.5">
+                  <Label htmlFor="actualDeliveryDate" className="text-xs text-muted-foreground">
+                    Actual Delivery
+                  </Label>
+                  <Input
+                    id="actualDeliveryDate"
+                    type="date"
+                    value={actualDeliveryDate}
+                    onChange={(e) => setActualDeliveryDate(e.target.value)}
+                    className="text-sm"
+                  />
+                </div>
+              </div>
+            </div>
 
-          {/* Qty Delivered */}
-          <div className="space-y-2">
-            <Label htmlFor="qtyDelivered">
-              <span className="flex items-center gap-2">
+            {/* ========== QUANTITIES SECTION ========== */}
+            <div className="space-y-3 pt-2 border-t">
+              <h4 className="text-sm font-medium text-muted-foreground flex items-center gap-2">
                 <Package className="h-4 w-4" />
-                Qty Delivered
-              </span>
-            </Label>
-            <Input
-              id="qtyDelivered"
-              type="number"
-              min="0"
-              value={qtyDelivered}
-              onChange={(e) => setQtyDelivered(Number(e.target.value))}
-            />
-          </div>
+                Quantities
+              </h4>
+              <div className="grid grid-cols-2 gap-3">
+                {/* Qty Delivered */}
+                <div className="space-y-1.5">
+                  <Label htmlFor="qtyDelivered" className="text-xs text-muted-foreground">
+                    Qty Delivered
+                  </Label>
+                  <Input
+                    id="qtyDelivered"
+                    type="number"
+                    min="0"
+                    value={qtyDelivered}
+                    onChange={(e) => setQtyDelivered(Number(e.target.value))}
+                    className="text-sm"
+                  />
+                </div>
 
-          {/* Outstanding PO Qty */}
-          <div className="space-y-2">
-            <Label htmlFor="outstandingQty">
-              <span className="flex items-center gap-2">
-                <Package className="h-4 w-4" />
-                Outstanding PO Qty
-              </span>
-            </Label>
-            <Input
-              id="outstandingQty"
-              type="number"
-              min="0"
-              value={outstandingQty}
-              onChange={(e) => setOutstandingQty(Number(e.target.value))}
-            />
-          </div>
+                {/* Outstanding PO Qty */}
+                <div className="space-y-1.5">
+                  <Label htmlFor="outstandingQty" className="text-xs text-muted-foreground">
+                    Outstanding Qty
+                  </Label>
+                  <Input
+                    id="outstandingQty"
+                    type="number"
+                    min="0"
+                    value={outstandingQty}
+                    onChange={(e) => setOutstandingQty(Number(e.target.value))}
+                    className="text-sm"
+                  />
+                </div>
+              </div>
+            </div>
 
-          {/* Action Required / Notes */}
-          <div className="space-y-2">
-            <Label htmlFor="actionRequired">
-              <span className="flex items-center gap-2">
+            {/* ========== NOTES SECTION ========== */}
+            <div className="space-y-3 pt-2 border-t">
+              <h4 className="text-sm font-medium text-muted-foreground flex items-center gap-2">
                 <FileText className="h-4 w-4" />
-                Action Required / Notes
-              </span>
-            </Label>
-            <Textarea
-              id="actionRequired"
-              value={actionRequired}
-              onChange={(e) => setActionRequired(e.target.value)}
-              placeholder="Add notes or action items..."
-              rows={3}
-            />
+                Notes
+              </h4>
+              <Textarea
+                id="actionRequired"
+                value={actionRequired}
+                onChange={(e) => setActionRequired(e.target.value)}
+                placeholder="Add notes or action items..."
+                rows={2}
+                className="text-sm resize-none"
+              />
+            </div>
           </div>
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="flex-shrink-0 border-t pt-4 mt-2">
           {receivePoId && (
             <Button
               variant="outline"
