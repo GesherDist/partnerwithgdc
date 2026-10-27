@@ -1659,7 +1659,13 @@ export async function getGDCInventoryByOrderSeries(
       ),
       locations:warehouse_id (
         id,
-        name
+        name,
+        address_1,
+        address_2,
+        city,
+        state,
+        zip,
+        country
       )
     `)
     .is('deleted_at', null)
@@ -1922,7 +1928,12 @@ export async function getGDCInventoryByOrderSeries(
       actual_arrival,
       qty_delivered,
       outstanding_qty,
-      container_number
+      container_number,
+      ship_to_name,
+      ship_to_address_street,
+      ship_to_address_city,
+      ship_to_address_state,
+      ship_to_address_postal_code
     `)
     .in('purchase_order_id', poIds) : { data: [] };
 
@@ -1941,7 +1952,12 @@ export async function getGDCInventoryByOrderSeries(
       actual_arrival,
       qty_delivered,
       outstanding_qty,
-      container_number
+      container_number,
+      ship_to_name,
+      ship_to_address_street,
+      ship_to_address_city,
+      ship_to_address_state,
+      ship_to_address_postal_code
     `)
     .in('sales_order_id', soIdsForShipments) : { data: [] };
 
@@ -2166,13 +2182,34 @@ export async function getGDCInventoryByOrderSeries(
       return;
     }
 
-    // Build address from SO if allocated
-    const addressParts = linkedSO ? [
-      linkedSO.shipping_address_street,
-      linkedSO.shipping_address_city,
-      linkedSO.shipping_address_state,
-      linkedSO.shipping_address_postal_code,
-    ].filter(Boolean) : [];
+    // Build address: prioritize Shipment ship_to > SO delivery > Warehouse address
+    let addressParts: string[] = [];
+    if (shipment?.ship_to_address_street) {
+      // Shipment exists with ship_to address - use it (highest priority)
+      addressParts = [
+        shipment.ship_to_address_street,
+        shipment.ship_to_address_city,
+        shipment.ship_to_address_state,
+        shipment.ship_to_address_postal_code,
+      ].filter(Boolean) as string[];
+    } else if (linkedSO) {
+      // No shipment address, but SO exists - use customer's delivery address
+      addressParts = [
+        linkedSO.shipping_address_street,
+        linkedSO.shipping_address_city,
+        linkedSO.shipping_address_state,
+        linkedSO.shipping_address_postal_code,
+      ].filter(Boolean) as string[];
+    } else if (warehouseData) {
+      // No SO, but warehouse assigned - use warehouse address
+      addressParts = [
+        warehouseData.address_1,
+        warehouseData.address_2,
+        warehouseData.city,
+        warehouseData.state,
+        warehouseData.zip,
+      ].filter(Boolean) as string[];
+    }
 
     // Determine customer/warehouse name
     let customerName: string;
@@ -2280,16 +2317,20 @@ export async function getGDCInventoryByOrderSeries(
       });
     }
 
+    // Check if linked SO is internal (SO...) or customer (C-SO...)
+    const linkedSOIsInternal = linkedSO?.order_number && !linkedSO.order_number.startsWith('C-SO');
+
     const itemData = {
       id: po.id, // Always use PO ID (not SO ID)
       no: index + 1,
-      // When C-SO allocation exists, show C-SO customer_po_number; otherwise show internal SO or PO number
-      poNumber: (isCSO && csoCustomerPo) ? csoCustomerPo : (linkedSO?.customer_po_number || po.po_number),
-      // When C-SO allocation exists, show C-SO order_number; otherwise show internal SO number
-      soNumber: isCSO ? csoOrderNumber : (linkedSO?.order_number || null),
+      // For PO rows: always show internal PO number
+      poNumber: po.po_number,
+      // For PO rows: only show internal SO number (SO...), NOT C-SO numbers
+      // C-SO info should only appear in "SOs without PO" section when fulfillment is GDC/Dealer
+      soNumber: linkedSOIsInternal ? linkedSO.order_number : null,
       shipmentNumber: shipment?.shipment_number || null, // Shipment number (SO2600063)
       containerNumber: shipment?.container_number || null,
-      // When C-SO allocation exists, show C-SO customer_po_number
+      // When C-SO is linked (directly or via allocation), show customer_po_number
       customerPoNumber: (isCSO && csoCustomerPo) ? csoCustomerPo : (linkedSO?.customer_po_number || null),
       orderSeries: po.order_series,
       items: pricedItems,
@@ -2405,13 +2446,25 @@ export async function getGDCInventoryByOrderSeries(
       return;
     }
 
-    // Build address
-    const addressParts = [
-      so.shipping_address_street,
-      so.shipping_address_city,
-      so.shipping_address_state,
-      so.shipping_address_postal_code,
-    ].filter(Boolean);
+    // Build address: prioritize Shipment ship_to > SO delivery address
+    let addressParts: string[] = [];
+    if (shipment?.ship_to_address_street) {
+      // Shipment exists with ship_to address - use it (highest priority)
+      addressParts = [
+        shipment.ship_to_address_street,
+        shipment.ship_to_address_city,
+        shipment.ship_to_address_state,
+        shipment.ship_to_address_postal_code,
+      ].filter(Boolean) as string[];
+    } else {
+      // No shipment address - use SO's delivery address
+      addressParts = [
+        so.shipping_address_street,
+        so.shipping_address_city,
+        so.shipping_address_state,
+        so.shipping_address_postal_code,
+      ].filter(Boolean) as string[];
+    }
 
     const customerName = customerData?.name || 'Unknown';
     allocatedCount++;
@@ -2480,14 +2533,23 @@ export async function getGDCInventoryByOrderSeries(
     // Outstanding Qty = MAX(Total Qty - Qty Delivered, 0)
     const outstandingQtySO = Math.max(totalQty - qtyDeliveredSO, 0);
 
+    // For SOs without POs: Only show C-SO info when fulfillment is NOT 'direct' (manufacturer)
+    // C-SO should appear when: GDC Inventory, Platinum Dealer Inventory, or Platinum Dealer Fulfillment
+    const isCSO = so.order_number?.startsWith('C-SO');
+    const isNonDirectFulfillment = primaryAllocation?.fulfillment_source &&
+      primaryAllocation.fulfillment_source !== 'direct';
+    const showCSOInfo = isCSO && isNonDirectFulfillment;
+
     result.push({
       id: so.id,
       no: soStartIndex + index + 1,
       poNumber: null, // No PO for this SO
-      soNumber: so.order_number,
+      // Only show C-SO number when fulfillment is GDC/Dealer, not manufacturer direct
+      soNumber: showCSOInfo ? so.order_number : null,
       shipmentNumber: shipment?.shipment_number || null, // Shipment number (SO2600063)
       containerNumber: shipment?.container_number || null,
-      customerPoNumber: so.customer_po_number || null,
+      // Only show customer PO when fulfillment is GDC/Dealer, not manufacturer direct
+      customerPoNumber: showCSOInfo ? (so.customer_po_number || null) : null,
       orderSeries: so.order_series,
       items: soItemsList.map(item => ({
         sku: item.sku,
@@ -2515,9 +2577,8 @@ export async function getGDCInventoryByOrderSeries(
       notes: '',
       isUnallocated: false, // Always allocated (has customer)
       // Fulfillment allocation fields
-      // Only show fulfillmentSource when Customer SO (C-SO), not for internal SOs
-      // C-SO order_number starts with "C-SO-", internal SOs start with "SO"
-      fulfillmentSource: (primaryAllocation && so.order_number?.startsWith('C-SO'))
+      // Only show fulfillmentSource when C-SO AND fulfillment is NOT 'direct' (manufacturer)
+      fulfillmentSource: showCSOInfo
         ? (primaryAllocation.fulfillment_source as import('../types').FulfillmentSource)
         : null,
       allocatedToDealerName: toOne(primaryAllocation?.platinum_dealer)?.dealer_name || null,
