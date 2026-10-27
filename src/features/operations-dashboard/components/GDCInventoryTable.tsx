@@ -186,10 +186,16 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, loadError, on
         ...acc,
         total: acc.total + item.totalQty,
         commissionTotal: acc.commissionTotal + (item.isCommissionOnly ? item.commissionAmount || 0 : 0),
+        invoiceTotal: acc.invoiceTotal + (item.invoiceAmount || 0),
+        costTotal: acc.costTotal + (item.cost || 0),
       };
     },
-    { total: 0, commissionTotal: 0, skuTotals: {} as Record<string, number> }
+    { total: 0, commissionTotal: 0, invoiceTotal: 0, costTotal: 0, skuTotals: {} as Record<string, number> }
   );
+
+  // Price per tire shown for a SKU (customer price once linked, else PO price)
+  const getSkuPrice = (items: { sku: string; price?: number | null }[], sku: string): number | null =>
+    items?.find((i) => i.sku === sku && i.price && i.price > 0)?.price ?? null;
 
   const formatWholeDollars = (amount: number) =>
     new Intl.NumberFormat('en-US', {
@@ -330,7 +336,23 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, loadError, on
                   <TableHead className="whitespace-nowrap">Actual Delivery</TableHead>
                   <TableHead className="text-right whitespace-nowrap">Qty Delivered</TableHead>
                   <TableHead className="text-right whitespace-nowrap">Outstanding Qty</TableHead>
+                  {/* Price per tire (master sheet "38" Price" / "24" Price") */}
+                  {uniqueSkus.map((skuInfo) => (
+                    <TableHead
+                      key={`price-${skuInfo.sku}`}
+                      className="text-right text-xs whitespace-nowrap"
+                      title="Customer price once the PO is linked to a sales order, else the PO price"
+                    >
+                      {skuInfo.productName} Price
+                    </TableHead>
+                  ))}
                   <TableHead className="text-right whitespace-nowrap">Invoice Amt</TableHead>
+                  <TableHead
+                    className="text-right whitespace-nowrap"
+                    title="Our cost: tires × cost per tire (saved line cost, else the order cycle cost, else the base cost)"
+                  >
+                    Cost
+                  </TableHead>
                   <TableHead className="text-center whitespace-nowrap">Commission Only</TableHead>
                   <TableHead className="text-right whitespace-nowrap">Commission Amt</TableHead>
                   <TableHead className="whitespace-nowrap min-w-[150px]">Delivery Address</TableHead>
@@ -396,6 +418,14 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, loadError, on
                         <span className="text-green-600">0</span>
                       )}
                     </TableCell>
+                    {uniqueSkus.map((skuInfo) => {
+                      const price = getSkuPrice(item.items, skuInfo.sku);
+                      return (
+                        <TableCell key={`price-${skuInfo.sku}`} className="text-right">
+                          {price ? formatWholeDollars(price) : '-'}
+                        </TableCell>
+                      );
+                    })}
                     <TableCell className="text-right">
                       {item.invoiceAmount ? new Intl.NumberFormat('en-US', {
                         style: 'currency',
@@ -403,6 +433,9 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, loadError, on
                         minimumFractionDigits: 0,
                         maximumFractionDigits: 0,
                       }).format(item.invoiceAmount) : '-'}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {item.cost ? formatWholeDollars(item.cost) : '-'}
                     </TableCell>
                     <TableCell className="text-center">
                       {item.isCommissionOnly ? (
@@ -538,7 +571,7 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, loadError, on
                     </TableCell>
                   ))}
                   <TableCell className="text-right">{totals.total}</TableCell>
-                  {/* Customer, Supplier, ETA to US Port, Confirmed ETA, Expected Delivery, Actual Delivery, Qty Delivered, Outstanding Qty, Invoice Amt, Commission Only */}
+                  {/* Customer, Supplier, ETA to US Port, Confirmed ETA, Expected Delivery, Actual Delivery, Qty Delivered, Outstanding Qty */}
                   <TableCell></TableCell>
                   <TableCell></TableCell>
                   <TableCell></TableCell>
@@ -547,7 +580,18 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, loadError, on
                   <TableCell></TableCell>
                   <TableCell></TableCell>
                   <TableCell></TableCell>
-                  <TableCell></TableCell>
+                  {/* Price per tire columns */}
+                  {uniqueSkus.map((skuInfo) => (
+                    <TableCell key={`price-${skuInfo.sku}`}></TableCell>
+                  ))}
+                  {/* Invoice Amt, Cost */}
+                  <TableCell className="text-right">
+                    {totals.invoiceTotal > 0 ? formatWholeDollars(totals.invoiceTotal) : '-'}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {totals.costTotal > 0 ? formatWholeDollars(totals.costTotal) : '-'}
+                  </TableCell>
+                  {/* Commission Only */}
                   <TableCell></TableCell>
                   {/* Commission Amt */}
                   <TableCell className="text-right">

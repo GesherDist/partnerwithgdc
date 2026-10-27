@@ -154,6 +154,8 @@ export interface ShipmentItemDetail {
   productName?: string;  // Product name for display (optional, fetched from database)
   qty: number;
   unitPrice?: number;    // Price per unit for this product (in dollars)
+  /** GDC tables "Price" column (dollars): the linked sales order's price, else the PO line price (as the master sheet) */
+  price?: number | null;
 }
 
 // SKU info for column headers
@@ -301,6 +303,8 @@ export interface GDCInventoryItem {
   qtyDelivered?: number;
   outstandingQty?: number;
   invoiceAmount?: number;
+  /** Our cost of the row's tires (dollars): saved line cost, else order cycle cost, else base cost; null = no cost entered */
+  cost?: number | null;
   isCommissionOnly?: boolean;  // Linked SO is commission-only (Galileo invoices the customer)
   commissionAmount?: number;   // Commission Gesher earns, in dollars (0 when not commission-only)
   deliveryAddress: string;

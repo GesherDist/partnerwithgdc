@@ -12,6 +12,7 @@
 
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { productCycleCostRepository } from '@/features/products/repositories/product-cycle-cost.repository';
 import type {
   QuotePreview,
   SalesOrderPreview,
@@ -708,7 +709,7 @@ async function createAllocationsForHistoricalImport(
   // Get PO details (items with quantities)
   const { data: po, error: poError } = await supabase
     .from('purchase_orders')
-    .select('id, items:purchase_order_items(id, product_id, quantity_ordered)')
+    .select('id, order_series, items:purchase_order_items(id, product_id, quantity_ordered)')
     .eq('id', purchaseOrderId)
     .single();
 
@@ -716,6 +717,18 @@ async function createAllocationsForHistoricalImport(
     console.error(`⚠️  PO ${purchaseOrderId} not found for allocation`);
     return 0;
   }
+
+  // Line cost, same rule as a GDC Inventory allocation in the app: the sales
+  // order's order cycle cost (else the PO's cycle), else the base cost
+  const { data: soSeries } = await supabase
+    .from('sales_orders')
+    .select('order_series')
+    .eq('id', salesOrderId)
+    .single();
+  const lineCosts = await productCycleCostRepository.unitCostsFor(
+    soItems.map((item) => item.product_id),
+    soSeries?.order_series || po.order_series || null
+  );
 
   // Get location (first location or default)
   const { data: location } = await supabase
@@ -758,6 +771,20 @@ async function createAllocationsForHistoricalImport(
     }
 
     allocationsCreated++;
+
+    // Save the line cost once; no cost (0) is not saved
+    const unitCost = lineCosts.get(soItem.product_id) ?? 0;
+    if (unitCost > 0) {
+      const { error: costError } = await supabase
+        .from('sales_order_items')
+        .update({ unit_cost: unitCost })
+        .eq('id', soItem.id)
+        .is('unit_cost', null);
+
+      if (costError) {
+        console.error(`⚠️  Failed to save line cost: ${costError.message}`);
+      }
+    }
   }
 
   // Update PO with customer and SO link

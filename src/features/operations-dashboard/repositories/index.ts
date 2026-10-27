@@ -7,6 +7,7 @@
 
 import { createAdminClient } from '@/shared/lib/supabase/admin';
 import { ORDER_SERIES } from '@/shared/lib/global-data';
+import { productCycleCostRepository } from '@/features/products/repositories/product-cycle-cost.repository';
 import type {
   OperationsStats,
   SKUBreakdown,
@@ -1760,7 +1761,7 @@ export async function getGDCInventoryByOrderSeries(
       product_id,
       supplier_id,
       supplier_name,
-      products(id, name, item_type),
+      products(id, name, item_type, base_cost),
       sales_order_item_id,
       sales_order_items(
         id,
@@ -1787,6 +1788,53 @@ export async function getGDCInventoryByOrderSeries(
   console.log(`[GDC] Found ${poItems?.length || 0} Purchase Order Items`);
 
   // ============================================
+  // QUERY 2A: Price and cost lines of the sales orders the POs are linked to
+  // (Price column = the customer's price once a PO is linked, as the master sheet)
+  // ============================================
+  // Sales order of each PO: the customer order allocated to it (C-SO), else the PO's own link
+  const priceSoByPO = new Map<string, string>();
+  if (poIds.length > 0) {
+    const { data: poAllocations } = await supabase
+      .from('fulfillment_allocations')
+      .select('purchase_order_id, status, sales_order_item:sales_order_items(sales_order_id)')
+      .in('purchase_order_id', poIds)
+      .neq('status', 'cancelled')
+      .order('created_at', { ascending: true });
+    for (const alloc of poAllocations ?? []) {
+      const soId = (toOne(alloc.sales_order_item) as { sales_order_id?: string } | null)?.sales_order_id;
+      if (alloc.purchase_order_id && soId && !priceSoByPO.has(alloc.purchase_order_id)) {
+        priceSoByPO.set(alloc.purchase_order_id, soId);
+      }
+    }
+  }
+  for (const po of purchaseOrders) {
+    if (po.sales_order_id && !priceSoByPO.has(po.id)) {
+      priceSoByPO.set(po.id, po.sales_order_id);
+    }
+  }
+  const linkedSoIds = [...new Set(priceSoByPO.values())];
+  const linkedSoLines = new Map<string, Map<string, { unitPrice: number; unitCost: number | null }>>();
+  if (linkedSoIds.length > 0) {
+    const { data: linkedItems } = await supabase
+      .from('sales_order_items')
+      .select('sales_order_id, sku, unit_price, unit_cost')
+      .in('sales_order_id', linkedSoIds);
+    for (const line of linkedItems ?? []) {
+      if (!line.sku) continue;
+      const bySku = linkedSoLines.get(line.sales_order_id) ?? new Map();
+      if (!bySku.has(line.sku)) {
+        bySku.set(line.sku, { unitPrice: Number(line.unit_price ?? 0), unitCost: line.unit_cost ?? null });
+      }
+      linkedSoLines.set(line.sales_order_id, bySku);
+    }
+  }
+  const cycleCost = await productCycleCostRepository.loadLookup();
+
+  /** Our cost per tire (cents): saved line cost, else the order cycle cost, else the base cost */
+  const unitCostOf = (savedCost: number | null | undefined, productId: string | null, orderSeries: string | null, baseCost: number) =>
+    savedCost && savedCost > 0 ? savedCost : cycleCost(productId, orderSeries, baseCost);
+
+  // ============================================
   // QUERY 2B: Get Sales Order Items (for SOs without POs)
   // ============================================
   const soIds = salesOrdersWithoutPOs?.map(so => so.id) || [];
@@ -1801,8 +1849,9 @@ export async function getGDCInventoryByOrderSeries(
         description,
         quantity,
         unit_price,
+        unit_cost,
         product_id,
-        products(id, name, item_type),
+        products(id, name, item_type, base_cost),
         fulfillment_allocations(
           id,
           fulfillment_source,
@@ -2005,12 +2054,15 @@ export async function getGDCInventoryByOrderSeries(
   console.log(`[GDC] Found ${allocationsForPOs.data?.length || 0} direct allocations, ${allSiblingAllocations.length} sibling allocations`);
 
   // Group items by purchase order and build SKU info map
-  const itemsByPO = new Map<string, { sku: string; productName: string; qty: number; unitPrice: number }[]>();
+  const itemsByPO = new Map<
+    string,
+    { sku: string; productName: string; qty: number; unitPrice: number; productId: string | null; baseCost: number; isService: boolean }[]
+  >();
   const supplierNameByPO = new Map<string, string>(); // purchase_order_id -> supplier_name
   const skuInfoMap = new Map<string, string>(); // sku -> productName
 
   poItems?.forEach((item) => {
-    const productData = toOne(item.products);
+    const productData = toOne(item.products) as { name?: string; item_type?: string; base_cost?: number } | null;
     const productName = productData?.name || item.description || item.sku;
     const unitPrice = item.unit_price ? item.unit_price / 100 : 0;
 
@@ -2032,6 +2084,9 @@ export async function getGDCInventoryByOrderSeries(
       productName,
       qty: item.quantity_ordered || 0,
       unitPrice,
+      productId: item.product_id || null,
+      baseCost: Number(productData?.base_cost ?? 0),
+      isService: productData?.item_type === 'service',
     });
   });
 
@@ -2080,6 +2135,30 @@ export async function getGDCInventoryByOrderSeries(
 
     const poItemsList = itemsByPO.get(po.id) || [];
     const totalQty = poItemsList.reduce((sum, item) => sum + item.qty, 0);
+
+    // Price: the linked sales order's line, else the PO line (master sheet "38" Price")
+    // Cost: our cost of the PO's tires (saved SO line cost, else the PO's order cycle cost, else base cost)
+    const priceSoId = priceSoByPO.get(po.id);
+    const soLines = priceSoId ? linkedSoLines.get(priceSoId) : undefined;
+    let rowCost = 0;
+    let rowHasCost = false;
+    const pricedItems = poItemsList.map((item) => {
+      const soLine = soLines?.get(item.sku);
+      if (!item.isService) {
+        const unitCost = unitCostOf(soLine?.unitCost, item.productId, po.order_series, item.baseCost);
+        if (unitCost > 0) {
+          rowCost += unitCost * item.qty;
+          rowHasCost = true;
+        }
+      }
+      return {
+        sku: item.sku,
+        productName: item.productName,
+        qty: item.qty,
+        unitPrice: item.unitPrice,
+        price: soLine ? soLine.unitPrice / 100 : item.unitPrice || null,
+      };
+    });
 
     // Skip POs with no items when product filter is active
     // (means this PO doesn't have the filtered product)
@@ -2213,12 +2292,7 @@ export async function getGDCInventoryByOrderSeries(
       // When C-SO allocation exists, show C-SO customer_po_number
       customerPoNumber: (isCSO && csoCustomerPo) ? csoCustomerPo : (linkedSO?.customer_po_number || null),
       orderSeries: po.order_series,
-      items: poItemsList.map(item => ({
-        sku: item.sku,
-        productName: item.productName,
-        qty: item.qty,
-        unitPrice: item.unitPrice,
-      })),
+      items: pricedItems,
       totalQty,
       customer: customerName,
       supplierName: supplierNameByPO.get(po.id) || null,
@@ -2230,6 +2304,7 @@ export async function getGDCInventoryByOrderSeries(
       invoiceAmount: linkedSO?.grand_total
         ? linkedSO.grand_total / 100  // Customer invoice (for allocated POs)
         : po.grand_total / 100 || 0,  // PO amount (for warehouse/unallocated POs)
+      cost: rowHasCost ? rowCost / 100 : null,
       isCommissionOnly: linkedSO?.is_commission_only === true,
       commissionAmount: linkedSO?.is_commission_only ? (linkedSO.commission_amount || 0) / 100 : 0,
       deliveryAddress: addressParts.join(', '),
@@ -2258,10 +2333,13 @@ export async function getGDCInventoryByOrderSeries(
   // ============================================
   // Build result items from Sales Orders WITHOUT Purchase Orders
   // ============================================
-  const itemsBySO = new Map<string, { sku: string; productName: string; qty: number; unitPrice: number }[]>();
+  const itemsBySO = new Map<
+    string,
+    { sku: string; productName: string; qty: number; unitPrice: number; productId: string | null; baseCost: number; isService: boolean; unitCost: number | null }[]
+  >();
 
   soItems?.forEach((item) => {
-    const productData = toOne(item.products);
+    const productData = toOne(item.products) as { name?: string; item_type?: string; base_cost?: number } | null;
     const productName = productData?.name || item.description || item.sku;
     const unitPrice = item.unit_price ? item.unit_price / 100 : 0;
 
@@ -2278,6 +2356,10 @@ export async function getGDCInventoryByOrderSeries(
       productName,
       qty: item.quantity || 0,
       unitPrice,
+      productId: item.product_id || null,
+      baseCost: Number(productData?.base_cost ?? 0),
+      isService: productData?.item_type === 'service',
+      unitCost: item.unit_cost ?? null,
     });
   });
 
@@ -2304,6 +2386,18 @@ export async function getGDCInventoryByOrderSeries(
 
     const soItemsList = itemsBySO.get(so.id) || [];
     const totalQty = soItemsList.reduce((sum, item) => sum + item.qty, 0);
+
+    // Price = the sales order's price; Cost = saved line cost, else the order cycle cost, else base cost
+    let soRowCost = 0;
+    let soRowHasCost = false;
+    for (const item of soItemsList) {
+      if (item.isService) continue;
+      const unitCost = unitCostOf(item.unitCost, item.productId, so.order_series ?? null, item.baseCost);
+      if (unitCost > 0) {
+        soRowCost += unitCost * item.qty;
+        soRowHasCost = true;
+      }
+    }
 
     // Skip SOs with no items when product filter is active
     // (means this SO doesn't have the filtered product)
@@ -2400,6 +2494,7 @@ export async function getGDCInventoryByOrderSeries(
         productName: item.productName,
         qty: item.qty,
         unitPrice: item.unitPrice,
+        price: item.unitPrice || null,
       })),
       totalQty,
       customer: customerName,
@@ -2410,6 +2505,7 @@ export async function getGDCInventoryByOrderSeries(
       qtyDelivered: qtyDeliveredSO,
       outstandingQty: outstandingQtySO,
       invoiceAmount: so.grand_total ? so.grand_total / 100 : 0,
+      cost: soRowHasCost ? soRowCost / 100 : null,
       isCommissionOnly: so.is_commission_only === true,
       commissionAmount: so.is_commission_only ? (so.commission_amount || 0) / 100 : 0,
       deliveryAddress: addressParts.join(', '),
