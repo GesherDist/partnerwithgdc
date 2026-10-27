@@ -104,15 +104,15 @@ export function RevenueChart({ data }: RevenueChartProps) {
                   <div className="space-y-1.5">
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Calculation Formula</p>
                     <div className="rounded-md bg-muted/50 px-3 py-2.5 text-xs leading-relaxed whitespace-pre-line border">
-                      {`Revenue = Sum of sales_orders.grand_total
-(Ankur's Definition 3.1: Recognized Revenue Only)
+                      {`Revenue = Σ tire line totals of firm sales orders delivered in the month − credit notes
+(Ankur's Definition 3.1, same rule as the Executive tabs)
 
 Database Sources:
-• Sales Orders: grand_total WHERE status IN (delivered) (all lines, incl. tax and shipping)
+• Sales: sales_order_items.line_total (after line discount, excl. tax), tire products only
+• Returns: credit_notes.subtotal (issued/applied), by credit_note_date
 
-Excludes: commission-only orders (Galileo invoices the customer)
-Filtered by: order_date (Order Date)
-Status: delivered (recognized revenue only)
+Recognized when delivered: actual delivery date, else delivered shipment arrival, else order date for status Delivered
+Excludes: commission-only orders and service lines
 Target: $220,000/month (hardcoded)
 Last Year: Same period previous year`}
                     </div>
@@ -121,7 +121,7 @@ Last Year: Same period previous year`}
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Notes</p>
                     <div className="flex gap-2">
                       <div className="mt-0.5 h-4 w-0.5 rounded-full bg-primary/40 flex-shrink-0" />
-                      <p className="text-xs text-muted-foreground leading-relaxed">Monthly revenue of sales orders with status Delivered vs target. Data grouped by month based on order date.</p>
+                      <p className="text-xs text-muted-foreground leading-relaxed">Monthly recognized tire revenue vs target. Data grouped by month of delivery.</p>
                     </div>
                   </div>
                 </div>
@@ -337,24 +337,23 @@ export function ChannelPerformanceChart({ data }: ChannelPerformanceChartProps) 
                   <div className="space-y-1.5">
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Calculation Formula</p>
                     <div className="rounded-md bg-muted/50 px-3 py-2.5 text-xs leading-relaxed whitespace-pre-line border">
-                      {`Revenue by Channel = Sum of sales_orders.grand_total grouped by channel
-(Ankur's Definition: Recognized Revenue Only)
+                      {`Revenue by Channel = Σ tire line totals of firm sales orders delivered in the period, grouped by channel
+(Ankur's Definition 3.1, same rule as the Executive tabs)
 
 Database Sources:
-• Revenue: sales_orders.grand_total
-• Units: sales_order_items.quantity
+• Revenue: sales_order_items.line_total (after line discount, excl. tax), tire products only
+• Units: quantity of the same tire lines
 • Channel: customers.channel (OEM or Dealer)
 
-Excludes: commission-only orders (Galileo invoices the customer)
-Filtered by: order_date (Order Date)
-Status: delivered (recognized revenue only)`}
+Recognized when delivered: actual delivery date, else delivered shipment arrival, else order date for status Delivered
+Excludes: commission-only orders and service lines`}
                     </div>
                   </div>
                   <div className="space-y-1.5">
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Notes</p>
                     <div className="flex gap-2">
                       <div className="mt-0.5 h-4 w-0.5 rounded-full bg-primary/40 flex-shrink-0" />
-                      <p className="text-xs text-muted-foreground leading-relaxed">Revenue of sales orders with status Delivered, by channel. OEM = Original Equipment Manufacturers, Dealer = Independent dealers.</p>
+                      <p className="text-xs text-muted-foreground leading-relaxed">Recognized tire revenue by channel. OEM = Original Equipment Manufacturers, Dealer = Independent dealers.</p>
                     </div>
                   </div>
                 </div>
@@ -472,16 +471,15 @@ export function MarginChart({ data }: MarginChartProps) {
 (Ankur's Definition 3.2: Gross Profit)
 
 Where:
-• Revenue = sales_order_items.unit_price × quantity
+• Revenue = sales_order_items.line_total of tire lines delivered in the month
 • COGS = line cost saved by the first fulfillment allocation (sales_order_items.unit_cost), else the order cycle cost (product_cycle_costs), else products.base_cost × quantity
 
 Database Sources:
-• Sales: sales_order_items (unit_price, quantity)
+• Sales: sales_order_items (line_total, quantity), tire products only
 • Cost: sales_order_items.unit_cost, else product_cycle_costs (by order cycle), else products.base_cost
 
+Recognized when delivered: actual delivery date, else delivered shipment arrival, else order date for status Delivered
 Excludes: service lines (commission, handling) and commission-only orders
-Filtered by: order_date (Order Date)
-Status: delivered (recognized revenue only)
 Target: 30% (hardcoded benchmark)`}
                     </div>
                   </div>
@@ -489,7 +487,7 @@ Target: 30% (hardcoded benchmark)`}
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Notes</p>
                     <div className="flex gap-2">
                       <div className="mt-0.5 h-4 w-0.5 rounded-full bg-primary/40 flex-shrink-0" />
-                      <p className="text-xs text-muted-foreground leading-relaxed">Gross profit margin on the tire lines of sales orders with status Delivered. Target is 30% margin. Excludes service items and commission-only orders.</p>
+                      <p className="text-xs text-muted-foreground leading-relaxed">Gross profit margin on the tire lines delivered each month (same rule as the Executive tabs). Target is 30% margin.</p>
                     </div>
                   </div>
                 </div>

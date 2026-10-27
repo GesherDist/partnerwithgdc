@@ -171,6 +171,41 @@ async function saveLineCost(salesOrderItemId: string, unitCost: number | null): 
   }
 }
 
+/**
+ * Same rules when an existing allocation's source is changed: GDC Inventory
+ * and Platinum Dealer need an order series on the sales order, and a line
+ * without a saved cost gets it from the changed allocation. A saved cost is
+ * not changed. Returns a function that saves the cost once the update succeeds.
+ */
+export async function checkAllocationSourceChange(
+  allocationId: string,
+  productId: string,
+  change: { fulfillmentSource?: FulfillmentSource; purchaseOrderId?: string }
+): Promise<{ ok: false; error: string } | { ok: true; saveCost: () => Promise<void> }> {
+  const { data: allocation, error } = await db
+    .from('fulfillment_allocations')
+    .select('sales_order_item_id, fulfillment_source, purchase_order_id')
+    .eq('id', allocationId)
+    .single();
+
+  if (error || !allocation) {
+    return { ok: false, error: 'Allocation not found' };
+  }
+
+  const fulfillmentSource = change.fulfillmentSource ?? (allocation.fulfillment_source as FulfillmentSource);
+  const purchaseOrderId = change.purchaseOrderId ?? allocation.purchase_order_id ?? undefined;
+  if (fulfillmentSource === allocation.fulfillment_source) {
+    // Same source: nothing to check, and a saved cost is never changed
+    return { ok: true, saveCost: async () => {} };
+  }
+  const plan = await planLineCost(allocation.sales_order_item_id, productId, [{ fulfillmentSource, purchaseOrderId }]);
+  if (!plan.ok) {
+    return { ok: false, error: plan.error };
+  }
+
+  return { ok: true, saveCost: () => saveLineCost(allocation.sales_order_item_id, plan.unitCost) };
+}
+
 // ============================================
 // ALLOCATION CREATION
 // ============================================
@@ -550,6 +585,177 @@ export async function updateAllocationQuantity(
         error instanceof Error
           ? error.message
           : 'Unknown error updating allocation',
+    };
+  }
+}
+
+export interface AllocationDetailsChanges {
+  fulfillmentSource?: FulfillmentSource;
+  quantity?: number;
+  locationId?: string;
+  assignedContactId?: string;
+  assignedUserId?: string;
+  platinumDealerId?: string;
+  dealerLocationId?: string;
+  purchaseOrderId?: string;
+  containerId?: string;
+  containerQty?: number;
+  notes?: string;
+}
+
+/**
+ * Save an edit of an allocation (Edit Allocation dialog): every changed field
+ * in one update.
+ *
+ * - Source, quantity, GDC location or dealer location changes move the
+ *   reserved inventory (release the old, reserve the new; rolled back on failure).
+ * - A new source follows the create rules: only while pending, order series
+ *   for GDC Inventory / Platinum Dealer, a PO for Manufacturer, the old
+ *   source's fields are cleared, and a line without a saved cost gets it.
+ * - Status is managed by the system and is not changed here.
+ */
+export async function updateAllocationDetails(params: {
+  allocationId: string;
+  productId: string;
+  changes: AllocationDetailsChanges;
+}): Promise<AllocationResult> {
+  try {
+    const { data: current, error: fetchError } = await getAllocationById(params.allocationId);
+    if (fetchError || !current) {
+      return { success: false, error: 'Allocation not found' };
+    }
+
+    const c = params.changes;
+    const source = c.fulfillmentSource ?? current.fulfillmentSource;
+    const isGdc = source === 'gdc_inventory';
+    const isDealer = source === 'platinum_dealer_inventory' || source === 'platinum_dealer_fulfillment';
+    const isDirect = source === 'direct';
+    const next = {
+      fulfillmentSource: source,
+      quantity: c.quantity ?? current.quantity,
+      locationId: isGdc ? (c.locationId ?? current.locationId) : null,
+      assignedContactId: isGdc ? (c.assignedContactId ?? current.assignedContactId) : null,
+      assignedUserId: isGdc ? (c.assignedUserId ?? current.assignedUserId) : null,
+      platinumDealerId: isDealer ? (c.platinumDealerId ?? current.platinumDealerId) : null,
+      // '' = "None (Dealer decides)" in the dialog
+      dealerLocationId: isDealer ? (c.dealerLocationId === '' ? null : (c.dealerLocationId ?? current.dealerLocationId)) : null,
+      purchaseOrderId: isDirect ? (c.purchaseOrderId ?? current.purchaseOrderId) : null,
+      containerId: isDirect ? (c.containerId ?? current.containerId) : null,
+      containerQty: isDirect ? (c.containerQty ?? current.containerQty) : 0,
+      notes: c.notes ?? current.notes,
+    };
+
+    const sourceChanged = source !== current.fulfillmentSource;
+    let saveCost: () => Promise<void> = async () => {};
+    if (sourceChanged) {
+      if (current.status !== 'pending') {
+        return { success: false, error: 'Fulfillment source can only be changed while the allocation is pending' };
+      }
+      if (isDirect && !next.purchaseOrderId) {
+        return { success: false, error: 'Please select a Purchase Order' };
+      }
+      const check = await checkAllocationSourceChange(params.allocationId, params.productId, {
+        fulfillmentSource: source,
+        purchaseOrderId: next.purchaseOrderId ?? undefined,
+      });
+      if (!check.ok) {
+        return { success: false, error: check.error };
+      }
+      saveCost = check.saveCost;
+    }
+
+    const inventoryChanged =
+      sourceChanged ||
+      next.quantity !== current.quantity ||
+      (isGdc && next.locationId !== current.locationId) ||
+      (source === 'platinum_dealer_inventory' && next.dealerLocationId !== current.dealerLocationId);
+
+    const oldReservation = {
+      fulfillmentSource: current.fulfillmentSource,
+      quantity: current.quantity,
+      productId: params.productId,
+      locationId: current.locationId || undefined,
+      dealerLocationId: current.dealerLocationId || undefined,
+    };
+    const newReservation = {
+      fulfillmentSource: next.fulfillmentSource,
+      quantity: next.quantity,
+      productId: params.productId,
+      locationId: next.locationId || undefined,
+      dealerLocationId: next.dealerLocationId || undefined,
+    };
+
+    if (inventoryChanged) {
+      const validation = await validateAllocationRequest({
+        salesOrderItemId: current.salesOrderItemId,
+        fulfillmentSource: next.fulfillmentSource,
+        quantity: next.quantity,
+        productId: params.productId,
+        locationId: next.locationId || undefined,
+        platinumDealerId: next.platinumDealerId || undefined,
+        dealerLocationId: next.dealerLocationId || undefined,
+        containerQty: next.containerQty || undefined,
+        excludeAllocationId: params.allocationId,
+      });
+      if (!validation.valid) {
+        return { success: false, error: validation.error || 'Validation failed' };
+      }
+
+      const released = await deallocateInventoryForAllocation(oldReservation);
+      if (!released.success) {
+        return { success: false, error: released.error || 'Failed to deallocate old inventory' };
+      }
+      const reserved = await allocateInventoryForAllocation(newReservation);
+      if (!reserved.success) {
+        await allocateInventoryForAllocation(oldReservation);
+        return { success: false, error: reserved.error || 'Failed to allocate new inventory' };
+      }
+    }
+
+    const { data: updated, error: updateError } = await updateAllocation({
+      id: params.allocationId,
+      ...next,
+      containerRemaining: isDirect && next.containerQty ? next.containerQty - next.quantity : 0,
+      // Same status a new allocation of this source gets
+      ...(sourceChanged ? { status: isDirect && next.purchaseOrderId ? 'allocated' : 'pending' } : {}),
+    });
+
+    if (updateError || !updated) {
+      if (inventoryChanged) {
+        await deallocateInventoryForAllocation(newReservation);
+        await allocateInventoryForAllocation(oldReservation);
+      }
+      return { success: false, error: updateError?.message || 'Failed to update allocation' };
+    }
+
+    if (sourceChanged) {
+      await saveCost();
+    }
+
+    // As on create: a Manufacturer allocation links its PO to the sales order
+    if (isDirect && next.purchaseOrderId && next.purchaseOrderId !== current.purchaseOrderId) {
+      const { data: soItem } = await db
+        .from('sales_order_items')
+        .select('sales_order_id')
+        .eq('id', current.salesOrderItemId)
+        .single();
+      if (soItem?.sales_order_id) {
+        const { error: linkError } = await db
+          .from('purchase_orders')
+          .update({ sales_order_id: soItem.sales_order_id })
+          .eq('id', next.purchaseOrderId);
+        if (linkError) {
+          console.error('Failed to link PO to SO:', linkError);
+        }
+      }
+    }
+
+    return { success: true, data: updated };
+  } catch (error) {
+    console.error('Error updating allocation:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error updating allocation',
     };
   }
 }

@@ -24,31 +24,37 @@ import { getIcon } from '../lib/icons';
 // CALCULATION FORMULAS
 // ============================================
 
+/** Ankur's recognition rule (recognized-sales.service), shared by the revenue, units and margin cards */
+const RECOGNITION_RULE =
+  '\n\nRecognized when the order is delivered: delivery date = sales_orders.actual_delivery_date, else the delivered shipment arrival, else the order date for status Delivered.\nExcludes: commission-only orders (Galileo invoices the customer) and service lines (commission, handling).';
+const TIRE_SIZES =
+  '\n\nBreakdown by tire size:\n• 38" tires: rim_size = "38" or name contains "38"\n• 24" tires: rim_size = "24" or name contains "24"';
+
 const CALCULATION_FORMULAS: Record<string, { title: string; formula: string; notes?: string }> = {
   'revenue-mtd': {
     title: 'Revenue Calculation',
-    formula: 'Revenue = Delivered Sales Orders - Returns/Credits\n\nDatabase Sources:\n• Gross Sales: sales_orders.grand_total WHERE status = "delivered" (all lines, incl. tax and shipping)\n• Returns: credit_notes.grand_total WHERE status IN ("issued", "applied"), by credit_note_date\n\nExcludes: commission-only orders (Galileo invoices the customer)\nFiltered by: order_date (Order Date) in the selected period',
-    notes: 'Based on sales orders with status Delivered. Service lines on those orders (for example a Sales Commission line) are included. Amounts stored in cents.',
+    formula: `Revenue = Σ tire line totals of firm sales orders delivered in the period − credit notes\n\nDatabase Sources:\n• Sales: sales_order_items.line_total (after line discount, excl. tax), tire products only\n• Returns: credit_notes.subtotal WHERE status IN ("issued", "applied"), by credit_note_date${RECOGNITION_RULE}`,
+    notes: 'Ankur\'s Definition 3.1. Same rule as the Executive tabs (Profitability). Amounts stored in cents.',
   },
   'revenue-ytd': {
     title: 'Revenue (YTD) Calculation',
-    formula: 'Revenue = Delivered Sales Orders - Returns/Credits\n\nDatabase Sources:\n• Gross Sales: sales_orders.grand_total WHERE status = "delivered" (all lines, incl. tax and shipping)\n• Returns: credit_notes.grand_total WHERE status IN ("issued", "applied"), by credit_note_date\n\nExcludes: commission-only orders (Galileo invoices the customer)\nFiltered by: order_date (Jan 1 to today)',
-    notes: 'Based on sales orders with status Delivered (YTD). Compared to same period last year.',
+    formula: `Revenue = Σ tire line totals of firm sales orders delivered Jan 1 to today − credit notes\n\nDatabase Sources:\n• Sales: sales_order_items.line_total (after line discount, excl. tax), tire products only\n• Returns: credit_notes.subtotal WHERE status IN ("issued", "applied"), by credit_note_date${RECOGNITION_RULE}`,
+    notes: 'Ankur\'s Definition 3.1, YTD. Compared to the same period last year.',
   },
   'units-sold': {
     title: 'Units Sold (MTD) Calculation',
-    formula: 'Sum of quantity of all sales_order_items on the sales orders of INVOICED shipments in the period\n\nFiltered by: shipments.actual_arrival (Delivery Date)\nStatus: shipments.load_status = "invoiced"\nIncludes: every line of those orders (also service lines and commission-only orders)\n\nBreakdown by tire size:\n• 38" tires: Items where rim_size = "38" or name contains "38"\n• 24" tires: Items where rim_size = "24" or name contains "24"',
-    notes: 'Only counts units on orders whose shipment is invoiced, not open orders.',
+    formula: `Units = Σ quantity of the same delivered tire lines used for Revenue (period)${RECOGNITION_RULE}${TIRE_SIZES}`,
+    notes: 'Tires Sold, Ankur\'s Definition 3.4. Only delivered orders, not open orders.',
   },
   'units-sold-ytd': {
     title: 'Units Sold (YTD) Calculation',
-    formula: 'Sum of quantity of all sales_order_items on the sales orders of INVOICED shipments from Jan 1 to today\n\nFiltered by: shipments.actual_arrival (Delivery Date)\nStatus: shipments.load_status = "invoiced"\nIncludes: every line of those orders (also service lines and commission-only orders)\n\nBreakdown by tire size:\n• 38" tires: Items where rim_size = "38" or name contains "38"\n• 24" tires: Items where rim_size = "24" or name contains "24"',
-    notes: 'Compared to same period last year (YTD). Only counts units on orders whose shipment is invoiced.',
+    formula: `Units = Σ quantity of the same delivered tire lines used for Revenue (Jan 1 to today)${RECOGNITION_RULE}${TIRE_SIZES}`,
+    notes: 'Compared to the same period last year (YTD).',
   },
   'blended-margin': {
     title: 'Blended Margin (YTD) Calculation - Definition 3.2',
-    formula: 'Gross Profit % = (Gross Profit / Revenue) × 100\n\nWhere:\n• Revenue = sales_order_items.unit_price × quantity\n• COGS = line cost saved by the first fulfillment allocation, else the order cycle cost, else products.base_cost × quantity\n• Gross Profit = Revenue - COGS\n\nExcludes: Commission items (service items with "commission" in SKU/description) and commission-only orders\nFiltered by: sales orders of INVOICED shipments, shipments.actual_arrival Jan 1 to today',
-    notes: 'As per Ankur\'s Definition 3.2. GP% on the orders of invoiced shipments. Compared to last year YTD margin.',
+    formula: `Gross Profit % = (Revenue − COGS) ÷ Revenue × 100\n\nWhere:\n• Revenue = the Revenue (YTD) figure\n• COGS = cost of the same delivered tires: line cost saved by the first fulfillment allocation, else the order cycle cost, else products.base_cost × quantity${RECOGNITION_RULE}`,
+    notes: 'Ankur\'s Definition 3.2. Compared to last year YTD margin.',
   },
   'open-orders': {
     title: 'Open Orders Calculation',

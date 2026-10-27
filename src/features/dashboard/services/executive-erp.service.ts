@@ -1,14 +1,12 @@
 /**
  * Executive dashboard — ERP figures (Ankur's spec, Oct 12 call decisions)
  *
- * Recognition rule (Ankur, Definitions 3.1-3.4 and 4.1-4.2): revenue, COGS
- * and tire units come from the same population. A firm sales order's tires are
- * recognized when the order is fulfilled (delivered); until then they are
- * backlog. Delivery date: sales_orders.actual_delivery_date, else the latest
- * actual_arrival of its delivered/invoiced shipments, else the order date for
- * an order with status delivered. Revenue = tire line totals (net of line
- * discounts, excl. tax) of the orders delivered in the period − credit notes
- * (issued/applied) on their credit-note date.
+ * Recognition rule (Ankur, Definitions 3.1-3.4 and 4.1-4.2; shared with the
+ * Overview tab in recognized-sales.service): revenue, COGS and tire units come
+ * from the same population. A firm sales order's tires are recognized when the
+ * order is delivered; until then they are backlog. Revenue = tire line totals
+ * (net of line discounts, excl. tax) of the orders delivered in the period −
+ * credit notes (issued/applied) on their credit-note date.
  *
  * COGS (client confirmation, Oct 21, 2026: "COGS from the ERP"), per tire:
  * 1. the cost saved on the sales order line (sales_order_items.unit_cost,
@@ -35,6 +33,12 @@
 
 import { db } from '@/shared/lib/supabase/database';
 import { productCycleCostRepository } from '@/features/products/repositories/product-cycle-cost.repository';
+import {
+  recognitionDate,
+  shipmentDeliveryDates,
+  type RecognitionOrder,
+  type RecognitionShipment,
+} from './recognized-sales.service';
 import {
   addDays,
   businessToday,
@@ -115,11 +119,6 @@ interface SaleLine {
   lineTotal: number;
   isTire: boolean;
 }
-
-/** Sales order statuses whose delivered tires are recognized */
-const RECOGNIZABLE_SO_STATUSES = ['confirmed', 'processing', 'shipped', 'delivered'];
-/** Shipment load statuses that mean the load reached the customer */
-const DELIVERED_LOAD_STATUSES = ['delivered', 'invoiced'];
 
 // ============================================
 // BUILD
@@ -204,37 +203,11 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
     const c = cycleCost(productId, orderSeries, productBaseCost.get(productId) ?? 0);
     return c > 0 ? { cost: c * qty, complete: true } : { cost: null, complete: false };
   };
-  // ---------- delivery date of each sales order (revenue recognition) ----------
-  const shipmentDelivery = new Map<string, string>();
-  for (const s of (shipmentsRes.data ?? []) as Array<Record<string, unknown>>) {
-    if (!s.sales_order_id || !s.actual_arrival || !DELIVERED_LOAD_STATUSES.includes(String(s.load_status))) {
-      continue;
-    }
-    const soId = String(s.sales_order_id);
-    const arrival = String(s.actual_arrival).slice(0, 10);
-    if (arrival > (shipmentDelivery.get(soId) ?? '')) {
-      shipmentDelivery.set(soId, arrival);
-    }
-  }
-  const deliveredOn = (so: Record<string, unknown>): string | null => {
-    if (!RECOGNIZABLE_SO_STATUSES.includes(String(so.status))) {
-      return null;
-    }
-    if (so.actual_delivery_date) {
-      return String(so.actual_delivery_date).slice(0, 10);
-    }
-    const fromShipment = shipmentDelivery.get(String(so.id));
-    if (fromShipment) {
-      return fromShipment;
-    }
-    return so.status === 'delivered' && so.order_date ? String(so.order_date).slice(0, 10) : null;
-  };
-
-  // ---------- recognized sales: lines of delivered firm orders ----------
-  // Commission-only orders are Galileo's sales (Gesher earns the commission only)
+  // ---------- recognized sales: lines of delivered firm orders (recognized-sales.service) ----------
+  const shipmentDates = shipmentDeliveryDates((shipmentsRes.data ?? []) as RecognitionShipment[]);
   const lines: SaleLine[] = [];
   for (const so of soRes.data ?? []) {
-    const date = so.is_commission_only === true ? null : deliveredOn(so as Record<string, unknown>);
+    const date = recognitionDate(so as unknown as RecognitionOrder, shipmentDates);
     if (!date || date > asOf) {
       continue;
     }

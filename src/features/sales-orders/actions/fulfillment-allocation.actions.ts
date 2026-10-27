@@ -10,11 +10,12 @@
 import {
   createSingleAllocation,
   createMultiSourceAllocation,
-  updateAllocationQuantity,
+  updateAllocationDetails,
   cancelAllocation,
   markAllocationFulfilled,
   suggestOptimalAllocation,
   getAllocationsForItem,
+  type AllocationDetailsChanges,
   type AllocationResult,
   type BatchAllocationResult,
   type AllocationSuggestion,
@@ -249,58 +250,37 @@ export async function updateAllocationAction(
       };
     }
 
-    // If quantity is being updated, use special service function
-    if (validated.data.quantity !== undefined) {
-      const result = await updateAllocationQuantity({
-        allocationId,
-        newQuantity: validated.data.quantity,
-        productId,
-      });
-
-      if (!result.success || !result.data) {
-        return {
-          success: false,
-          error: result.error || 'Failed to update allocation quantity',
-        };
-      }
-
-      return {
-        success: true,
-        data: result.data,
-      };
-    }
-
-    // Otherwise, just update other fields (status, notes, source, etc.)
-    // Import repository function directly for simple updates
-    const { updateAllocation } = await import(
-      '@/features/sales-orders/repositories/fulfillment-allocations.repository'
-    );
-
-    const { data, error } = await updateAllocation({
-      id: allocationId,
-      fulfillmentSource: (validated.data as any).fulfillmentSource,
-      status: (validated.data as any).status,
-      locationId: (validated.data as any).locationId,
-      assignedContactId: (validated.data as any).assignedContactId,
-      assignedUserId: (validated.data as any).assignedUserId,
-      platinumDealerId: (validated.data as any).platinumDealerId,
-      dealerLocationId: (validated.data as any).dealerLocationId,
-      purchaseOrderId: (validated.data as any).purchaseOrderId,
-      containerId: (validated.data as any).containerId,
-      containerQty: (validated.data as any).containerQty,
-      notes: (validated.data as any).notes,
+    // Every changed field in one update (quantity, source, location, dealer, PO, notes).
+    // Status is managed by the system and is not changed from this dialog.
+    const changes = validated.data as Partial<AllocationDetailsChanges>;
+    const result = await updateAllocationDetails({
+      allocationId,
+      productId,
+      changes: {
+        fulfillmentSource: changes.fulfillmentSource,
+        quantity: changes.quantity,
+        locationId: changes.locationId,
+        assignedContactId: changes.assignedContactId,
+        assignedUserId: changes.assignedUserId,
+        platinumDealerId: changes.platinumDealerId,
+        dealerLocationId: changes.dealerLocationId,
+        purchaseOrderId: changes.purchaseOrderId,
+        containerId: changes.containerId,
+        containerQty: changes.containerQty,
+        notes: changes.notes,
+      },
     });
 
-    if (error || !data) {
+    if (!result.success || !result.data) {
       return {
         success: false,
-        error: error?.message || 'Failed to update allocation',
+        error: result.error || 'Failed to update allocation',
       };
     }
 
     return {
       success: true,
-      data,
+      data: result.data,
     };
   } catch (error) {
     console.error('Error in updateAllocationAction:', error);

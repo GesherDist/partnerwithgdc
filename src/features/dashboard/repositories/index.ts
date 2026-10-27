@@ -8,13 +8,10 @@
  */
 
 import { createAdminClient } from '@/shared/lib/supabase/admin';
-import { productCycleCostRepository } from '@/features/products/repositories/product-cycle-cost.repository';
+import { loadRecognizedSales, summarizeRecognizedSales } from '../services/recognized-sales.service';
 import type { UnitsBySKUDataPoint, UnitsBySKUChartData, ProductLegendItem, ChannelPerformanceDataPoint, InventoryByLocation, DashboardStat, MarginDataPoint, RevenueDataPoint, DateRange, CommissionRevenueStats } from '../types';
 
 // Helper to format date as YYYY-MM-DD string
-/** Credit notes that reduce revenue (credit_note_status enum has no 'approved') */
-const CREDIT_NOTE_RECOGNIZED = ['issued', 'applied'];
-
 /** Open Orders = sales orders being worked on (agreed definition, Aug 27 2025) */
 const OPEN_ORDER_STATUSES = ['confirmed', 'processing'];
 
@@ -181,8 +178,6 @@ const CHANNEL_COLORS: Record<string, string> = {
  * @param dateRange - Optional date range filter. Defaults to current month if not provided.
  */
 export async function getChannelPerformance(dateRange?: DateRange): Promise<ChannelPerformanceDataPoint[]> {
-  const supabase = createAdminClient();
-
   // Use provided date range or default to current month
   let startDate: string;
   let endDate: string;
@@ -197,50 +192,14 @@ export async function getChannelPerformance(dateRange?: DateRange): Promise<Chan
     endDate = formatDateString(now);
   }
 
-  // Query sales_orders with customer channel
-  // Filter by order_date (when order was placed)
-  // Ankur's Definition: Only count RECOGNIZED revenue (delivered/invoiced orders)
-  const { data: ordersData, error: ordersError } = await supabase
-    .from('sales_orders')
-    .select(`
-      id,
-      grand_total,
-      customer_id,
-      customers!inner (
-        channel
-      )
-    `)
-    .gte('order_date', startDate)
-    .lte('order_date', endDate)
-    .is('deleted_at', null)
-    .not('is_commission_only', 'is', true)
-    .in('status', ['delivered']);
-
-  if (ordersError) {
-    console.error('Error fetching channel orders:', ordersError);
+  // Recognized tire sales (Ankur 3.1, same rule as the Executive tabs):
+  // tire lines of firm orders delivered in the period, by customer channel
+  let recognized;
+  try {
+    recognized = await loadRecognizedSales();
+  } catch (error) {
+    console.error('Error fetching channel sales:', error);
     return [];
-  }
-
-  // Get order IDs for units count
-  const orderIds = ordersData?.map(o => o.id) || [];
-
-  // Query sales_order_items for units
-  let itemsData: { sales_order_id: string; quantity: number }[] = [];
-  if (orderIds.length > 0) {
-    const { data, error } = await supabase
-      .from('sales_order_items')
-      .select('sales_order_id, quantity')
-      .in('sales_order_id', orderIds);
-
-    if (!error && data) {
-      itemsData = data;
-    }
-  }
-
-  // Create a map of order_id -> total units
-  const orderUnits: Record<string, number> = {};
-  for (const item of itemsData) {
-    orderUnits[item.sales_order_id] = (orderUnits[item.sales_order_id] || 0) + item.quantity;
   }
 
   // Aggregate by channel
@@ -249,19 +208,17 @@ export async function getChannelPerformance(dateRange?: DateRange): Promise<Chan
     dealer: { revenue: 0, units: 0 },
   };
 
-  if (ordersData) {
-    for (const order of ordersData) {
-      const customer = order.customers as unknown as { channel: string } | null;
-      const channel = customer?.channel?.toLowerCase() || 'dealer';
-
-      if (!channelData[channel]) {
-        channelData[channel] = { revenue: 0, units: 0 };
-      }
-
-      // grand_total is in cents, convert to dollars
-      channelData[channel].revenue += (order.grand_total || 0) / 100;
-      channelData[channel].units += orderUnits[order.id] || 0;
+  for (const line of recognized.lines) {
+    if (!line.isTire || line.date < startDate || line.date > endDate) {
+      continue;
     }
+    const channel = line.customerChannel?.toLowerCase() || 'dealer';
+    if (!channelData[channel]) {
+      channelData[channel] = { revenue: 0, units: 0 };
+    }
+    // line_total is in cents, convert to dollars
+    channelData[channel].revenue += line.lineTotal / 100;
+    channelData[channel].units += line.quantity;
   }
 
   // Convert to array format
@@ -481,416 +438,40 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
   });
 
   // ===================================================================
-  // REVENUE CALCULATION (Using Delivered Sales Orders)
+  // RECOGNIZED SALES (Ankur's Definitions 3.1-3.4, same rule as the
+  // Executive tabs): revenue, units and margin come from the tire lines of
+  // firm sales orders delivered in the period (recognized-sales.service).
+  // Revenue = tire line totals (excl. tax) − credit notes; commission-only
+  // orders and service lines (commission, handling) are not tire revenue.
   // ===================================================================
-  // Revenue = Sum of grand_total from DELIVERED sales orders
-  // This matches the Revenue Trend chart logic for consistency
-  //
-  // Note: Using sales_orders because invoices table has limited data
-  // (most invoices are in 'draft' status, not 'sent'/'paid')
-  // ===================================================================
+  const recognized = await loadRecognizedSales();
+  const current = summarizeRecognizedSales(recognized, primaryStartDate, primaryEndDate);
+  const lastMonth = summarizeRecognizedSales(recognized, formatDateString(lastMonthStart), formatDateString(lastMonthEnd));
+  const ytd = summarizeRecognizedSales(recognized, formatDateString(currentYearStart), formatDateString(now));
+  const lastYearYtd = summarizeRecognizedSales(recognized, formatDateString(lastYearStart), formatDateString(lastYearSameDay));
 
-  // Fetch current period delivered sales orders (using order_date)
-  const { data: currentPeriodOrders, error: currentOrdersError } = await supabase
-    .from('sales_orders')
-    .select('id, order_number, subtotal, discount_total, grand_total, order_date')
-    .eq('status', 'delivered')
-    .gte('order_date', primaryStartDate)
-    .lte('order_date', primaryEndDate)
-    .is('deleted_at', null)
-    .not('is_commission_only', 'is', true);
-
-  // Fetch credit notes for current period (returns/credits)
-  const { data: currentPeriodCredits } = await supabase
-    .from('credit_notes')
-    .select('id, grand_total, credit_note_date')
-    .in('status', CREDIT_NOTE_RECOGNIZED)
-    .gte('credit_note_date', primaryStartDate)
-    .lte('credit_note_date', primaryEndDate)
-    .is('deleted_at', null);
-
-  // Calculate current period revenue
-  const currentGrossSales = currentPeriodOrders?.reduce((sum, so) => sum + (so.grand_total || 0), 0) || 0;
-  const currentReturns = currentPeriodCredits?.reduce((sum, cn) => sum + (cn.grand_total || 0), 0) || 0;
-  const currentRevenue = currentGrossSales - currentReturns;
-
-  // DEBUG: Log current period revenue calculation
-  console.log('📊 Current Period Revenue (Delivered Sales Orders):', {
-    period: { start: primaryStartDate, end: primaryEndDate },
-    orderCount: currentPeriodOrders?.length || 0,
-    creditNoteCount: currentPeriodCredits?.length || 0,
-    grossSales: currentGrossSales / 100,
-    returns: currentReturns / 100,
-    netRevenue: currentRevenue / 100,
-    formula: 'Revenue = Delivered SO grand_total - Credit Notes',
-    error: currentOrdersError,
-  });
-
-  // Fetch last month delivered orders for comparison
-  const { data: lastMonthOrders } = await supabase
-    .from('sales_orders')
-    .select('grand_total')
-    .eq('status', 'delivered')
-    .gte('order_date', formatDateString(lastMonthStart))
-    .lte('order_date', formatDateString(lastMonthEnd))
-    .is('deleted_at', null)
-    .not('is_commission_only', 'is', true);
-
-  const { data: lastMonthCredits } = await supabase
-    .from('credit_notes')
-    .select('grand_total')
-    .in('status', CREDIT_NOTE_RECOGNIZED)
-    .gte('credit_note_date', formatDateString(lastMonthStart))
-    .lte('credit_note_date', formatDateString(lastMonthEnd))
-    .is('deleted_at', null);
-
-  const lastGrossSales = lastMonthOrders?.reduce((sum, so) => sum + (so.grand_total || 0), 0) || 0;
-  const lastReturns = lastMonthCredits?.reduce((sum, cn) => sum + (cn.grand_total || 0), 0) || 0;
-  const lastRevenue = lastGrossSales - lastReturns;
-
-  // Fetch YTD delivered orders (Jan 1 to today)
-  const { data: ytdOrders, error: ytdOrdersError } = await supabase
-    .from('sales_orders')
-    .select('grand_total')
-    .eq('status', 'delivered')
-    .gte('order_date', formatDateString(currentYearStart))
-    .is('deleted_at', null)
-    .not('is_commission_only', 'is', true);
-
-  const { data: ytdCredits } = await supabase
-    .from('credit_notes')
-    .select('grand_total')
-    .in('status', CREDIT_NOTE_RECOGNIZED)
-    .gte('credit_note_date', formatDateString(currentYearStart))
-    .is('deleted_at', null);
-
-  const ytdGrossSales = ytdOrders?.reduce((sum, so) => sum + (so.grand_total || 0), 0) || 0;
-  const ytdReturnsAmount = ytdCredits?.reduce((sum, cn) => sum + (cn.grand_total || 0), 0) || 0;
-  const ytdNetRevenue = ytdGrossSales - ytdReturnsAmount;
-
-  // DEBUG: Log YTD revenue calculation
-  console.log('📊 YTD Revenue (Delivered Sales Orders):', {
-    yearStart: formatDateString(currentYearStart),
-    orderCount: ytdOrders?.length || 0,
-    creditNoteCount: ytdCredits?.length || 0,
-    grossSales: ytdGrossSales / 100,
-    returns: ytdReturnsAmount / 100,
-    netRevenue: ytdNetRevenue / 100,
-    error: ytdOrdersError,
-  });
-
-  // Fetch last year same period delivered orders for YTD comparison
-  const { data: lastYearYtdOrders } = await supabase
-    .from('sales_orders')
-    .select('grand_total')
-    .eq('status', 'delivered')
-    .gte('order_date', formatDateString(lastYearStart))
-    .lte('order_date', formatDateString(lastYearSameDay))
-    .is('deleted_at', null)
-    .not('is_commission_only', 'is', true);
-
-  const { data: lastYearYtdCredits } = await supabase
-    .from('credit_notes')
-    .select('grand_total')
-    .in('status', CREDIT_NOTE_RECOGNIZED)
-    .gte('credit_note_date', formatDateString(lastYearStart))
-    .lte('credit_note_date', formatDateString(lastYearSameDay))
-    .is('deleted_at', null);
-
-  const lastYearYtdGrossSales = lastYearYtdOrders?.reduce((sum, so) => sum + (so.grand_total || 0), 0) || 0;
-  const lastYearYtdReturns = lastYearYtdCredits?.reduce((sum, cn) => sum + (cn.grand_total || 0), 0) || 0;
-  const lastYearYtdRevenue = lastYearYtdGrossSales - lastYearYtdReturns;
-
-  // Calculate YTD revenue change
+  const currentRevenue = current.revenue;
+  const lastRevenue = lastMonth.revenue;
+  const ytdNetRevenue = ytd.revenue;
+  const lastYearYtdRevenue = lastYearYtd.revenue;
   const ytdNetRevenueChange = lastYearYtdRevenue > 0
     ? ((ytdNetRevenue - lastYearYtdRevenue) / lastYearYtdRevenue) * 100
     : 0;
 
-  // ===================================================================
-  // UNITS CALCULATION (Still from shipments for delivery tracking)
-  // ===================================================================
-  // Fetch INVOICED shipments for units calculation
-  const { data: currentMonthShipments } = await supabase
-    .from('shipments')
-    .select('id, sales_order_id')
-    .gte('actual_arrival', primaryStartDate)
-    .lte('actual_arrival', primaryEndDate)
-    .eq('load_status', 'invoiced');
+  const currentMonthUnits = current.units;
+  const currentMonthUnits38 = current.units38;
+  const currentMonthUnits24 = current.units24;
+  const lastMonthUnits = lastMonth.units;
+  const ytdUnits = ytd.units;
+  const ytdUnits38 = ytd.units38;
+  const ytdUnits24 = ytd.units24;
+  const lastYearYtdUnits = lastYearYtd.units;
 
-  const { data: lastMonthShipments } = await supabase
-    .from('shipments')
-    .select('id, sales_order_id')
-    .gte('actual_arrival', formatDateString(lastMonthStart))
-    .lte('actual_arrival', formatDateString(lastMonthEnd))
-    .eq('load_status', 'invoiced');
-
-  const { data: ytdShipments } = await supabase
-    .from('shipments')
-    .select('id, sales_order_id')
-    .gte('actual_arrival', formatDateString(currentYearStart))
-    .eq('load_status', 'invoiced');
-
-  const { data: lastYearYtdShipments } = await supabase
-    .from('shipments')
-    .select('id, sales_order_id')
-    .gte('actual_arrival', formatDateString(lastYearStart))
-    .lte('actual_arrival', formatDateString(lastYearSameDay))
-    .eq('load_status', 'invoiced');
-
-  // ===================================================================
-  // SHIPMENT-BASED KPI CALCULATION ARCHITECTURE
-  // ===================================================================
-  // All KPIs (Revenue MTD/YTD, Units Sold MTD/YTD, Open Orders) are now
-  // calculated from SHIPMENTS instead of SALES ORDERS.
-  //
-  // IMPORTANT: Uses load_status (not status) to match Operations Dashboard
-  //
-  // Revenue Recognition: Only count when shipment is INVOICED
-  //   - Filter: load_status = 'invoiced'
-  //   - Date: actual_arrival (actual delivery date)
-  //   - Calculation: Margin (SO.grand_total - PO.grand_total)
-  //   - Note: 'delivered' status does NOT exist in load_status enum
-  //
-  // Units Calculation: Only count units from invoiced shipments
-  //   - Get sales_order_id from invoiced shipments
-  //   - Fetch sales_order_items for those orders
-  //   - Sum quantities and calculate 38"/24" breakdown
-  //
-  // Open Orders: Count OPEN status loads (match Operations Dashboard)
-  //   - Filter: load_status = 'open' only
-  //   - Excludes: in_transit, available, invoiced, closed, etc.
-  //   - Value: Sum of linked sales_orders.grand_total
-  // ===================================================================
-
-  // Fetch current month items for units (from delivered shipments)
-  const currentShipmentIds = currentMonthShipments?.map(s => s.sales_order_id).filter(Boolean) || [];
-  let currentMonthUnits = 0;
-  let currentMonthUnits38 = 0;
-  let currentMonthUnits24 = 0;
-
-  if (currentShipmentIds.length > 0) {
-    const { data: itemsData } = await supabase
-      .from('sales_order_items')
-      .select(`
-        quantity,
-        products (
-          rim_size,
-          name
-        )
-      `)
-      .in('sales_order_id', currentShipmentIds);
-
-    if (itemsData) {
-      for (const item of itemsData) {
-        currentMonthUnits += item.quantity || 0;
-        const product = item.products as unknown as { rim_size: string | null; name: string | null } | null;
-
-        // Helper function to detect tire size more accurately
-        const detectTireSize = (rimSize: string | null | undefined, name: string | null | undefined): '38' | '24' | 'other' => {
-          // First try rim_size field (most reliable)
-          if (rimSize) {
-            const cleanSize = rimSize.replace(/"/g, '').trim();
-            if (cleanSize === '38' || cleanSize.startsWith('38')) return '38';
-            if (cleanSize === '24' || cleanSize.startsWith('24')) return '24';
-          }
-
-          // Fallback to name with stricter pattern matching (avoid false positives)
-          if (name) {
-            const lowerName = name.toLowerCase();
-            // Match patterns like "38\"", "38 inch", "38in", "r38" but not "380" or "238"
-            if (/\b38["'\s]|38\s*inch|38in|\sr38\b/i.test(lowerName)) return '38';
-            if (/\b24["'\s]|24\s*inch|24in|\sr24\b/i.test(lowerName)) return '24';
-          }
-
-          return 'other';
-        };
-
-        const tireSize = detectTireSize(product?.rim_size, product?.name);
-        if (tireSize === '38') {
-          currentMonthUnits38 += item.quantity || 0;
-        } else if (tireSize === '24') {
-          currentMonthUnits24 += item.quantity || 0;
-        }
-      }
-    }
-  }
-
-  // Fetch last month items for units comparison (from delivered shipments)
-  const lastShipmentIds = lastMonthShipments?.map(s => s.sales_order_id).filter(Boolean) || [];
-  let lastMonthUnits = 0;
-
-  if (lastShipmentIds.length > 0) {
-    const { data: lastItemsData } = await supabase
-      .from('sales_order_items')
-      .select('quantity')
-      .in('sales_order_id', lastShipmentIds);
-
-    if (lastItemsData) {
-      lastMonthUnits = lastItemsData.reduce((sum, item) => sum + (item.quantity || 0), 0);
-    }
-  }
-
-  // Fetch YTD items for units and margin calculation (from delivered shipments)
-  const ytdShipmentIds = ytdShipments?.map(s => s.sales_order_id).filter(Boolean) || [];
-  let ytdUnits = 0;
-  let ytdUnits38 = 0;
-  let ytdUnits24 = 0;
-  let ytdTotalRevenue = 0;
-  let ytdTotalCost = 0;
-
-  if (ytdShipmentIds.length > 0) {
-    const { data: ytdItemsData } = await supabase
-      .from('sales_order_items')
-      .select(`
-        quantity,
-        unit_price,
-        unit_cost,
-        sku,
-        description,
-        product_id,
-        products (
-          rim_size,
-          name,
-          base_cost,
-          item_type
-        ),
-        sales_orders ( is_commission_only, order_series )
-      `)
-      .in('sales_order_id', ytdShipmentIds);
-    const cycleCost = await productCycleCostRepository.loadLookup();
-
-    if (ytdItemsData) {
-      // Helper function to check if item is a commission item
-      const isCommissionItem = (item: {
-        sku: string | null;
-        description: string | null;
-        products: unknown;
-      }): boolean => {
-        const product = item.products as { item_type: string | null } | null;
-
-        // Must be a service item
-        if (product?.item_type !== 'service') {
-          return false;
-        }
-
-        // Check if sku or description contains "commission"
-        const skuLower = (item.sku || '').toLowerCase();
-        const descLower = (item.description || '').toLowerCase();
-
-        return skuLower.includes('commission') || descLower.includes('commission');
-      };
-
-      // Helper function to detect tire size more accurately
-      const detectTireSize = (rimSize: string | null | undefined, name: string | null | undefined): '38' | '24' | 'other' => {
-        // First try rim_size field (most reliable)
-        if (rimSize) {
-          const cleanSize = rimSize.replace(/"/g, '').trim();
-          if (cleanSize === '38' || cleanSize.startsWith('38')) return '38';
-          if (cleanSize === '24' || cleanSize.startsWith('24')) return '24';
-        }
-
-        // Fallback to name with stricter pattern matching
-        if (name) {
-          const lowerName = name.toLowerCase();
-          if (/\b38["'\s]|38\s*inch|38in|\sr38\b/i.test(lowerName)) return '38';
-          if (/\b24["'\s]|24\s*inch|24in|\sr24\b/i.test(lowerName)) return '24';
-        }
-
-        return 'other';
-      };
-
-      for (const item of ytdItemsData) {
-        const quantity = item.quantity || 0;
-        const unitPrice = item.unit_price || 0;
-        const product = item.products as unknown as { rim_size: string | null; name: string | null; base_cost: number | null; item_type: string | null } | null;
-        const order = item.sales_orders as unknown as { is_commission_only: boolean | null; order_series: string | null } | null;
-        // Saved unit_cost (cost snapshot) first, else the order cycle's cost, else products.base_cost
-        const itemCost = (item as { unit_cost?: number | null }).unit_cost ?? cycleCost(item.product_id, order?.order_series, product?.base_cost || 0);
-
-        ytdUnits += quantity;
-
-        // EXCLUDE commission items and commission-only orders (Galileo invoices the customer) from margin
-        const commissionOnlyOrder = order?.is_commission_only === true;
-        if (!isCommissionItem(item) && !commissionOnlyOrder) {
-          ytdTotalRevenue += unitPrice * quantity;
-          ytdTotalCost += itemCost * quantity;
-        }
-
-        const tireSize = detectTireSize(product?.rim_size, product?.name);
-        if (tireSize === '38') {
-          ytdUnits38 += quantity;
-        } else if (tireSize === '24') {
-          ytdUnits24 += quantity;
-        }
-      }
-    }
-  }
-
-  // Fetch last year YTD items for units and margin comparison (from delivered shipments)
-  const lastYearYtdShipmentIds = lastYearYtdShipments?.map(s => s.sales_order_id).filter(Boolean) || [];
-  let lastYearYtdUnits = 0;
-  let lastYearYtdTotalRevenue = 0;
-  let lastYearYtdTotalCost = 0;
-
-  if (lastYearYtdShipmentIds.length > 0) {
-    const { data: lastYearYtdItemsData } = await supabase
-      .from('sales_order_items')
-      .select(`
-        quantity,
-        unit_price,
-        unit_cost,
-        sku,
-        description,
-        product_id,
-        products (
-          base_cost,
-          item_type
-        ),
-        sales_orders ( is_commission_only, order_series )
-      `)
-      .in('sales_order_id', lastYearYtdShipmentIds);
-    const cycleCost = await productCycleCostRepository.loadLookup();
-
-    if (lastYearYtdItemsData) {
-      // Helper function to check if item is a commission item
-      const isCommissionItem = (item: {
-        sku: string | null;
-        description: string | null;
-        products: unknown;
-      }): boolean => {
-        const product = item.products as { item_type: string | null } | null;
-
-        // Must be a service item
-        if (product?.item_type !== 'service') {
-          return false;
-        }
-
-        // Check if sku or description contains "commission"
-        const skuLower = (item.sku || '').toLowerCase();
-        const descLower = (item.description || '').toLowerCase();
-
-        return skuLower.includes('commission') || descLower.includes('commission');
-      };
-
-      for (const item of lastYearYtdItemsData) {
-        const quantity = item.quantity || 0;
-        const unitPrice = item.unit_price || 0;
-        const product = item.products as unknown as { base_cost: number | null; item_type: string | null } | null;
-        const order = item.sales_orders as unknown as { is_commission_only: boolean | null; order_series: string | null } | null;
-        // Saved unit_cost (cost snapshot) first, else the order cycle's cost, else products.base_cost
-        const itemCost = (item as { unit_cost?: number | null }).unit_cost ?? cycleCost(item.product_id, order?.order_series, product?.base_cost || 0);
-
-        lastYearYtdUnits += quantity;
-
-        // EXCLUDE commission items and commission-only orders (Galileo invoices the customer) from margin
-        const commissionOnlyOrder = order?.is_commission_only === true;
-        if (!isCommissionItem(item) && !commissionOnlyOrder) {
-          lastYearYtdTotalRevenue += unitPrice * quantity;
-          lastYearYtdTotalCost += itemCost * quantity;
-        }
-      }
-    }
-  }
+  // Blended margin: the same recognized tire revenue and its COGS
+  const ytdTotalRevenue = ytd.revenue;
+  const ytdTotalCost = ytd.cogs;
+  const lastYearYtdTotalRevenue = lastYearYtd.revenue;
+  const lastYearYtdTotalCost = lastYearYtd.cogs;
 
   // Open Orders: sales orders with status confirmed or processing (not deleted)
   const { data: openOrdersData, count: openOrdersCount } = await supabase
@@ -936,7 +517,7 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
     if (dollars >= 1000000) {
       return `$${(dollars / 1000000).toFixed(1)}M`;
     }
-    return `$${Math.round(dollars).toLocaleString()}`;
+    return `$${Math.round(dollars).toLocaleString('en-US')}`;
   };
 
   // Build stats array
@@ -964,7 +545,7 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
     {
       id: 'units-sold',
       title: `Units Sold (${periodLabel})`,
-      value: currentMonthUnits.toLocaleString(),
+      value: currentMonthUnits.toLocaleString('en-US'),
       change: `${unitsChange >= 0 ? '+' : ''}${unitsChange.toFixed(1)}%`,
       trend: unitsChange >= 0 ? 'up' : 'down',
       icon: 'package',
@@ -974,7 +555,7 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
     {
       id: 'units-sold-ytd',
       title: 'Units Sold (YTD)',
-      value: ytdUnits.toLocaleString(),
+      value: ytdUnits.toLocaleString('en-US'),
       change: `${ytdUnitsChange >= 0 ? '+' : ''}${ytdUnitsChange.toFixed(1)}%`,
       trend: ytdUnitsChange >= 0 ? 'up' : 'down',
       icon: 'package',
@@ -1014,8 +595,6 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
  * @param dateRange - Optional date range filter. Defaults to last 6 months if not provided.
  */
 export async function getMarginAnalysis(dateRange?: DateRange): Promise<MarginDataPoint[]> {
-  const supabase = createAdminClient();
-
   // Use provided date range or default to last 6 months
   let startDate: string;
   let endDate: string;
@@ -1033,43 +612,15 @@ export async function getMarginAnalysis(dateRange?: DateRange): Promise<MarginDa
 
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-  // Query sales_order_items with products for cost data
-  // Ankur's Definition 3.2: Gross Profit = Revenue - COGS
-  // Only count RECOGNIZED revenue (delivered/invoiced orders)
-  // unit_cost = cost saved by the first fulfillment allocation (null: order cycle cost, else base_cost)
-  const { data, error } = await supabase
-    .from('sales_order_items')
-    .select(`
-      quantity,
-      unit_price,
-      unit_cost,
-      product_id,
-      sales_orders!inner (
-        order_date,
-        status,
-        deleted_at,
-        order_series,
-        is_commission_only
-      ),
-      products (
-        id,
-        base_cost,
-        rim_size,
-        name,
-        item_type
-      )
-    `)
-    .gte('sales_orders.order_date', startDate)
-    .lte('sales_orders.order_date', endDate)
-    .is('sales_orders.deleted_at', null)
-    .in('sales_orders.status', ['delivered']);
-
-  if (error) {
+  // Ankur's Definition 3.2 (same rule as the Executive tabs): gross margin of the
+  // tire lines of firm orders delivered in the month (recognized-sales.service)
+  let recognized;
+  try {
+    recognized = await loadRecognizedSales();
+  } catch (error) {
     console.error('Error fetching margin data:', error);
     return [];
   }
-
-  const cycleCost = await productCycleCostRepository.loadLookup();
 
   // Initialize monthly data structure
   interface MonthlyMarginData {
@@ -1098,61 +649,22 @@ export async function getMarginAnalysis(dateRange?: DateRange): Promise<MarginDa
     };
   }
 
-  // Helper function to detect tire size more accurately
-  const detectTireSize = (rimSize: string | null | undefined, name: string | null | undefined): '38' | '24' | 'other' => {
-    // First try rim_size field (most reliable)
-    if (rimSize) {
-      const cleanSize = rimSize.replace(/"/g, '').trim();
-      if (cleanSize === '38' || cleanSize.startsWith('38')) return '38';
-      if (cleanSize === '24' || cleanSize.startsWith('24')) return '24';
+  for (const line of recognized.lines) {
+    if (!line.isTire || line.date < startDate || line.date > endDate) {
+      continue;
     }
+    const monthKey = line.date.slice(0, 7);
+    if (!monthlyData[monthKey]) continue;
 
-    // Fallback to name with stricter pattern matching
-    if (name) {
-      const lowerName = name.toLowerCase();
-      if (/\b38["'\s]|38\s*inch|38in|\sr38\b/i.test(lowerName)) return '38';
-      if (/\b24["'\s]|24\s*inch|24in|\sr24\b/i.test(lowerName)) return '24';
-    }
-
-    return 'other';
-  };
-
-  // Process results
-  if (data) {
-    for (const item of data) {
-      const salesOrder = item.sales_orders as unknown as { order_date: string; order_series: string | null; is_commission_only: boolean | null } | null;
-      const product = item.products as unknown as { id: string; base_cost: number; rim_size: string | null; name: string | null; item_type: string | null } | null;
-
-      if (!salesOrder?.order_date) continue;
-
-      // Tire margin only: no service lines (commission, handling) and no commission-only orders (Galileo invoices them)
-      if (product?.item_type === 'service' || salesOrder.is_commission_only === true) continue;
-
-      const date = new Date(salesOrder.order_date);
-      const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-
-      if (!monthlyData[monthKey]) continue;
-
-      const quantity = item.quantity || 0;
-      const unitPrice = item.unit_price || 0; // Selling price in cents
-      // Saved unit_cost (cost snapshot) first, else the order cycle's cost, else products.base_cost (cents)
-      const itemCost = (item as { unit_cost?: number | null }).unit_cost ?? cycleCost(item.product_id, salesOrder.order_series, product?.base_cost || 0);
-
-      const lineRevenue = unitPrice * quantity;
-      const lineCost = itemCost * quantity;
-
-      monthlyData[monthKey].totalRevenue += lineRevenue;
-      monthlyData[monthKey].totalCost += lineCost;
-
-      // Track 38" and 24" separately with improved detection
-      const tireSize = detectTireSize(product?.rim_size, product?.name);
-      if (tireSize === '38') {
-        monthlyData[monthKey].revenue38 += lineRevenue;
-        monthlyData[monthKey].cost38 += lineCost;
-      } else if (tireSize === '24') {
-        monthlyData[monthKey].revenue24 += lineRevenue;
-        monthlyData[monthKey].cost24 += lineCost;
-      }
+    const lineCost = line.cost ?? 0;
+    monthlyData[monthKey].totalRevenue += line.lineTotal;
+    monthlyData[monthKey].totalCost += lineCost;
+    if (line.tireSize === '38') {
+      monthlyData[monthKey].revenue38 += line.lineTotal;
+      monthlyData[monthKey].cost38 += lineCost;
+    } else if (line.tireSize === '24') {
+      monthlyData[monthKey].revenue24 += line.lineTotal;
+      monthlyData[monthKey].cost24 += lineCost;
     }
   }
 
@@ -1196,8 +708,6 @@ export async function getMarginAnalysis(dateRange?: DateRange): Promise<MarginDa
  * @param dateRange - Optional date range filter. Affects the data period shown.
  */
 export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDataPoint[]> {
-  const supabase = createAdminClient();
-
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
   // Get current date info
@@ -1218,41 +728,21 @@ export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDat
     queryEndDate = formatDateString(now);
   }
 
-  // Query current year orders (using order_date - when order was placed)
-  // Ankur's Definition 3.1: Only count RECOGNIZED revenue (delivered/invoiced orders)
-  const { data: currentYearData, error: currentError } = await supabase
-    .from('sales_orders')
-    .select('order_date, grand_total, requested_delivery_date')
-    .gte('order_date', queryStartDate)
-    .lte('order_date', queryEndDate)
-    .is('deleted_at', null)
-    .not('is_commission_only', 'is', true)
-    .in('status', ['delivered']);
-
-  if (currentError) {
-    console.error('Error fetching current year revenue:', currentError);
+  // Recognized tire revenue (Ankur 3.1, same rule as the Executive tabs):
+  // tire lines of firm orders delivered in the month − credit notes in the month
+  let recognized;
+  try {
+    recognized = await loadRecognizedSales();
+  } catch (error) {
+    console.error('Error fetching revenue trend:', error);
+    recognized = { lines: [], credits: [] };
   }
 
-  // Calculate same date range for last year (subtract 1 year from start and end dates)
+  // Same date range one year earlier
   const startDateObj = new Date(queryStartDate);
   const endDateObj = new Date(queryEndDate);
-  const lastYearStartDate = new Date(startDateObj.getFullYear() - 1, startDateObj.getMonth(), startDateObj.getDate());
-  const lastYearEndDate = new Date(endDateObj.getFullYear() - 1, endDateObj.getMonth(), endDateObj.getDate());
-
-  // Query last year orders (same date range, one year ago, using order_date)
-  // Ankur's Definition: Only count RECOGNIZED revenue (delivered/invoiced orders)
-  const { data: lastYearData, error: lastError } = await supabase
-    .from('sales_orders')
-    .select('order_date, grand_total, requested_delivery_date')
-    .gte('order_date', formatDateString(lastYearStartDate))
-    .lte('order_date', formatDateString(lastYearEndDate))
-    .is('deleted_at', null)
-    .not('is_commission_only', 'is', true)
-    .in('status', ['delivered']);
-
-  if (lastError) {
-    console.error('Error fetching last year revenue:', lastError);
-  }
+  const lastYearStart = formatDateString(new Date(startDateObj.getFullYear() - 1, startDateObj.getMonth(), startDateObj.getDate()));
+  const lastYearEnd = formatDateString(new Date(endDateObj.getFullYear() - 1, endDateObj.getMonth(), endDateObj.getDate()));
 
   // Initialize monthly data
   const monthlyRevenue: Record<string, number> = {};
@@ -1267,30 +757,20 @@ export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDat
     lastYearRevenue[monthKey] = 0;
   }
 
-  // Process current year data
-  if (currentYearData) {
-    for (const order of currentYearData) {
-      if (!order.order_date) continue;
-      const date = new Date(order.order_date);
-      const monthKey = String(date.getMonth() + 1).padStart(2, '0');
-
-      if (monthlyRevenue[monthKey] !== undefined) {
-        monthlyRevenue[monthKey] += (order.grand_total || 0) / 100; // cents to dollars
-      }
+  const addTo = (target: Record<string, number>, date: string, cents: number) => {
+    const monthKey = date.slice(5, 7);
+    if (target[monthKey] !== undefined) {
+      target[monthKey] += cents / 100; // cents to dollars
     }
+  };
+  const tireLines = recognized.lines.filter((l) => l.isTire);
+  for (const line of tireLines) {
+    if (line.date >= queryStartDate && line.date <= queryEndDate) addTo(monthlyRevenue, line.date, line.lineTotal);
+    if (line.date >= lastYearStart && line.date <= lastYearEnd) addTo(lastYearRevenue, line.date, line.lineTotal);
   }
-
-  // Process last year data
-  if (lastYearData) {
-    for (const order of lastYearData) {
-      if (!order.order_date) continue;
-      const date = new Date(order.order_date);
-      const monthKey = String(date.getMonth() + 1).padStart(2, '0');
-
-      if (lastYearRevenue[monthKey] !== undefined) {
-        lastYearRevenue[monthKey] += (order.grand_total || 0) / 100; // cents to dollars
-      }
-    }
+  for (const credit of recognized.credits) {
+    if (credit.date >= queryStartDate && credit.date <= queryEndDate) addTo(monthlyRevenue, credit.date, -credit.amount);
+    if (credit.date >= lastYearStart && credit.date <= lastYearEnd) addTo(lastYearRevenue, credit.date, -credit.amount);
   }
 
   // TODO: Move to database table (monthly_targets) for dynamic updates
