@@ -6,12 +6,11 @@
  * date, tire lines only (product item_type 'inventory'). Credit notes
  * (issued/applied) reduce revenue on their credit-note date.
  *
- * COGS (client confirmation, Oct 21, 2026: "COGS from the ERP"): tires × the
- * product's ERP cost (products.base_cost). PO unit prices cannot be used: they
- * are the customer sales prices copied onto the PO. Tires whose product has
- * no cost (base_cost 0) make the figure incomplete (cogsComplete false).
- * FIFO by container needs the real purchase cost per PO line, which the ERP
- * does not record yet.
+ * COGS calculation (updated Oct 27, 2026):
+ * 1. Use saved unit_cost from sales_order_items if available (cost snapshot at order creation)
+ * 2. Fall back to product's ERP cost (products.base_cost)
+ * This ensures historical margins don't change when product costs change.
+ * Tires with no cost make the figure incomplete (cogsComplete false).
  *
  * Backlog (client confirmation): firm orders with status confirmed or
  * processing, less the tires already invoiced. Commission-only orders are not
@@ -136,7 +135,7 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
       .not('status', 'in', `(${OPEN_PO_EXCLUDED.join(',')})`),
     db
       .from('sales_orders')
-      .select('order_number, order_date, status, order_series, is_commission_only, commission_amount, commission_invoice_id, sales_order_items(id, product_id, quantity, customer_qty, line_total)')
+      .select('order_number, order_date, status, order_series, is_commission_only, commission_amount, commission_invoice_id, sales_order_items(id, product_id, quantity, customer_qty, line_total, unit_cost)')
       .is('deleted_at', null)
       .not('status', 'in', '(draft,cancelled)'),
     db
@@ -152,10 +151,32 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
   }
 
   const tireIds = new Set((productsRes.data ?? []).filter((p) => p.item_type === 'inventory').map((p) => String(p.id)));
-  // ERP cost per tire (cents); 0 = no cost recorded
-  const unitCost = new Map((productsRes.data ?? []).map((p) => [String(p.id), Number(p.base_cost ?? 0)]));
-  const costOf = (productId: string, qty: number): { cost: number | null; complete: boolean } => {
-    const c = unitCost.get(productId) ?? 0;
+  // ERP cost per tire (cents); 0 = no cost recorded (fallback from products.base_cost)
+  const productBaseCost = new Map((productsRes.data ?? []).map((p) => [String(p.id), Number(p.base_cost ?? 0)]));
+
+  // Build map of sales_order_item_id → saved unit_cost (cost snapshot at order creation)
+  const itemSavedCost = new Map<string, number | null>();
+  for (const so of soRes.data ?? []) {
+    for (const item of (so.sales_order_items ?? []) as Array<Record<string, unknown>>) {
+      const itemId = item.id ? String(item.id) : null;
+      const savedCost = item.unit_cost !== undefined && item.unit_cost !== null ? Number(item.unit_cost) : null;
+      if (itemId) {
+        itemSavedCost.set(itemId, savedCost);
+      }
+    }
+  }
+
+  // Cost lookup: uses saved unit_cost from sales_order_item if available, else product's base_cost
+  const costOf = (productId: string, qty: number, salesOrderItemId?: string | null): { cost: number | null; complete: boolean } => {
+    // Priority 1: Use saved unit_cost from sales_order_item
+    if (salesOrderItemId && itemSavedCost.has(salesOrderItemId)) {
+      const savedCost = itemSavedCost.get(salesOrderItemId);
+      if (savedCost !== null && savedCost !== undefined && savedCost > 0) {
+        return { cost: savedCost * qty, complete: true };
+      }
+    }
+    // Priority 2: Fall back to product's base_cost
+    const c = productBaseCost.get(productId) ?? 0;
     return c > 0 ? { cost: c * qty, complete: true } : { cost: null, complete: false };
   };
 
@@ -187,7 +208,8 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
   const lineCost = new Map<InvoiceLine, { cost: number | null; complete: boolean }>();
   for (const line of lines) {
     if (line.isTire && line.productId) {
-      lineCost.set(line, costOf(line.productId, line.quantity));
+      // Pass salesOrderItemId to use saved unit_cost if available
+      lineCost.set(line, costOf(line.productId, line.quantity, line.salesOrderItemId));
     }
   }
   const credits = (creditsRes.data ?? []).map((c) => ({ date: String(c.credit_note_date), amount: Number(c.subtotal ?? 0) }));
@@ -290,7 +312,8 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
       const unitNet = qty > 0 ? Number(item.line_total ?? 0) / qty : 0;
       backlogTires += remaining;
       backlogRevenue += remaining * unitNet;
-      const c = costOf(productId, remaining);
+      // Pass item.id to use saved unit_cost if available
+      const c = costOf(productId, remaining, item.id ? String(item.id) : null);
       if (c.cost !== null) {
         backlogCogs += c.cost;
         backlogAnyCost = true;

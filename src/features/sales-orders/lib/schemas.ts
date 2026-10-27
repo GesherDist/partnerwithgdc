@@ -115,6 +115,7 @@ export const createSalesOrderSchema = z.object({
   currencyCode: z.string().length(3).default('USD'),
   customerPoNumber: z.string().min(1, 'Customer PO number is required.').max(100),
   status: orderStatusSchema.default('draft'),
+  orderSeries: z.string().max(20).nullable().optional(), // GDC 1, GDC 2, GDC 3 for Operations Dashboard
   productSource: productSourceSchema.optional(),
   billingAddress: addressSchema,
   shippingAddress: addressSchema,
@@ -132,6 +133,7 @@ export const updateSalesOrderSchema = z.object({
   warehouseId: z.string().uuid().nullable().optional(),
   currencyCode: z.string().length(3).optional(),
   customerPoNumber: z.string().min(1, 'Customer PO number is required.').max(100).optional(),
+  orderSeries: z.string().max(20).nullable().optional(), // GDC 1, GDC 2, GDC 3 for Operations Dashboard
   productSource: productSourceSchema.optional(),
   billingAddress: addressSchema.optional(),
   shippingAddress: addressSchema.optional(),
@@ -154,6 +156,7 @@ export const salesOrderFormSchema = z.object({
   currencyId: z.string().optional().default('USD'),
   customerPoNumber: z.string().min(1, 'Customer PO number is required.'),
   status: orderStatusSchema.default('draft'),
+  orderSeries: z.string().optional().default(''), // GDC 1, GDC 2, GDC 3 for Operations Dashboard
   billingAddress: addressFormSchema,
   shippingAddress: addressFormSchema,
   shippingMethodId: z.string().optional().default(''),
@@ -247,6 +250,7 @@ export function formToCreateDTO(form: SalesOrderFormInput) {
     currencyCode: form.currencyId || 'USD',
     customerPoNumber: form.customerPoNumber,
     status: form.status as OrderStatus,
+    orderSeries: form.orderSeries || null, // GDC 1, GDC 2, GDC 3
     billingAddress: {
       street: form.billingAddress.street || null,
       city: form.billingAddress.city || null,
@@ -304,6 +308,7 @@ export function orderToFormValues(order: {
   currencyCode: string;
   customerPoNumber: string | null;
   status: OrderStatus;
+  orderSeries: string | null;
   billingAddressStreet: string | null;
   billingAddressCity: string | null;
   billingAddressState: string | null;
@@ -348,6 +353,7 @@ export function orderToFormValues(order: {
     currencyId: order.currencyCode,
     customerPoNumber: order.customerPoNumber || '',
     status: order.status,
+    orderSeries: order.orderSeries || '',
     billingAddress: {
       street: order.billingAddressStreet || '',
       city: order.billingAddressCity || '',

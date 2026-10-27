@@ -29,6 +29,7 @@ import {
 } from '@/shared/components/ui/dialog';
 import { Button } from '@/shared/components/ui/button';
 import { Input } from '@/shared/components/ui/input';
+import { PhoneInput } from '@/shared/components/ui/phone-input';
 import { Switch } from '@/shared/components/ui/switch';
 import {
   Select,
@@ -220,7 +221,7 @@ const CreateUserForm = memo(function CreateUserForm({ onDone, onSuccess }: FormP
             <FormItem>
               <FormLabel>Phone</FormLabel>
               <FormControl>
-                <Input {...field} placeholder="+1 555 000 1234" />
+                <PhoneInput {...field} placeholder="(555) 123-4567" />
               </FormControl>
               <FormMessage />
             </FormItem>
@@ -393,7 +394,7 @@ const EditUserForm = memo(function EditUserForm({
             <FormItem>
               <FormLabel>Phone</FormLabel>
               <FormControl>
-                <Input {...field} />
+                <PhoneInput {...field} placeholder="(555) 123-4567" />
               </FormControl>
               <FormMessage />
             </FormItem>

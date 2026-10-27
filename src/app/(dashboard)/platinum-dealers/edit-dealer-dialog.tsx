@@ -30,6 +30,7 @@ import {
   FormMessage,
 } from '@/shared/components/ui/form';
 import { Input } from '@/shared/components/ui/input';
+import { PhoneInput } from '@/shared/components/ui/phone-input';
 import { Textarea } from '@/shared/components/ui/textarea';
 import {
   Select,
@@ -317,7 +318,7 @@ export function EditDealerDialog({
                         <FormItem>
                           <FormLabel>Phone</FormLabel>
                           <FormControl>
-                            <Input placeholder="+1-555-0123" {...field} />
+                            <PhoneInput placeholder="(555) 012-3456" {...field} />
                           </FormControl>
                           <FormMessage />
                         </FormItem>

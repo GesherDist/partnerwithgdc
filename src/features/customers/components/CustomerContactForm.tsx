@@ -12,10 +12,18 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { User, Phone } from 'lucide-react';
 
-import { Form } from '@/shared/components/ui/form';
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from '@/shared/components/ui/form';
 import { FormInput } from '@/shared/components/forms/form-input';
 import { FormSelect } from '@/shared/components/forms/form-select';
 import { Button } from '@/shared/components/ui/button';
+import { PhoneInput } from '@/shared/components/ui/phone-input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/shared/components/ui/card';
 import { Separator } from '@/shared/components/ui/separator';
 
@@ -157,21 +165,39 @@ export function CustomerContactForm({
               disabled={isLoading}
             />
             <div className="grid grid-cols-2 gap-4">
-              <FormInput
+              <FormField
                 control={form.control}
                 name="phone"
-                label="Phone"
-                type="tel"
-                placeholder="(555) 123-4567"
-                disabled={isLoading}
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Phone</FormLabel>
+                    <FormControl>
+                      <PhoneInput
+                        {...field}
+                        placeholder="(555) 123-4567"
+                        disabled={isLoading}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
               />
-              <FormInput
+              <FormField
                 control={form.control}
                 name="mobile"
-                label="Mobile"
-                type="tel"
-                placeholder="(555) 987-6543"
-                disabled={isLoading}
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Mobile</FormLabel>
+                    <FormControl>
+                      <PhoneInput
+                        {...field}
+                        placeholder="(555) 987-6543"
+                        disabled={isLoading}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
               />
             </div>
           </CardContent>

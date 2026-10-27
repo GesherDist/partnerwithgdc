@@ -1073,7 +1073,7 @@ export async function createPurchaseOrderFromAllocation(
     // Get sales order
     const { data: salesOrder, error: soError } = await db
       .from('sales_orders')
-      .select('order_number, customer_id, currency_code, warehouse_id, shipping_address_street, shipping_address_city, shipping_address_state, shipping_address_postal_code, shipping_address_country, requested_delivery_date')
+      .select('order_number, customer_id, currency_code, warehouse_id, shipping_address_street, shipping_address_city, shipping_address_state, shipping_address_postal_code, shipping_address_country, requested_delivery_date, order_series')
       .eq('id', salesOrderId)
       .single();
 
@@ -1124,6 +1124,7 @@ export async function createPurchaseOrderFromAllocation(
         status: 'draft',
         currency_code: salesOrder.currency_code || 'USD',
         warehouse_id: salesOrder.warehouse_id,
+        order_series: salesOrder.order_series || null, // Copy order series from SO for Operations Dashboard tracking
         subtotal: subtotal,
         tax_total: 0,
         shipping_cost: 0,
@@ -1257,7 +1258,7 @@ export async function createPurchaseOrderFromMultipleAllocations(
     // Get sales order
     const { data: salesOrder, error: soError } = await db
       .from('sales_orders')
-      .select('order_number, customer_id, currency_code, warehouse_id, shipping_address_street, shipping_address_city, shipping_address_state, shipping_address_postal_code, shipping_address_country, requested_delivery_date')
+      .select('order_number, customer_id, currency_code, warehouse_id, shipping_address_street, shipping_address_city, shipping_address_state, shipping_address_postal_code, shipping_address_country, requested_delivery_date, order_series')
       .eq('id', salesOrderId)
       .single();
 
@@ -1333,6 +1334,7 @@ export async function createPurchaseOrderFromMultipleAllocations(
         status: 'draft',
         currency_code: salesOrder.currency_code || 'USD',
         warehouse_id: salesOrder.warehouse_id,
+        order_series: salesOrder.order_series || null, // Copy order series from SO for Operations Dashboard tracking
         subtotal: combinedSubtotal,
         tax_total: 0,
         shipping_cost: 0,
@@ -1957,6 +1959,7 @@ export async function getSalesOrdersOnHold(): Promise<ActionResult<SalesOrderLis
       creditStatus: row.credit_status as 'ok' | 'hold',
       // Matches the repository mapper, which defaults a null source to direct
       productSource: row.product_source || 'direct',
+      orderSeries: row.order_series || null,
       grandTotal: row.grand_total,
       currencyCode: row.currency_code,
       itemCount: 0, // Not fetched for this list

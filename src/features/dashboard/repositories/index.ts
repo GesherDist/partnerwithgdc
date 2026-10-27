@@ -743,6 +743,7 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
       .select(`
         quantity,
         unit_price,
+        unit_cost,
         sku,
         description,
         products (
@@ -799,7 +800,8 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
         const quantity = item.quantity || 0;
         const unitPrice = item.unit_price || 0;
         const product = item.products as unknown as { rim_size: string | null; name: string | null; base_cost: number | null; item_type: string | null } | null;
-        const baseCost = product?.base_cost || 0;
+        // Use saved unit_cost if available, else fall back to product's base_cost
+        const itemCost = (item as { unit_cost?: number | null }).unit_cost ?? product?.base_cost ?? 0;
 
         ytdUnits += quantity;
 
@@ -807,7 +809,7 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
         const commissionOnlyOrder = (item.sales_orders as unknown as { is_commission_only: boolean | null } | null)?.is_commission_only === true;
         if (!isCommissionItem(item) && !commissionOnlyOrder) {
           ytdTotalRevenue += unitPrice * quantity;
-          ytdTotalCost += baseCost * quantity;
+          ytdTotalCost += itemCost * quantity;
         }
 
         const tireSize = detectTireSize(product?.rim_size, product?.name);
@@ -832,6 +834,7 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
       .select(`
         quantity,
         unit_price,
+        unit_cost,
         sku,
         description,
         products (
@@ -867,7 +870,8 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
         const quantity = item.quantity || 0;
         const unitPrice = item.unit_price || 0;
         const product = item.products as unknown as { base_cost: number | null; item_type: string | null } | null;
-        const baseCost = product?.base_cost || 0;
+        // Use saved unit_cost if available, else fall back to product's base_cost
+        const itemCost = (item as { unit_cost?: number | null }).unit_cost ?? product?.base_cost ?? 0;
 
         lastYearYtdUnits += quantity;
 
@@ -875,7 +879,7 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
         const commissionOnlyOrder = (item.sales_orders as unknown as { is_commission_only: boolean | null } | null)?.is_commission_only === true;
         if (!isCommissionItem(item) && !commissionOnlyOrder) {
           lastYearYtdTotalRevenue += unitPrice * quantity;
-          lastYearYtdTotalCost += baseCost * quantity;
+          lastYearYtdTotalCost += itemCost * quantity;
         }
       }
     }
@@ -1025,11 +1029,13 @@ export async function getMarginAnalysis(dateRange?: DateRange): Promise<MarginDa
   // Query sales_order_items with products for cost data
   // Ankur's Definition 3.2: Gross Profit = Revenue - COGS
   // Only count RECOGNIZED revenue (delivered/invoiced orders)
+  // unit_cost = saved cost snapshot at order creation (falls back to base_cost if null)
   const { data, error } = await supabase
     .from('sales_order_items')
     .select(`
       quantity,
       unit_price,
+      unit_cost,
       product_id,
       sales_orders!inner (
         order_date,
@@ -1114,10 +1120,11 @@ export async function getMarginAnalysis(dateRange?: DateRange): Promise<MarginDa
 
       const quantity = item.quantity || 0;
       const unitPrice = item.unit_price || 0; // Selling price in cents
-      const baseCost = product?.base_cost || 0; // Cost in cents
+      // Use saved unit_cost if available, else fall back to product's base_cost
+      const itemCost = (item as { unit_cost?: number | null }).unit_cost ?? product?.base_cost ?? 0;
 
       const lineRevenue = unitPrice * quantity;
-      const lineCost = baseCost * quantity;
+      const lineCost = itemCost * quantity;
 
       monthlyData[monthKey].totalRevenue += lineRevenue;
       monthlyData[monthKey].totalCost += lineCost;

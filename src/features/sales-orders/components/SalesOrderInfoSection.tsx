@@ -31,7 +31,7 @@ import { Separator } from '@/shared/components/ui/separator';
 import { getNextOrderNumber } from '../actions';
 
 import type { SalesOrderInfoSectionProps } from '../types';
-import { ORDER_STATUS_LABELS, type OrderStatus } from '../types';
+import { ORDER_STATUS_LABELS, ORDER_SERIES_OPTIONS, type OrderStatus } from '../types';
 import type { SalesOrderFormInput } from '../lib/schemas';
 
 // ============================================
@@ -250,6 +250,33 @@ function SalesOrderInfoSectionComponent({
             placeholder="Enter PO number"
             {...register('customerPoNumber')}
           />
+        </div>
+
+        {/* Order Series */}
+        <div className="space-y-2">
+          <Label htmlFor="orderSeries">Order Series</Label>
+          <Controller
+            name="orderSeries"
+            control={control}
+            render={({ field }) => (
+              <Select value={field.value || ''} onValueChange={field.onChange}>
+                <SelectTrigger id="orderSeries">
+                  <SelectValue placeholder="Select order series" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">None</SelectItem>
+                  {ORDER_SERIES_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          />
+          <p className="text-xs text-muted-foreground">
+            For Operations Dashboard tracking (GDC 1, GDC 2, GDC 3)
+          </p>
         </div>
 
         {/* Order Status */}

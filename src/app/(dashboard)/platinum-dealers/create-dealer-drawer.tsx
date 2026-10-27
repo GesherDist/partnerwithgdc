@@ -15,6 +15,7 @@ import {
 } from '@/shared/components/ui/sheet';
 import { Button } from '@/shared/components/ui/button';
 import { Input } from '@/shared/components/ui/input';
+import { PhoneInput } from '@/shared/components/ui/phone-input';
 import { Label } from '@/shared/components/ui/label';
 import {
   Select,
@@ -150,10 +151,10 @@ export function CreateDealerDrawer({ open, onClose, onSuccess }: CreateDealerDra
             {/* Phone */}
             <div className="space-y-2">
               <Label htmlFor="phone">Phone</Label>
-              <Input
+              <PhoneInput
                 id="phone"
                 {...register('phone')}
-                placeholder="+1-555-0123"
+                placeholder="(555) 012-3456"
               />
             </div>
 

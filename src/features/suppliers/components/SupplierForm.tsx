@@ -13,6 +13,7 @@ import { Building2, User, MapPin, Settings, Loader2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/shared/components/ui/card';
 import { Button } from '@/shared/components/ui/button';
 import { Input } from '@/shared/components/ui/input';
+import { PhoneInput } from '@/shared/components/ui/phone-input';
 import { Label } from '@/shared/components/ui/label';
 import { Textarea } from '@/shared/components/ui/textarea';
 import {
@@ -172,11 +173,11 @@ export function SupplierForm({ supplier, mode }: SupplierFormProps) {
             </div>
             <div className="space-y-2">
               <Label htmlFor="primaryContactPhone">Phone</Label>
-              <Input
+              <PhoneInput
                 id="primaryContactPhone"
                 value={formData.primaryContactPhone || ''}
                 onChange={(e) => handleChange('primaryContactPhone', e.target.value)}
-                placeholder="+1 (555) 123-4567"
+                placeholder="(555) 123-4567"
               />
             </div>
           </div>

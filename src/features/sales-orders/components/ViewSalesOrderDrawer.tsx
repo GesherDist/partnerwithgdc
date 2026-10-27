@@ -52,6 +52,8 @@ import {
   ORDER_STATUS_COLORS,
   ORDER_CREDIT_STATUS_LABELS,
   ORDER_CREDIT_STATUS_COLORS,
+  ORDER_SERIES_LABELS,
+  type OrderSeries,
 } from '../types';
 import { ConfirmAllocationsModal } from './ConfirmAllocationsModal';
 import { toast } from 'sonner';
@@ -521,6 +523,13 @@ const handleReleaseHold = async () => {
                       value={order.customerPoNumber || '-'}
                       icon={<FileText className="h-4 w-4" />}
                     />
+                    {order.orderSeries && (
+                      <InfoItem
+                        label="Order Series"
+                        value={ORDER_SERIES_LABELS[order.orderSeries as OrderSeries] || order.orderSeries}
+                        icon={<Package className="h-4 w-4" />}
+                      />
+                    )}
 
                     {order.pickTickets && order.pickTickets.length > 0 && (
                       <InfoItem

@@ -95,6 +95,26 @@ export const FULFILLMENT_SOURCE_DESCRIPTIONS: Record<
     'Platinum dealer procures and ships on our behalf',
 };
 
+// ============================================
+// ORDER SERIES (GDC Inventory Cycles)
+// ============================================
+
+export type OrderSeries = 'GDC 0' | 'GDC 1' | 'GDC 2' | 'GDC 3';
+
+export const ORDER_SERIES_OPTIONS: { value: OrderSeries; label: string }[] = [
+  { value: 'GDC 0', label: 'GDC 0' },
+  { value: 'GDC 1', label: 'GDC 1' },
+  { value: 'GDC 2', label: 'GDC 2' },
+  { value: 'GDC 3', label: 'GDC 3' },
+];
+
+export const ORDER_SERIES_LABELS: Record<OrderSeries, string> = {
+  'GDC 0': 'GDC 0',
+  'GDC 1': 'GDC 1',
+  'GDC 2': 'GDC 2',
+  'GDC 3': 'GDC 3',
+};
+
 // Legacy type for backward compatibility (will be removed in future)
 /** @deprecated Use FulfillmentSource instead */
 export type ProductSource = 'direct' | 'gdc_inventory';
@@ -161,6 +181,7 @@ export interface SalesOrder {
   customerPoNumber: string | null;
   status: OrderStatus;
   creditStatus: OrderCreditStatus;
+  orderSeries: string | null; // GDC 1, GDC 2, GDC 3, etc. for Operations Dashboard tracking
 
   // Billing Address
   billingAddressStreet: string | null;
@@ -229,7 +250,8 @@ export interface SalesOrderItem {
   quantity: number; // Legacy field (kept for backward compatibility)
   customerQty: number; // Customer's actual order quantity (NEVER changes)
   unitCode: string;
-  unitPrice: number; // cents
+  unitPrice: number; // cents (selling price)
+  unitCost: number | null; // cents - Product cost snapshot at order creation. NULL for legacy orders (uses fallback: cycle cost or base cost)
   discountPercent: number;
   taxRate: number;
   lineTotal: number; // cents
@@ -486,6 +508,7 @@ export interface CreateSalesOrderDTO {
   currencyCode?: string;
   customerPoNumber?: string | null;
   status?: OrderStatus;
+  orderSeries?: string | null; // GDC 1, GDC 2, GDC 3, etc. for Operations Dashboard tracking
   billingAddress: AddressDTO;
   shippingAddress: AddressDTO;
   shippingMethod?: string | null;
@@ -502,6 +525,7 @@ export interface UpdateSalesOrderDTO {
   warehouseId?: string | null;
   currencyCode?: string;
   customerPoNumber?: string | null;
+  orderSeries?: string | null; // GDC 1, GDC 2, GDC 3, etc. for Operations Dashboard tracking
   billingAddress?: AddressDTO;
   shippingAddress?: AddressDTO;
   shippingMethod?: string | null;
@@ -537,6 +561,7 @@ export interface SalesOrderListItem {
   requestedDeliveryDate: string | null;
   status: OrderStatus;
   creditStatus: OrderCreditStatus;
+  orderSeries: string | null; // GDC 1, GDC 2, GDC 3, etc.
   grandTotal: number; // cents
   currencyCode: string;
   itemCount: number;
@@ -720,6 +745,7 @@ export interface SalesOrderFormData {
   currencyId?: string;
   customerPoNumber?: string;
   status?: OrderStatus;
+  orderSeries?: string; // GDC 1, GDC 2, GDC 3, etc.
 
   billingAddress: Address;
   shippingAddress: Address;

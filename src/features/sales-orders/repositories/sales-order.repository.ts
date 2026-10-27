@@ -24,6 +24,7 @@ import type {
 } from '../types';
 import { DEFAULT_COMMISSION_RATE_CENTS } from '../types';
 import { calculateOrderTotals, calculateLineTotal } from '../lib/schemas';
+import { getCurrentUnitCosts } from '@/features/products/lib/cycle-cost';
 
 // ============================================
 // DATABASE ROW TYPES
@@ -67,6 +68,7 @@ interface DbSalesOrder {
   commission_amount?: number | null;
   galileo_invoice_number?: string | null;
   commission_invoice_id?: string | null;
+  order_series?: string | null;
   created_at: string;
   updated_at: string;
   created_by: string | null;
@@ -84,6 +86,7 @@ interface DbSalesOrderItem {
   customer_qty: number;
   unit_code: string;
   unit_price: number;
+  unit_cost: number | null; // Product cost snapshot in cents (NULL for legacy items)
   discount_percent: number;
   tax_rate: number;
   line_total: number;
@@ -160,6 +163,7 @@ class SalesOrderRepositoryImpl {
         requested_delivery_date,
         status,
         credit_status,
+        order_series,
         grand_total,
         currency_code,
         created_at,
@@ -497,6 +501,7 @@ class SalesOrderRepositoryImpl {
         grand_total: totals.grandTotal,
         customer_notes: data.customerNotes || null,
         internal_notes: data.internalNotes || null,
+        order_series: data.orderSeries || null,
         created_by: userId || null,
         updated_by: userId || null,
       })
@@ -507,7 +512,11 @@ class SalesOrderRepositoryImpl {
       throw new Error(`Failed to create sales order: ${orderError.message}`);
     }
 
-    // Insert items
+    // Get product costs for cost snapshot (Decision D1-A: use base_cost)
+    const productIds = data.items.map((item) => item.productId);
+    const productCosts = await getCurrentUnitCosts(productIds);
+
+    // Insert items with cost snapshot
     const itemsToInsert = data.items.map((item, index) => ({
       sales_order_id: order.id,
       product_id: item.productId,
@@ -517,6 +526,7 @@ class SalesOrderRepositoryImpl {
       customer_qty: item.customerQty || item.quantity, // Default to quantity if not provided
       unit_code: item.unitCode,
       unit_price: item.unitPrice,
+      unit_cost: productCosts.get(item.productId) ?? null, // Cost snapshot at order creation
       discount_percent: item.discountPercent,
       tax_rate: item.taxRate,
       line_total: calculateLineTotal(item.quantity, item.unitPrice, item.discountPercent),
@@ -582,6 +592,7 @@ class SalesOrderRepositoryImpl {
     if (data.shippingMethod !== undefined) {updateData.shipping_method = data.shippingMethod;}
     if (data.customerNotes !== undefined) {updateData.customer_notes = data.customerNotes;}
     if (data.internalNotes !== undefined) {updateData.internal_notes = data.internalNotes;}
+    if (data.orderSeries !== undefined) {updateData.order_series = data.orderSeries;}
 
     const { data: result, error } = await db
       .from('sales_orders')
@@ -726,6 +737,10 @@ class SalesOrderRepositoryImpl {
 
     const sortOrder = (maxSortData?.sort_order || 0) + 1;
 
+    // Get product cost for cost snapshot
+    const productCosts = await getCurrentUnitCosts([item.productId]);
+    const unitCost = productCosts.get(item.productId) ?? null;
+
     const { data, error } = await db
       .from('sales_order_items')
       .insert({
@@ -736,6 +751,7 @@ class SalesOrderRepositoryImpl {
         quantity: item.quantity,
         unit_code: item.unitCode,
         unit_price: item.unitPrice,
+        unit_cost: unitCost, // Cost snapshot at item creation
         discount_percent: item.discountPercent,
         tax_rate: item.taxRate,
         line_total: calculateLineTotal(item.quantity, item.unitPrice, item.discountPercent),
@@ -767,10 +783,10 @@ class SalesOrderRepositoryImpl {
     data: Partial<CreateSalesOrderItemDTO>,
     userId?: string
   ): Promise<SalesOrderItem> {
-    // Get current item to get order ID
+    // Get current item to get order ID and product_id
     const { data: currentItem, error: fetchError } = await db
       .from('sales_order_items')
-      .select('sales_order_id, quantity, unit_price, discount_percent')
+      .select('sales_order_id, product_id, quantity, unit_price, discount_percent')
       .eq('id', itemId)
       .single();
 
@@ -794,6 +810,13 @@ class SalesOrderRepositoryImpl {
     if (data.warehouseId !== undefined) {updateData.warehouse_id = data.warehouseId;}
     if (data.batchNumber !== undefined) {updateData.batch_number = data.batchNumber;}
     if (data.serialNumber !== undefined) {updateData.serial_number = data.serialNumber;}
+
+    // Update unit_cost ONLY when product changes (Decision D2)
+    // When quantity or price changes, the cost stays the same
+    if (data.productId !== undefined && data.productId !== currentItem.product_id) {
+      const productCosts = await getCurrentUnitCosts([data.productId]);
+      updateData.unit_cost = productCosts.get(data.productId) ?? null;
+    }
 
     // Recalculate line total
     const quantity = data.quantity ?? currentItem.quantity;
@@ -863,10 +886,10 @@ class SalesOrderRepositoryImpl {
       itemsWithoutId: items.filter((i: any) => !i.id).length,
     });
 
-    // Step 1: Get existing items
+    // Step 1: Get existing items (including unit_cost for preservation)
     const { data: existingItems, error: fetchError } = await db
       .from('sales_order_items')
-      .select('*')
+      .select('*, unit_cost')
       .eq('sales_order_id', orderId)
       .order('sort_order');
 
@@ -879,6 +902,10 @@ class SalesOrderRepositoryImpl {
     const existingItemsMap = new Map(
       (existingItems || []).map((item) => [item.id, item])
     );
+
+    // Get product costs for all items upfront (for new items and product changes)
+    const allProductIds = items.map((item: any) => item.productId);
+    const productCosts = await getCurrentUnitCosts(allProductIds);
 
     // Step 2: Delete items that are no longer in the list
     const newItemIds = items
@@ -919,6 +946,27 @@ class SalesOrderRepositoryImpl {
 
     for (let index = 0; index < items.length; index++) {
       const item: any = items[index];
+
+      // CRITICAL: Check if item exists in DB, not just if it has an ID
+      // Form might assign temporary IDs (like "item-123...") to new items
+      // Only treat as existing if: 1) has ID, 2) ID is a valid UUID, 3) exists in DB
+      const isValidUUID = item.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.id);
+      const existsInDB = isValidUUID && existingItemsMap.has(item.id);
+      const existingItem = existsInDB ? existingItemsMap.get(item.id) : null;
+
+      // Determine unit_cost:
+      // - For existing items where product didn't change: keep existing unit_cost
+      // - For existing items where product changed: get new cost
+      // - For new items: get cost from productCosts map
+      let unitCost: number | null;
+      if (existsInDB && existingItem && existingItem.product_id === item.productId) {
+        // Product didn't change - keep existing cost
+        unitCost = existingItem.unit_cost;
+      } else {
+        // New item or product changed - get new cost
+        unitCost = productCosts.get(item.productId) ?? null;
+      }
+
       const itemData = {
         product_id: item.productId,
         sku: item.sku,
@@ -927,6 +975,7 @@ class SalesOrderRepositoryImpl {
         customer_qty: item.customerQty || item.quantity,
         unit_code: item.unitCode,
         unit_price: item.unitPrice,
+        unit_cost: unitCost, // Cost snapshot (preserved if product unchanged)
         discount_percent: item.discountPercent,
         tax_rate: item.taxRate,
         line_total: calculateLineTotal(item.quantity, item.unitPrice, item.discountPercent),
@@ -936,12 +985,6 @@ class SalesOrderRepositoryImpl {
         sort_order: index,
         updated_by: userId || null,
       };
-
-      // CRITICAL: Check if item exists in DB, not just if it has an ID
-      // Form might assign temporary IDs (like "item-123...") to new items
-      // Only treat as existing if: 1) has ID, 2) ID is a valid UUID, 3) exists in DB
-      const isValidUUID = item.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.id);
-      const existsInDB = isValidUUID && existingItemsMap.has(item.id);
 
       if (existsInDB) {
         // UPDATE existing item
@@ -1070,6 +1113,7 @@ class SalesOrderRepositoryImpl {
       customerPoNumber: data.customer_po_number,
       status: data.status,
       creditStatus: data.credit_status || 'ok',
+      orderSeries: data.order_series || null,
       billingAddressStreet: data.billing_address_street,
       billingAddressCity: data.billing_address_city,
       billingAddressState: data.billing_address_state,
@@ -1120,6 +1164,7 @@ class SalesOrderRepositoryImpl {
       customerQty: data.customer_qty,
       unitCode: data.unit_code,
       unitPrice: data.unit_price,
+      unitCost: data.unit_cost, // Product cost snapshot (null for legacy items)
       discountPercent: Number(data.discount_percent),
       taxRate: Number(data.tax_rate),
       lineTotal: data.line_total,
@@ -1145,6 +1190,7 @@ class SalesOrderRepositoryImpl {
       requested_delivery_date: string | null;
       status: OrderStatus;
       credit_status?: OrderCreditStatus;
+      order_series?: string | null;
       grand_total: number;
       currency_code: string;
       created_at: string;
@@ -1164,6 +1210,7 @@ class SalesOrderRepositoryImpl {
       requestedDeliveryDate: data.requested_delivery_date,
       status: data.status,
       creditStatus: data.credit_status || 'ok',
+      orderSeries: data.order_series || null,
       grandTotal: data.grand_total,
       currencyCode: data.currency_code,
       itemCount: itemCounts[data.id] || 0,

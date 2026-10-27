@@ -187,6 +187,7 @@ export function EditSalesOrderDrawer({
     currencyCode: order.currencyCode,
     customerPoNumber: order.customerPoNumber,
     status: order.status,
+    orderSeries: order.orderSeries,
     billingAddressStreet: order.billingAddressStreet,
     billingAddressCity: order.billingAddressCity,
     billingAddressState: order.billingAddressState,

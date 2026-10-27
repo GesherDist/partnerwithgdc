@@ -26,6 +26,7 @@ import {
 } from '@/shared/components/ui/dialog';
 import { Button } from '@/shared/components/ui/button';
 import { Input } from '@/shared/components/ui/input';
+import { PhoneInput } from '@/shared/components/ui/phone-input';
 import { Label } from '@/shared/components/ui/label';
 import {
   Select,
@@ -513,9 +514,10 @@ export function ConvertDealToCustomerDialog({
 
               <div>
                 <Label htmlFor="phone">Phone</Label>
-                <Input
+                <PhoneInput
                   id="phone"
-                  {...form.register('phone')}
+                  value={form.watch('phone') || ''}
+                  onChange={(e) => form.setValue('phone', e.target.value)}
                   placeholder="(555) 123-4567"
                 />
               </div>

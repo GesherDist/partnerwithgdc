@@ -30,6 +30,7 @@ import {
   FormMessage,
 } from '@/shared/components/ui/form';
 import { Input } from '@/shared/components/ui/input';
+import { PhoneInput } from '@/shared/components/ui/phone-input';
 import { Textarea } from '@/shared/components/ui/textarea';
 import { Checkbox } from '@/shared/components/ui/checkbox';
 import {
@@ -269,7 +270,7 @@ export function EditSupplierContactDialog({
                   <FormItem>
                     <FormLabel>Phone</FormLabel>
                     <FormControl>
-                      <Input placeholder="+1 (555) 123-4567" {...field} />
+                      <PhoneInput placeholder="(555) 123-4567" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -285,7 +286,7 @@ export function EditSupplierContactDialog({
                   <FormItem>
                     <FormLabel>Mobile</FormLabel>
                     <FormControl>
-                      <Input placeholder="+1 (555) 987-6543" {...field} />
+                      <PhoneInput placeholder="(555) 987-6543" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>

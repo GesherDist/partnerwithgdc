@@ -18,6 +18,7 @@ import {
 } from '@/shared/components/ui/dialog';
 import { Button } from '@/shared/components/ui/button';
 import { Input } from '@/shared/components/ui/input';
+import { PhoneInput } from '@/shared/components/ui/phone-input';
 import { Label } from '@/shared/components/ui/label';
 import { Textarea } from '@/shared/components/ui/textarea';
 import { Switch } from '@/shared/components/ui/switch';
@@ -311,11 +312,11 @@ export function SupplierFormDialog({
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="primaryContactPhone">Phone</Label>
-                  <Input
+                  <PhoneInput
                     id="primaryContactPhone"
                     value={formData.primaryContactPhone || ''}
                     onChange={(e) => handleChange('primaryContactPhone', e.target.value)}
-                    placeholder="+1 (555) 123-4567"
+                    placeholder="(555) 123-4567"
                   />
                 </div>
               </div>

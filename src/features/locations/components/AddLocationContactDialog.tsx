@@ -16,6 +16,7 @@ import { toast } from 'sonner';
 
 import { Button } from '@/shared/components/ui/button';
 import { Input } from '@/shared/components/ui/input';
+import { PhoneInput } from '@/shared/components/ui/phone-input';
 import { Switch } from '@/shared/components/ui/switch';
 import {
   Dialog,
@@ -157,7 +158,7 @@ export function AddLocationContactDialog({
                 <FormItem>
                   <FormLabel>Phone</FormLabel>
                   <FormControl>
-                    <Input {...field} placeholder="+1 555 000 1234" />
+                    <PhoneInput {...field} placeholder="(555) 000-1234" />
                   </FormControl>
                   <FormMessage />
                 </FormItem>

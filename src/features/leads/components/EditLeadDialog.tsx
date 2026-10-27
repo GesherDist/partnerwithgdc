@@ -12,6 +12,7 @@ import { toast } from 'sonner';
 
 import { Button } from '@/shared/components/ui/button';
 import { Input } from '@/shared/components/ui/input';
+import { PhoneInput } from '@/shared/components/ui/phone-input';
 import { Label } from '@/shared/components/ui/label';
 import { Textarea } from '@/shared/components/ui/textarea';
 import { Checkbox } from '@/shared/components/ui/checkbox';
@@ -289,9 +290,9 @@ export function EditLeadDialog({ open, onClose, lead, onSuccess }: EditLeadDialo
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="edit-phone">Phone</Label>
-                  <Input
+                  <PhoneInput
                     id="edit-phone"
-                    placeholder="+1 (555) 123-4567"
+                    placeholder="(555) 123-4567"
                     value={formState.phone}
                     onChange={(e) => handleChange('phone', e.target.value)}
                   />

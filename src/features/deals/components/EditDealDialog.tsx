@@ -12,6 +12,7 @@ import { toast } from 'sonner';
 
 import { Button } from '@/shared/components/ui/button';
 import { Input } from '@/shared/components/ui/input';
+import { PhoneInput } from '@/shared/components/ui/phone-input';
 import { Label } from '@/shared/components/ui/label';
 import {
   Dialog,
@@ -228,12 +229,11 @@ export function EditDealDialog({ open, onClose, deal, onSuccess }: EditDealDialo
               </div>
               <div className="space-y-2">
                 <Label htmlFor="contactPhone">Contact Phone</Label>
-                <Input
+                <PhoneInput
                   id="contactPhone"
-                  type="tel"
                   value={formState.contactPhone || ''}
                   onChange={(e) => handleChange('contactPhone', e.target.value)}
-                  placeholder="+1 (555) 123-4567"
+                  placeholder="(555) 123-4567"
                 />
               </div>
             </div>
