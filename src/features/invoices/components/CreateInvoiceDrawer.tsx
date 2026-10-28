@@ -53,6 +53,7 @@ import type { BillableCommissionOrder } from '../services/invoice.service';
 import type { CreateInvoiceDrawerProps, InvoiceType } from '../types';
 import { INVOICE_TYPE_LABELS } from '../types';
 import { calculateInvoiceTotals } from '../lib/schemas';
+import { formatCurrency } from '@/shared/lib/utils';
 
 // ============================================
 // FORM SCHEMA
@@ -634,7 +635,7 @@ export function CreateInvoiceDrawer({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-4xl max-h-[90vh] p-0 flex flex-col">
+      <DialogContent className="w-[95vw] max-w-5xl max-h-[90vh] p-0 flex flex-col">
         <DialogHeader className="px-6 pt-6 pb-4 shrink-0">
           <DialogTitle>Create Invoice</DialogTitle>
           <DialogDescription>
@@ -1030,6 +1031,7 @@ export function CreateInvoiceDrawer({
                           <TableHead>SO #</TableHead>
                           <TableHead>Customer</TableHead>
                           <TableHead>Customer PO</TableHead>
+                          <TableHead className="whitespace-nowrap">Order Series</TableHead>
                           <TableHead>Status</TableHead>
                           <TableHead className="text-right">Tires</TableHead>
                           <TableHead className="text-right">Rate</TableHead>
@@ -1058,9 +1060,10 @@ export function CreateInvoiceDrawer({
                               <TableCell className="font-medium">{order.orderNumber}</TableCell>
                               <TableCell>{order.customerName}</TableCell>
                               <TableCell>{order.customerPoNumber || '-'}</TableCell>
+                              <TableCell className="whitespace-nowrap">{order.orderSeries || '-'}</TableCell>
                               <TableCell className="capitalize text-xs">{order.status}</TableCell>
                               <TableCell className="text-right">{order.tireCount}</TableCell>
-                              <TableCell className="text-right">${(order.commissionRate / 100).toFixed(2)}</TableCell>
+                              <TableCell className="text-right">{formatCurrency(order.commissionRate / 100)}</TableCell>
                               <TableCell className="text-right font-medium">
                                 ${(order.commissionAmount / 100).toLocaleString('en-US', {
                                   minimumFractionDigits: 2,
@@ -1121,7 +1124,7 @@ export function CreateInvoiceDrawer({
                       <TableCell className="text-sm">
                         {order.orderNumber}
                         {order.customerPoNumber ? ` / PO ${order.customerPoNumber}` : ''}
-                        {` / ${order.customerName} / ${order.tireCount} tires x $${(order.commissionRate / 100).toFixed(2)}`}
+                        {` / ${order.customerName} / ${order.tireCount} tires x ${formatCurrency(order.commissionRate / 100)}`}
                       </TableCell>
                       <TableCell className="text-right font-medium">
                         ${(order.commissionAmount / 100).toLocaleString('en-US', {
@@ -1281,24 +1284,24 @@ export function CreateInvoiceDrawer({
               <div className="w-72 space-y-2 border rounded-lg p-4 bg-muted/30">
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Subtotal:</span>
-                  <span className="font-medium">${(totals.subtotal / 100).toFixed(2)}</span>
+                  <span className="font-medium">{formatCurrency(totals.subtotal / 100)}</span>
                 </div>
                 {totals.discountTotal > 0 && (
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">Discount:</span>
-                    <span className="font-medium text-destructive">-${(totals.discountTotal / 100).toFixed(2)}</span>
+                    <span className="font-medium text-destructive">-{formatCurrency(totals.discountTotal / 100)}</span>
                   </div>
                 )}
                 {totals.taxTotal > 0 && (
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">Tax:</span>
-                    <span className="font-medium">${(totals.taxTotal / 100).toFixed(2)}</span>
+                    <span className="font-medium">{formatCurrency(totals.taxTotal / 100)}</span>
                   </div>
                 )}
                 <Separator />
                 <div className="flex justify-between text-base font-semibold">
                   <span>Total:</span>
-                  <span>${(totals.grandTotal / 100).toFixed(2)}</span>
+                  <span>{formatCurrency(totals.grandTotal / 100)}</span>
                 </div>
               </div>
             </div>

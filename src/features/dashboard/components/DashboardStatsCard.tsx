@@ -63,13 +63,13 @@ const CALCULATION_FORMULAS: Record<string, { title: string; formula: string; not
   },
   'commission-expected-ytd': {
     title: 'Commission Expected (YTD) Calculation',
-    formula: 'Sum of (unit_price × quantity) of commission lines on sales orders with status confirmed, processing, shipped or delivered\n\nFiltered by: sales_orders.order_date (Jan 1 to today)\n\nCommission Item Criteria:\n• item_type = "service"\n• SKU or description contains "commission"',
-    notes: 'Commission lines only. The commission on commission-only orders (sales_orders.commission_amount) is not part of this card; see the Executive dashboard (Profitability › Commission).',
+    formula: 'Commission Expected = Commission Actual (YTD) + commission not billed yet\n\nNot billed yet: Σ sales_orders.commission_amount of commission-only orders (tires allocated Manufacturer Direct × rate per tire) that are not on a commission invoice (not draft/cancelled)',
+    notes: 'Same figures as the Executive dashboard (Profitability › Commission). Compared to the same period last year (billed commission).',
   },
   'commission-actual-ytd': {
     title: 'Commission Actual (YTD) Calculation',
-    formula: 'Sum of (unit_price × quantity) of commission lines on sales orders with status Delivered\n\nFiltered by: sales_orders.order_date (Jan 1 to today)\n\nCommission Item Criteria:\n• item_type = "service"\n• SKU or description contains "commission"',
-    notes: 'Commission lines on delivered sales orders only. Compared to the same period last year.',
+    formula: 'Commission Actual = Σ line totals of commission invoices to Galileo (not draft/cancelled)\n\nFiltered by: invoices.invoice_date (Jan 1 to today)\nInvoice type: Commission',
+    notes: 'Commission billed to Galileo (kept out of tire revenue and margin). Same as Executive › Profitability › Commission Billed. Compared to the same period last year.',
   },
 };
 

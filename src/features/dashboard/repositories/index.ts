@@ -9,6 +9,7 @@
 
 import { createAdminClient } from '@/shared/lib/supabase/admin';
 import { loadRecognizedSales, summarizeRecognizedSales } from '../services/recognized-sales.service';
+import { getPeriods } from '../lib/periods';
 import type { UnitsBySKUDataPoint, UnitsBySKUChartData, ProductLegendItem, ChannelPerformanceDataPoint, InventoryByLocation, DashboardStat, MarginDataPoint, RevenueDataPoint, DateRange, CommissionRevenueStats } from '../types';
 
 // Helper to format date as YYYY-MM-DD string
@@ -808,170 +809,61 @@ export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDat
 
 /**
  * Get commission revenue statistics (YTD)
- * Tracks expected and actual commission revenue from service items
- * Commission items are identified by item_type='service' AND (sku or description contains 'commission')
+ * Commission from Galileo: billed on commission invoices, plus commission on
+ * commission-only orders not billed yet (same as the Executive tabs)
  */
 export async function getCommissionRevenue(): Promise<CommissionRevenueStats> {
   const supabase = createAdminClient();
+  const periods = getPeriods();
 
-  // Current year dates
-  const now = new Date();
-  const currentYearStart = new Date(now.getFullYear(), 0, 1); // Jan 1 of current year
-  const lastYearStart = new Date(now.getFullYear() - 1, 0, 1); // Jan 1 of last year
-  const lastYearSameDay = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate()); // Same day last year
+  // Same figures as the Executive tabs (Profitability › Commission):
+  // Actual   = commission invoices to Galileo (not draft/cancelled) by invoice date
+  // Expected = Actual + commission on commission-only orders not billed yet
+  const [invoicesRes, unbilledRes] = await Promise.all([
+    supabase
+      .from('invoices')
+      .select('invoice_date, invoice_items(line_total)')
+      .eq('invoice_type', 'commission')
+      .not('status', 'in', '(draft,cancelled)')
+      .is('deleted_at', null)
+      .gte('invoice_date', periods.py.from)
+      .lte('invoice_date', periods.ytd.to),
+    supabase
+      .from('sales_orders')
+      .select('commission_amount')
+      .eq('is_commission_only', true)
+      .is('commission_invoice_id', null)
+      .is('deleted_at', null)
+      .not('status', 'in', '(draft,cancelled)')
+      .gt('commission_amount', 0),
+  ]);
 
-  // Query YTD commission items (all statuses for "expected")
-  // Filter by order_date (when order was placed) instead of requested_delivery_date
-  const { data: ytdCommissionItems, error: commError } = await supabase
-    .from('sales_order_items')
-    .select(`
-      quantity,
-      unit_price,
-      sku,
-      description,
-      products (
-        item_type
-      ),
-      sales_orders!inner (
-        status,
-        deleted_at,
-        order_date
-      )
-    `)
-    .gte('sales_orders.order_date', formatDateString(currentYearStart))
-    .is('sales_orders.deleted_at', null)
-    .in('sales_orders.status', ['confirmed', 'processing', 'shipped', 'delivered']);
-
-  // DEBUG: Log commission query
-  console.log('💼 Commission Items Query (YTD):', {
-    yearStart: formatDateString(currentYearStart),
-    totalItems: ytdCommissionItems?.length || 0,
-    error: commError,
-  });
-
-  // Query YTD delivered commission items (for "actual")
-  const { data: ytdDeliveredCommissionItems } = await supabase
-    .from('sales_order_items')
-    .select(`
-      quantity,
-      unit_price,
-      sku,
-      description,
-      products (
-        item_type
-      ),
-      sales_orders!inner (
-        status,
-        deleted_at,
-        order_date
-      )
-    `)
-    .gte('sales_orders.order_date', formatDateString(currentYearStart))
-    .is('sales_orders.deleted_at', null)
-    .eq('sales_orders.status', 'delivered');
-
-  // Query last year YTD delivered commission items (for comparison)
-  const { data: lastYearCommissionItems } = await supabase
-    .from('sales_order_items')
-    .select(`
-      quantity,
-      unit_price,
-      sku,
-      description,
-      products (
-        item_type
-      ),
-      sales_orders!inner (
-        status,
-        deleted_at,
-        order_date
-      )
-    `)
-    .gte('sales_orders.order_date', formatDateString(lastYearStart))
-    .lte('sales_orders.order_date', formatDateString(lastYearSameDay))
-    .is('sales_orders.deleted_at', null)
-    .eq('sales_orders.status', 'delivered');
-
-  // Helper function to check if item is a commission item
-  const isCommissionItem = (item: {
-    sku: string | null;
-    description: string | null;
-    products: unknown;
-  }): boolean => {
-    const product = item.products as { item_type: string | null } | null;
-
-    // Must be a service item
-    if (product?.item_type !== 'service') {
-      return false;
-    }
-
-    // Check if sku or description contains "commission"
-    const skuLower = (item.sku || '').toLowerCase();
-    const descLower = (item.description || '').toLowerCase();
-
-    return skuLower.includes('commission') || descLower.includes('commission');
-  };
-
-  // Calculate expected YTD (all open + delivered orders)
-  let expectedYTD = 0;
-  let expectedCommissionCount = 0;
-  if (ytdCommissionItems) {
-    for (const item of ytdCommissionItems) {
-      if (isCommissionItem(item)) {
-        expectedCommissionCount++;
-        const quantity = item.quantity || 0;
-        const unitPrice = item.unit_price || 0; // in cents
-        expectedYTD += (unitPrice * quantity) / 100; // convert to dollars
-      }
-    }
+  if (invoicesRes.error) {
+    console.error('Error fetching commission invoices:', invoicesRes.error);
+  }
+  if (unbilledRes.error) {
+    console.error('Error fetching unbilled commission:', unbilledRes.error);
   }
 
-  // Calculate actual YTD (delivered orders only)
-  let actualYTD = 0;
-  let actualCommissionCount = 0;
-  if (ytdDeliveredCommissionItems) {
-    for (const item of ytdDeliveredCommissionItems) {
-      if (isCommissionItem(item)) {
-        actualCommissionCount++;
-        const quantity = item.quantity || 0;
-        const unitPrice = item.unit_price || 0; // in cents
-        actualYTD += (unitPrice * quantity) / 100; // convert to dollars
-      }
-    }
-  }
+  // Cents
+  const billedIn = (from: string, to: string) =>
+    (invoicesRes.data ?? [])
+      .filter((inv) => inv.invoice_date >= from && inv.invoice_date <= to)
+      .reduce(
+        (sum, inv) =>
+          sum + ((inv.invoice_items ?? []) as Array<{ line_total: number | null }>).reduce((s, i) => s + Number(i.line_total ?? 0), 0),
+        0
+      );
+  const actualCents = billedIn(periods.ytd.from, periods.ytd.to);
+  const lastYearCents = billedIn(periods.py.from, periods.py.to);
+  const unbilledCents = (unbilledRes.data ?? []).reduce((sum, so) => sum + Number(so.commission_amount ?? 0), 0);
 
-  // DEBUG: Log commission calculation results
-  console.log('💼 Commission Calculation Results:', {
-    expectedCommissionItemsFound: expectedCommissionCount,
-    expectedYTD: `$${expectedYTD.toFixed(2)}`,
-    actualCommissionItemsFound: actualCommissionCount,
-    actualYTD: `$${actualYTD.toFixed(2)}`,
-    sampleCommissionItems: ytdCommissionItems?.filter(isCommissionItem).slice(0, 3).map(i => ({
-      sku: i.sku,
-      description: i.description,
-      itemType: (i.products as any)?.item_type,
-    })),
-  });
-
-  // Calculate last year actual YTD (for comparison)
-  let lastYearActualYTD = 0;
-  if (lastYearCommissionItems) {
-    for (const item of lastYearCommissionItems) {
-      if (isCommissionItem(item)) {
-        const quantity = item.quantity || 0;
-        const unitPrice = item.unit_price || 0; // in cents
-        lastYearActualYTD += (unitPrice * quantity) / 100; // convert to dollars
-      }
-    }
-  }
-
-  // Calculate change percentage
-  const change = lastYearActualYTD > 0
-    ? ((actualYTD - lastYearActualYTD) / lastYearActualYTD) * 100
-    : 0;
+  const actualYTD = actualCents / 100;
+  const lastYearActualYTD = lastYearCents / 100;
+  const change = lastYearActualYTD > 0 ? ((actualYTD - lastYearActualYTD) / lastYearActualYTD) * 100 : 0;
 
   return {
-    expectedYTD: Math.round(expectedYTD),
+    expectedYTD: Math.round((actualCents + unbilledCents) / 100),
     actualYTD: Math.round(actualYTD),
     lastYearActualYTD: Math.round(lastYearActualYTD),
     change: Math.round(change * 10) / 10, // Round to 1 decimal
