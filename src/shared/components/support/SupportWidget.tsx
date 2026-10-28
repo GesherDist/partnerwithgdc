@@ -7,10 +7,9 @@
  * Jaimin and can attach screenshots or PDFs (pick, drag and drop, or paste);
  * the current page is added automatically.
  *
- * PREVIEW (Oct 27, 2026): UI only, to show Ankur on the call. Sending does not
- * upload, save or email anything yet, so it only renders in development builds.
- * After Ankur confirms: upload the files, save to the database, email Jaimin
- * (Postmark) and show the widget by permission instead of NODE_ENV.
+ * Shows on all dashboard pages for logged-in users. Currently UI preview only -
+ * sending does not upload, save or email anything yet.
+ * TODO: Upload files, save to database, email Jaimin (Postmark).
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -66,7 +65,8 @@ export function SupportWidget() {
   attachmentsRef.current = attachments;
   useEffect(() => () => attachmentsRef.current.forEach((a) => URL.revokeObjectURL(a.url)), []);
 
-  if (process.env.NODE_ENV === 'production' || !appUser) {
+  // Show Help button in both development and production (user must be logged in)
+  if (!appUser) {
     return null;
   }
 
