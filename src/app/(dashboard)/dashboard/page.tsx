@@ -121,7 +121,7 @@ export default async function DashboardPage() {
     if (amount >= 1000000) {
       return `$${(amount / 1000000).toFixed(1)}M`;
     }
-    return `$${Math.round(amount).toLocaleString()}`;
+    return `$${Math.round(amount).toLocaleString('en-US')}`;
   };
 
   // Use real data only - empty arrays if no data
@@ -159,7 +159,7 @@ export default async function DashboardPage() {
       trend: commission.trend,
       icon: 'dollar-sign',
       color: 'bg-fuchsia-500',
-      subtitle: 'Delivered orders only',
+      subtitle: 'Commission invoices to Galileo',
     });
   }
 

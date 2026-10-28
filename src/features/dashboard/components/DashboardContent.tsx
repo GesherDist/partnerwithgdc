@@ -127,7 +127,7 @@ export function DashboardContent({
             if (amount >= 1000000) {
               return `$${(amount / 1000000).toFixed(1)}M`;
             }
-            return `$${Math.round(amount).toLocaleString()}`;
+            return `$${Math.round(amount).toLocaleString('en-US')}`;
           };
 
           // Commission Expected (YTD) card
@@ -151,7 +151,7 @@ export function DashboardContent({
             trend: commission.trend,
             icon: 'dollar-sign',
             color: 'bg-fuchsia-500',
-            subtitle: 'Delivered orders only',
+            subtitle: 'Commission invoices to Galileo',
           });
         }
 

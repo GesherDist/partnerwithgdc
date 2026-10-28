@@ -45,6 +45,7 @@ export interface BillableCommissionOrder {
   orderNumber: string;
   customerName: string;
   customerPoNumber: string | null;
+  orderSeries: string | null; // GDC 0, GDC 1, ...
   status: string;
   tireCount: number;
   commissionRate: number; // cents per tire
@@ -58,6 +59,7 @@ interface CommissionOrderRow {
   id: string;
   order_number: string;
   customer_po_number: string | null;
+  order_series: string | null;
   status: string;
   is_commission_only: boolean | null;
   commission_rate: number | null;
@@ -73,7 +75,7 @@ interface CommissionOrderRow {
 }
 
 const COMMISSION_ORDER_SELECT =
-  'id, order_number, customer_po_number, status, is_commission_only, commission_rate, commission_amount, commission_invoice_id, ' +
+  'id, order_number, customer_po_number, order_series, status, is_commission_only, commission_rate, commission_amount, commission_invoice_id, ' +
   'customer_id, shipping_address_street, shipping_address_city, shipping_address_state, shipping_address_postal_code, shipping_address_country, ' +
   'customers (name, customer_code)';
 
@@ -93,6 +95,7 @@ function toBillableCommissionOrder(row: CommissionOrderRow): BillableCommissionO
     customerCode: customer?.customer_code || null,
     shipToAddress: shipTo || null,
     customerPoNumber: row.customer_po_number,
+    orderSeries: row.order_series || null,
     status: row.status,
     tireCount: rate > 0 ? Math.round(amount / rate) : 0,
     commissionRate: rate,
