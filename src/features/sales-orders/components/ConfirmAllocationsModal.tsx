@@ -30,7 +30,9 @@ import {
   TableRow,
 } from '@/shared/components/ui/table';
 import { Alert, AlertDescription } from '@/shared/components/ui/alert';
-import { Loader2, CheckCircle, Package, Mail, FileText, AlertCircle } from 'lucide-react';
+import { Loader2, CheckCircle, Package, Mail, FileText, AlertCircle, SkipForward } from 'lucide-react';
+import { Checkbox } from '@/shared/components/ui/checkbox';
+import { Label } from '@/shared/components/ui/label';
 import { toast } from 'sonner';
 import type { FulfillmentAllocationWithDetails } from '../types';
 
@@ -74,6 +76,7 @@ export function ConfirmAllocationsModal({
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [skipPickTicket, setSkipPickTicket] = useState(false);
 
   // Load allocations when modal opens
   useEffect(() => {
@@ -81,6 +84,36 @@ export function ConfirmAllocationsModal({
       loadAllocations();
     }
   }, [open, salesOrderId]);
+
+  // When skipPickTicket changes, update GDC allocation actions status
+  useEffect(() => {
+    if (allocations.length === 0) return;
+
+    const updatedActions = new Map(actions);
+    let hasChanges = false;
+
+    allocations.forEach((allocation) => {
+      if (allocation.fulfillmentSource === 'gdc_inventory') {
+        const currentAction = updatedActions.get(allocation.id);
+        if (currentAction) {
+          // When skipPickTicket is checked, mark GDC allocations as completed (skipped)
+          // When unchecked, reset to pending
+          const newStatus = skipPickTicket ? 'completed' : 'pending';
+          if (currentAction.status !== newStatus && currentAction.status !== 'processing') {
+            updatedActions.set(allocation.id, {
+              ...currentAction,
+              status: newStatus,
+            });
+            hasChanges = true;
+          }
+        }
+      }
+    });
+
+    if (hasChanges) {
+      setActions(updatedActions);
+    }
+  }, [skipPickTicket, allocations]);
 
   async function loadAllocations() {
     try {
@@ -668,9 +701,11 @@ export function ConfirmAllocationsModal({
         return;
       }
 
-      // Step 2: Create Pick Tickets for GDC Inventory allocations
+      // Step 2: Create Pick Tickets for GDC Inventory allocations (unless skipped)
       const gdcAllocations = allocations.filter((a) => a.fulfillmentSource === 'gdc_inventory');
-      if (gdcAllocations.length > 0) {
+      let pickTicketsCreated = false;
+
+      if (gdcAllocations.length > 0 && !skipPickTicket) {
         try {
           const { createPickTicketFromSalesOrder } = await import('@/features/pick-tickets/actions');
 
@@ -715,21 +750,25 @@ export function ConfirmAllocationsModal({
 
               if (ptResult.success) {
                 console.log('✅ Pick Ticket Created:', ptResult.data);
+                pickTicketsCreated = true;
               }
             }
           }
         } catch (error) {
           console.error('❌ Failed to create Pick Tickets:', error);
         }
+      } else if (gdcAllocations.length > 0 && skipPickTicket) {
+        console.log('⏭️ [Modal] Skipping Pick Ticket creation (user selected "Skip Pick Ticket")');
       }
 
       // Show success message
       const manufacturerAllocations = allocations.filter((a) => a.fulfillmentSource === 'direct');
-      // Note: gdcAllocations already declared above for Pick Ticket creation (line 393)
+      // Note: gdcAllocations already declared above for Pick Ticket creation
 
       const resourcesCreated = [];
       if (manufacturerAllocations.length > 0) resourcesCreated.push('Purchase Order');
-      if (gdcAllocations.length > 0) resourcesCreated.push('Pick Ticket(s)');
+      if (pickTicketsCreated) resourcesCreated.push('Pick Ticket(s)');
+      if (gdcAllocations.length > 0 && skipPickTicket) resourcesCreated.push('(Pick Ticket skipped)');
 
       const resourcesText = resourcesCreated.length > 0
         ? ` ${resourcesCreated.join(' and ')} created.`
@@ -991,6 +1030,12 @@ export function ConfirmAllocationsModal({
                                         <CheckCircle className="mr-1 h-3 w-3" />
                                         PO Already Linked
                                       </Badge>
+                                    ) : isWarehouseAllocation && skipPickTicket ? (
+                                      // Show "Skipped" badge when skipPickTicket is checked for warehouse allocations
+                                      <Badge variant="secondary" className="bg-amber-100 text-amber-800 border-amber-300">
+                                        <SkipForward className="mr-1 h-3 w-3" />
+                                        Skipped
+                                      </Badge>
                                     ) : (
                                       <Button
                                         size="sm"
@@ -1089,6 +1134,12 @@ export function ConfirmAllocationsModal({
                               <CheckCircle className="mr-1 h-3 w-3" />
                               PO Already Linked
                             </Badge>
+                          ) : isWarehouseAllocation && skipPickTicket ? (
+                            // Show "Skipped" badge when skipPickTicket is checked for warehouse allocations
+                            <Badge variant="secondary" className="bg-amber-100 text-amber-800 border-amber-300">
+                              <SkipForward className="mr-1 h-3 w-3" />
+                              Skipped
+                            </Badge>
                           ) : (
                             <Button
                               size="sm"
@@ -1125,6 +1176,31 @@ export function ConfirmAllocationsModal({
             </div>
 
           </>
+        )}
+
+        {/* Skip Pick Ticket Option - Only show when there are GDC Inventory allocations */}
+        {allocations.some((a) => a.fulfillmentSource === 'gdc_inventory') && (
+          <div className="flex items-center space-x-3 py-3 px-4 bg-amber-50 border border-amber-200 rounded-lg">
+            <Checkbox
+              id="skipPickTicket"
+              checked={skipPickTicket}
+              onCheckedChange={(checked) => setSkipPickTicket(checked === true)}
+            />
+            <div className="flex-1">
+              <Label
+                htmlFor="skipPickTicket"
+                className="text-sm font-medium text-amber-900 cursor-pointer"
+              >
+                Skip Pick Ticket (already picked up/delivered)
+              </Label>
+              <p className="text-xs text-amber-700 mt-0.5">
+                Check this if the order has already been physically picked up from the warehouse.
+              </p>
+            </div>
+            {skipPickTicket && (
+              <SkipForward className="h-5 w-5 text-amber-600" />
+            )}
+          </div>
         )}
 
         <DialogFooter>
