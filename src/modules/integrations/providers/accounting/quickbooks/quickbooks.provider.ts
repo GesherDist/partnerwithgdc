@@ -1900,6 +1900,10 @@ export class QuickBooksProvider implements IAccountingProvider {
       metadata: {
         syncToken: item.SyncToken,
         qtyOnHand: item.QtyOnHand,
+        // Accounts set on the item in QuickBooks (product ↔ item linking)
+        incomeAccount: item.IncomeAccountRef ?? null,
+        expenseAccount: item.ExpenseAccountRef ?? null,
+        assetAccount: item.AssetAccountRef ?? null,
       },
     };
   }

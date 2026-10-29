@@ -16,6 +16,7 @@ import { format } from 'date-fns';
 import {
   BookOpen,
   ExternalLink,
+  Link2,
   Landmark,
   Loader2,
   RefreshCw,
@@ -43,6 +44,7 @@ import {
 } from './IntegrationCard';
 import type { QuickBooksConnection } from '../types';
 import { ChartOfAccountsSheet } from './ChartOfAccountsSheet';
+import { ProductItemLinksSheet } from './ProductItemLinksSheet';
 
 // ============================================
 // TYPES
@@ -78,6 +80,7 @@ function QuickBooksCardComponent() {
   const [disconnecting, setDisconnecting] = useState(false);
   const [disconnectOpen, setDisconnectOpen] = useState(false);
   const [accountsOpen, setAccountsOpen] = useState(false);
+  const [itemsOpen, setItemsOpen] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
 
   // Fetch connection status
@@ -306,6 +309,10 @@ function QuickBooksCardComponent() {
               <BookOpen className="mr-2 h-4 w-4" />
               Chart of Accounts
             </Button>
+            <Button variant="outline" onClick={() => setItemsOpen(true)}>
+              <Link2 className="mr-2 h-4 w-4" />
+              Product Items
+            </Button>
             <Button variant="outline" onClick={handleReconnect} disabled={connecting}>
               {connecting ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -373,6 +380,7 @@ function QuickBooksCardComponent() {
       </IntegrationCard>
 
       <ChartOfAccountsSheet open={accountsOpen} onClose={() => setAccountsOpen(false)} />
+      <ProductItemLinksSheet open={itemsOpen} onClose={() => setItemsOpen(false)} />
 
       <AlertDialog open={disconnectOpen} onOpenChange={setDisconnectOpen}>
         <AlertDialogContent className="bg-white">
