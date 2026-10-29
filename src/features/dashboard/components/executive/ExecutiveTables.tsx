@@ -16,8 +16,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Popover, PopoverContent, PopoverTrigger } from '@/shared/components/ui/popover';
 
 import { getExecutiveDashboard } from '../../actions/executive-dashboard.actions';
-import type { Cell, ExecutiveDashboardModel } from '../../lib/executive-model';
+import type { CashProjection, Cell, ExecutiveDashboardModel } from '../../lib/executive-model';
+import { executiveTabModel, type ExecutiveDashboardView, type ExecutiveTab } from '../../lib/dashboard-tabs';
 import { CALCULATIONS, type CalcStatus } from './calculations';
+import { TABLE_DRILLDOWN } from '../../lib/drilldown';
+import { DrillDownButton } from '../DrillDownButton';
 import { QBO_FINANCIALS_UPDATED_EVENT, ensureFreshOnce } from '../financial-metrics/QuickBooksFinancials';
 
 // ============================================
@@ -75,9 +78,9 @@ function CalculationMethod({ tableId }: { tableId: string }) {
 // DATA (one request shared by the three tabs)
 // ============================================
 
-let pending: Promise<ExecutiveDashboardModel | string> | null = null;
+let pending: Promise<ExecutiveDashboardView | string> | null = null;
 
-function loadOnce(): Promise<ExecutiveDashboardModel | string> {
+function loadOnce(): Promise<ExecutiveDashboardView | string> {
   if (!pending) {
     pending = getExecutiveDashboard()
       .then((r) => (r.success ? r.data : r.error))
@@ -91,7 +94,7 @@ function loadOnce(): Promise<ExecutiveDashboardModel | string> {
 }
 
 function useExecutiveDashboard() {
-  const [state, setState] = useState<ExecutiveDashboardModel | string | null>(null);
+  const [state, setState] = useState<ExecutiveDashboardView | string | null>(null);
   useEffect(() => {
     let active = true;
     loadOnce().then((r) => {
@@ -198,6 +201,7 @@ function SpecTable({
             Table {id} – {title}
           </CardTitle>
           <CalculationMethod tableId={id} />
+          {TABLE_DRILLDOWN[id] && <DrillDownButton kind={TABLE_DRILLDOWN[id]!} label={`Table ${id} – ${title}`} />}
         </div>
         {description && <CardDescription>{description}</CardDescription>}
       </CardHeader>
@@ -235,7 +239,7 @@ function SpecTable({
   );
 }
 
-function Status({ model }: { model: ExecutiveDashboardModel }) {
+function Status({ model }: { model: ExecutiveDashboardView }) {
   const qb = model.quickBooks;
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -256,7 +260,7 @@ function Status({ model }: { model: ExecutiveDashboardModel }) {
   );
 }
 
-function Wrapper({ children }: { children: (model: ExecutiveDashboardModel) => React.ReactNode }) {
+function Wrapper({ tab, children }: { tab: ExecutiveTab; children: (model: ExecutiveDashboardModel) => React.ReactNode }) {
   const state = useExecutiveDashboard();
   if (state === null) {
     return (
@@ -268,10 +272,14 @@ function Wrapper({ children }: { children: (model: ExecutiveDashboardModel) => R
   if (typeof state === 'string') {
     return <p className="text-sm text-destructive">{state}</p>;
   }
+  const model = executiveTabModel(state, tab);
+  if (!model) {
+    return <p className="text-sm text-muted-foreground">You do not have access to this tab.</p>;
+  }
   return (
     <div className="grid gap-6">
       <Status model={state} />
-      {children(state)}
+      {children(model)}
     </div>
   );
 }
@@ -290,12 +298,67 @@ const AVG = [
 ];
 
 // ============================================
+// PROJECTED CASH BY QUARTER (Ankur, Oct 27 call)
+// ============================================
+
+function ProjectedCashByQuarter({ projection }: { projection: CashProjection | null }) {
+  if (!projection) {
+    return null;
+  }
+  const money = (n: number) => formatValue(n, 'money');
+  const rows: Array<{ label: string; value: (q: CashProjection['quarters'][number]) => string; bold?: boolean }> = [
+    { label: 'Opening Cash', value: (q) => money(q.opening) },
+    { label: '+ Orders on the books', value: (q) => money(q.inflow) },
+    { label: 'Orders / Tires', value: (q) => `${q.orders} / ${q.tires.toLocaleString('en-US')}` },
+    { label: 'Projected Cash (quarter end)', value: (q) => money(q.closing), bold: true },
+  ];
+  const placed = projection.undatedOrders + projection.overdueOrders;
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-lg">Projected Cash by Quarter</CardTitle>
+        <CardDescription>
+          Cash Today + firm orders still to be invoiced, by expected delivery date · through {projection.throughDate}
+          {placed > 0 && ` · ${placed} order(s) with no or a past delivery date are in the current quarter`}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>KPI</TableHead>
+              {projection.quarters.map((q) => (
+                <TableHead key={q.start} className="text-right">
+                  {q.label}
+                </TableHead>
+              ))}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((row) => (
+              <TableRow key={row.label}>
+                <TableCell className={row.bold ? 'font-semibold' : 'font-medium'}>{row.label}</TableCell>
+                {projection.quarters.map((q) => (
+                  <TableCell key={q.start} className={`text-right tabular-nums ${row.bold ? 'font-semibold' : ''}`}>
+                    {row.value(q)}
+                  </TableCell>
+                ))}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ============================================
 // TAB: FINANCIAL METRICS (Chapter 1)
 // ============================================
 
 export function FinancialMetricsTables() {
   return (
-    <Wrapper>
+    <Wrapper tab="financial">
       {(m) => (
         <>
           <SpecTable
@@ -313,6 +376,7 @@ export function FinancialMetricsTables() {
               { label: 'Projected Cash', format: 'money', cells: { amount: m.liquidity.projectedCash, py: { value: null } } },
             ]}
           />
+          <ProjectedCashByQuarter projection={m.liquidity.projection} />
           <SpecTable
             id="1.2"
             title="Working Capital Position"
@@ -376,7 +440,7 @@ function TimingNote() {
 
 export function ProfitabilityTables() {
   return (
-    <Wrapper>
+    <Wrapper tab="profitability">
       {(m) => (
         <>
           <SpecTable
@@ -400,19 +464,6 @@ export function ProfitabilityTables() {
             } on ${m.commission.unbilledOrders} order${m.commission.unbilledOrders === 1 ? '' : 's'}.`}
             columns={C4}
             rows={[{ label: 'Commission Billed', format: 'money', cells: m.commission.billed }]}
-          />
-          <SpecTable
-            id="2.2"
-            title="Per Tire Economics"
-            columns={C4}
-            rows={[
-              { label: 'Tires Sold', format: 'count', cells: m.perTire.tiresSold },
-              { label: 'Revenue / Tire', format: 'money2', cells: m.perTire.revenue },
-              { label: 'COGS / Tire', format: 'cost', cells: m.perTire.cogs },
-              { label: 'GP / Tire', format: 'money2', cells: m.perTire.grossProfit },
-              { label: 'OPEX / Tire', format: 'cost', cells: m.perTire.opex },
-              { label: 'OP / Tire', format: 'money2', cells: m.perTire.operatingProfit },
-            ]}
           />
           <div className="grid gap-6 md:grid-cols-2">
             <SpecTable
@@ -457,7 +508,7 @@ const num = (n: number | null, suffix = '') => (n === null ? '—' : `${n.toLoca
 
 export function SupplyChainTables() {
   return (
-    <Wrapper>
+    <Wrapper tab="supply">
       {(m) => (
         <>
           <Card>
@@ -465,6 +516,7 @@ export function SupplyChainTables() {
               <div className="flex items-center gap-2">
                 <CardTitle className="text-lg">Table 4.1 – Incoming Supply</CardTitle>
                 <CalculationMethod tableId="4.1" />
+                <DrillDownButton kind="table-4.1" label="Table 4.1 – Incoming Supply" />
               </div>
               <CardDescription>
                 Per order cycle: tires ordered on purchase orders, arrival window from shipment ETAs, sold = tires on sales

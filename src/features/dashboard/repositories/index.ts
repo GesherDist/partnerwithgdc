@@ -392,9 +392,10 @@ export async function getInventoryByLocation(): Promise<InventoryByLocation[]> {
 /**
  * Get dashboard KPI stats
  * Revenue, Units Sold, Blended Margin, Open Orders
- * @param dateRange - Optional date range filter. Affects revenue and units calculations.
+ * Cards are always MTD + YTD (Ankur, Oct 27 call); the date filter only drives the charts.
+ * @param _dateRange - Overview date filter (not used by the cards)
  */
-export async function getDashboardStats(dateRange?: DateRange): Promise<DashboardStat[]> {
+export async function getDashboardStats(_dateRange?: DateRange): Promise<DashboardStat[]> {
   const supabase = createAdminClient();
 
   // Current dates for comparison periods
@@ -408,35 +409,10 @@ export async function getDashboardStats(dateRange?: DateRange): Promise<Dashboar
   const lastYearStart = new Date(now.getFullYear() - 1, 0, 1); // Jan 1 of last year
   const lastYearSameDay = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate()); // Same day last year
 
-  // Determine date range for primary calculations
-  let primaryStartDate: string;
-  let primaryEndDate: string;
-  let periodLabel = 'MTD'; // Default label
-
-  if (dateRange) {
-    primaryStartDate = dateRange.startDate;
-    primaryEndDate = dateRange.endDate;
-    // Determine label based on preset
-    if (dateRange.preset === 'ytd') periodLabel = 'YTD';
-    else if (dateRange.preset === 'last_year') periodLabel = 'Last Year';
-    else if (dateRange.preset === 'this_quarter' || dateRange.preset === 'last_quarter') periodLabel = 'QTD';
-    else if (dateRange.preset === 'last_6_months') periodLabel = 'Last 6 Mo';
-    else if (dateRange.preset === 'last_12_months') periodLabel = 'Last 12 Mo';
-    else if (dateRange.preset === 'last_month') periodLabel = 'Last Month';
-    else periodLabel = 'MTD';
-  } else {
-    primaryStartDate = formatDateString(currentMonthStart);
-    primaryEndDate = formatDateString(now);
-  }
-
-  // DEBUG: Log the date range being used
-  console.log('📅 Dashboard Stats Date Range:', {
-    primaryStartDate,
-    primaryEndDate,
-    periodLabel,
-    currentMonthStart: currentMonthStart.toISOString(),
-    now: now.toISOString(),
-  });
+  // Revenue / Units cards: month to date (the YTD cards sit next to them)
+  const primaryStartDate = formatDateString(currentMonthStart);
+  const primaryEndDate = formatDateString(now);
+  const periodLabel = 'MTD';
 
   // ===================================================================
   // RECOGNIZED SALES (Ankur's Definitions 3.1-3.4, same rule as the
@@ -704,15 +680,12 @@ export async function getMarginAnalysis(dateRange?: DateRange): Promise<MarginDa
 }
 
 /**
- * Get revenue trend data for last 8 months
- * Shows current year revenue, target, and last year comparison
- * @param dateRange - Optional date range filter. Affects the data period shown.
+ * Get revenue trend data: one point per calendar month of the date range
+ * Shows revenue, target, and the same month one year earlier
+ * @param dateRange - Optional date range filter (default: last 8 months)
  */
 export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDataPoint[]> {
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-  // Get current date info
-  const now = new Date();
 
   // Determine date range - if provided, use it; otherwise use last 8 months
   let queryStartDate: string;
@@ -726,7 +699,7 @@ export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDat
     eightMonthsAgo.setMonth(eightMonthsAgo.getMonth() - 7);
     eightMonthsAgo.setDate(1);
     queryStartDate = formatDateString(eightMonthsAgo);
-    queryEndDate = formatDateString(now);
+    queryEndDate = formatDateString(new Date());
   }
 
   // Recognized tire revenue (Ankur 3.1, same rule as the Executive tabs):
@@ -739,39 +712,48 @@ export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDat
     recognized = { lines: [], credits: [] };
   }
 
-  // Same date range one year earlier
-  const startDateObj = new Date(queryStartDate);
-  const endDateObj = new Date(queryEndDate);
-  const lastYearStart = formatDateString(new Date(startDateObj.getFullYear() - 1, startDateObj.getMonth(), startDateObj.getDate()));
-  const lastYearEnd = formatDateString(new Date(endDateObj.getFullYear() - 1, endDateObj.getMonth(), endDateObj.getDate()));
+  // Same date range one year earlier (dates are YYYY-MM-DD strings)
+  const shiftYear = (iso: string, years: number) => `${Number(iso.slice(0, 4)) + years}${iso.slice(4)}`;
+  const lastYearStart = shiftYear(queryStartDate, -1);
+  const lastYearEnd = shiftYear(queryEndDate, -1);
 
-  // Initialize monthly data
-  const monthlyRevenue: Record<string, number> = {};
-  const lastYearRevenue: Record<string, number> = {};
-
-  // Initialize last 8 months
-  for (let i = 7; i >= 0; i--) {
-    const d = new Date();
-    d.setMonth(d.getMonth() - i);
-    const monthKey = String(d.getMonth() + 1).padStart(2, '0');
-    monthlyRevenue[monthKey] = 0;
-    lastYearRevenue[monthKey] = 0;
+  // One bucket per calendar month of the range, keyed YYYY-MM (so the same month of different years never merges)
+  const monthKeys: string[] = [];
+  let [year, month] = queryStartDate.slice(0, 7).split('-').map(Number) as [number, number];
+  const endKey = queryEndDate.slice(0, 7);
+  for (let i = 0; i < 60; i++) {
+    const key = `${year}-${String(month).padStart(2, '0')}`;
+    if (key > endKey) {
+      break;
+    }
+    monthKeys.push(key);
+    month += 1;
+    if (month > 12) {
+      month = 1;
+      year += 1;
+    }
   }
+  const monthlyRevenue = new Map(monthKeys.map((k) => [k, 0]));
+  const lastYearRevenue = new Map(monthKeys.map((k) => [k, 0]));
 
-  const addTo = (target: Record<string, number>, date: string, cents: number) => {
-    const monthKey = date.slice(5, 7);
-    if (target[monthKey] !== undefined) {
-      target[monthKey] += cents / 100; // cents to dollars
+  // Last year amounts go under the same month of this range (2025-06 → 2026-06)
+  const add = (date: string, cents: number) => {
+    if (date >= queryStartDate && date <= queryEndDate) {
+      const key = date.slice(0, 7);
+      monthlyRevenue.set(key, (monthlyRevenue.get(key) ?? 0) + cents / 100);
+    }
+    if (date >= lastYearStart && date <= lastYearEnd) {
+      const key = shiftYear(date, 1).slice(0, 7);
+      lastYearRevenue.set(key, (lastYearRevenue.get(key) ?? 0) + cents / 100);
     }
   };
-  const tireLines = recognized.lines.filter((l) => l.isTire);
-  for (const line of tireLines) {
-    if (line.date >= queryStartDate && line.date <= queryEndDate) addTo(monthlyRevenue, line.date, line.lineTotal);
-    if (line.date >= lastYearStart && line.date <= lastYearEnd) addTo(lastYearRevenue, line.date, line.lineTotal);
+  for (const line of recognized.lines) {
+    if (line.isTire) {
+      add(line.date, line.lineTotal);
+    }
   }
   for (const credit of recognized.credits) {
-    if (credit.date >= queryStartDate && credit.date <= queryEndDate) addTo(monthlyRevenue, credit.date, -credit.amount);
-    if (credit.date >= lastYearStart && credit.date <= lastYearEnd) addTo(lastYearRevenue, credit.date, -credit.amount);
+    add(credit.date, -credit.amount);
   }
 
   // TODO: Move to database table (monthly_targets) for dynamic updates
@@ -779,32 +761,18 @@ export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDat
   // Long-term: Create `monthly_targets` table with year/month/target_amount columns
   const MONTHLY_TARGET = 220000; // $220,000 per month (hardcoded - update here if needed)
 
-  // Convert to array format
-  const result: RevenueDataPoint[] = Object.keys(monthlyRevenue)
-    .sort((a, b) => {
-      // Sort by actual calendar order for the 8-month window
-      const aMonth = parseInt(a, 10);
-      const bMonth = parseInt(b, 10);
-      const currentMonth = now.getMonth() + 1;
-
-      // Adjust for wrapping around the year
-      const aAdjusted = aMonth <= currentMonth ? aMonth + 12 : aMonth;
-      const bAdjusted = bMonth <= currentMonth ? bMonth + 12 : bMonth;
-
-      return aAdjusted - bAdjusted;
-    })
-    .map((monthKey) => {
-      const monthIndex = parseInt(monthKey, 10) - 1;
-
-      return {
-        month: monthNames[monthIndex] || 'Unknown',
-        revenue: Math.round(monthlyRevenue[monthKey] || 0),
-        target: MONTHLY_TARGET,
-        lastYear: Math.round(lastYearRevenue[monthKey] || 0),
-      };
-    });
-
-  return result;
+  // Label "Jun", or "Jun 26" when the range spans more than one year
+  const spansYears = monthKeys.length > 0 && monthKeys[0]!.slice(0, 4) !== monthKeys[monthKeys.length - 1]!.slice(0, 4);
+  return monthKeys.map((key) => {
+    const name = monthNames[Number(key.slice(5, 7)) - 1] ?? 'Unknown';
+    return {
+      month: spansYears ? `${name} ${key.slice(2, 4)}` : name,
+      monthKey: key,
+      revenue: Math.round(monthlyRevenue.get(key) ?? 0),
+      target: MONTHLY_TARGET,
+      lastYear: Math.round(lastYearRevenue.get(key) ?? 0),
+    };
+  });
 }
 
 /**

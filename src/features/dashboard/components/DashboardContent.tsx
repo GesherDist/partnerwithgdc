@@ -45,16 +45,24 @@ import type {
   RevenueDataPoint,
 } from '../types';
 import { getDateRangeFromPreset, DATE_RANGE_LABELS } from '../types';
+import type { DashboardTab } from '../lib/dashboard-tabs';
 
 // ============================================
 // TYPES
 // ============================================
 
+const TAB_LABELS: Record<DashboardTab, string> = {
+  financial: 'Financial Metrics',
+  profitability: 'Profitability',
+  supply: 'Supply Chain',
+  overview: 'Overview',
+};
+
+const TAB_GRID_COLS = ['grid-cols-1', 'grid-cols-1', 'grid-cols-2', 'grid-cols-3', 'grid-cols-4'];
+
 interface DashboardContentProps {
-  canViewAnalytics: boolean;
-  canViewInventory: boolean;
-  /** Financial Metrics / Profitability / Supply Chain tabs (dashboard.view_financials) */
-  canViewFinancials: boolean;
+  /** Tabs the user may open (one permission per tab), in display order */
+  tabs: DashboardTab[];
   initialStats: DashboardStat[];
   initialUnitsBySKU: UnitsBySKUChartData;
   initialChannelData: ChannelPerformanceDataPoint[];
@@ -68,9 +76,7 @@ interface DashboardContentProps {
 // ============================================
 
 export function DashboardContent({
-  canViewAnalytics,
-  canViewInventory,
-  canViewFinancials,
+  tabs,
   initialStats,
   initialUnitsBySKU,
   initialChannelData,
@@ -79,8 +85,9 @@ export function DashboardContent({
   initialRevenueData,
 }: DashboardContentProps) {
   // Date range state
-  const [datePreset, setDatePreset] = useState<DateRangePreset>('last_6_months');
-  const [currentDateRange, setCurrentDateRange] = useState<DateRange>(() => getDateRangeFromPreset('last_6_months'));
+  // Default Last 12 Months for the charts (Oct 27 call); the KPI cards are always MTD + YTD
+  const [datePreset, setDatePreset] = useState<DateRangePreset>('last_12_months');
+  const [currentDateRange, setCurrentDateRange] = useState<DateRange>(() => getDateRangeFromPreset('last_12_months'));
   const [isLoading, setIsLoading] = useState(false);
 
   // Data state
@@ -199,77 +206,75 @@ export function DashboardContent({
     fetchData(currentDateRange);
   }, [currentDateRange, fetchData]);
 
+  const canView = (tab: DashboardTab) => tabs.includes(tab);
+
+  if (tabs.length === 0) {
+    return (
+      <div className="space-y-6">
+        <DashboardHeader />
+        <p className="text-sm text-muted-foreground">No dashboard tabs are assigned to your role. Please contact your administrator.</p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
-      {/* Header with Date Filter */}
+      {/* Header with Date Filter (the date range applies to the Overview tab) */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <DashboardHeader />
-        <DateRangeFilter
-          value={datePreset}
-          onChange={handleDateRangeChange}
-          onRefresh={handleRefresh}
-          isLoading={isLoading}
-        />
+        {canView('overview') && (
+          <DateRangeFilter
+            value={datePreset}
+            onChange={handleDateRangeChange}
+            onRefresh={handleRefresh}
+            isLoading={isLoading}
+          />
+        )}
       </div>
 
-      {/* Tab Navigation */}
-      <Tabs defaultValue="overview" className="w-full">
-        <TabsList className={`grid w-full mb-6 ${canViewFinancials ? 'grid-cols-4' : 'grid-cols-1'}`}>
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          {canViewFinancials && (
-            <>
-              <TabsTrigger value="financial">Financial Metrics</TabsTrigger>
-              <TabsTrigger value="profitability">Profitability</TabsTrigger>
-              <TabsTrigger value="supply">Supply Chain</TabsTrigger>
-            </>
-          )}
+      {/* Tab Navigation: Financial Metrics first (QuickBooks numbers, Oct 27 call), one permission per tab */}
+      <Tabs defaultValue={tabs[0]} className="w-full">
+        <TabsList className={`grid w-full mb-6 ${TAB_GRID_COLS[tabs.length]}`}>
+          {tabs.map((tab) => (
+            <TabsTrigger key={tab} value={tab}>{TAB_LABELS[tab]}</TabsTrigger>
+          ))}
         </TabsList>
 
-        {/* Tab 1: Overview - Existing Content */}
-        <TabsContent value="overview" className="space-y-6 mt-0">
-          {/* KPI Stats Grid */}
-          {canViewAnalytics && (
-            <DashboardStatsGrid stats={stats} />
-          )}
-
-          {/* Charts Grid */}
-          {canViewAnalytics && (
+        {canView('overview') && (
+          <TabsContent value="overview" className="space-y-6 mt-0">
+            <DashboardStatsGrid stats={stats} dateRange={currentDateRange} />
             <DashboardChartsGrid
               revenueData={revenueData}
               unitsData={unitsBySKU.data}
               unitsProducts={unitsBySKU.products}
               channelData={channelData}
               marginData={marginData}
+              dateRange={currentDateRange}
             />
-          )}
-
-          {/* Inventory Overview */}
-          {canViewInventory && (
             <InventoryOverview byLocation={inventory} />
-          )}
-        </TabsContent>
+          </TabsContent>
+        )}
 
-        {canViewFinancials && (
-          <>
-            {/* Tab 2: Financial Metrics */}
-            <TabsContent value="financial" className="space-y-6 mt-0">
-              <div className="grid gap-6">
-                {/* Live figures from QuickBooks (Oct 12 call) */}
-                <QuickBooksFinancials />
-                <FinancialMetricsTables />
-              </div>
-            </TabsContent>
+        {canView('financial') && (
+          <TabsContent value="financial" className="space-y-6 mt-0">
+            <div className="grid gap-6">
+              {/* Live figures from QuickBooks (Oct 12 call) */}
+              <QuickBooksFinancials />
+              <FinancialMetricsTables />
+            </div>
+          </TabsContent>
+        )}
 
-            {/* Tab 3: Profitability */}
-            <TabsContent value="profitability" className="space-y-6 mt-0">
-              <ProfitabilityTables />
-            </TabsContent>
+        {canView('profitability') && (
+          <TabsContent value="profitability" className="space-y-6 mt-0">
+            <ProfitabilityTables />
+          </TabsContent>
+        )}
 
-            {/* Tab 4: Supply Chain */}
-            <TabsContent value="supply" className="space-y-6 mt-0">
-              <SupplyChainTables />
-            </TabsContent>
-          </>
+        {canView('supply') && (
+          <TabsContent value="supply" className="space-y-6 mt-0">
+            <SupplyChainTables />
+          </TabsContent>
         )}
       </Tabs>
     </div>

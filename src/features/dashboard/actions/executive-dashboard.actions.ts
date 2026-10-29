@@ -13,18 +13,28 @@ import { getConnectionByProvider } from '@/modules/integrations/core';
 import { getLatestSnapshot } from '@/modules/integrations/quickbooks/services/qbo-financials.service';
 import { buildErpExecutiveFigures } from '../services/executive-erp.service';
 import { loadDailyHistory, saveDailySnapshot } from '../services/executive-history.service';
-import { buildExecutiveModel, type ExecutiveDashboardModel } from '../lib/executive-model';
+import { buildExecutiveModel } from '../lib/executive-model';
+import { buildTableDrillDown } from '../services/financial-drilldown.service';
+import { TABLE_DRILLDOWNS, type CsvExport, type TableDrillDown } from '../lib/drilldown';
+import {
+  DASHBOARD_TAB_PERMISSIONS,
+  EXECUTIVE_TABS,
+  pickExecutiveTabs,
+  tableDrillDownTab,
+  type ExecutiveDashboardView,
+} from '../lib/dashboard-tabs';
 
 export async function getExecutiveDashboard(): Promise<
-  { success: true; data: ExecutiveDashboardModel } | { success: false; error: string }
+  { success: true; data: ExecutiveDashboardView } | { success: false; error: string }
 > {
   const user = await getCurrentUser();
   if (!user) {
     return { success: false, error: 'Authentication required' };
   }
-  // Cash, revenue, margin and OPEX: only roles allowed to see financial figures
-  if (!hasPermission(user, 'dashboard.view_financials')) {
-    return { success: false, error: 'Permission denied: dashboard.view_financials' };
+  // Only the sections of the tabs this user may open
+  const tabs = EXECUTIVE_TABS.filter((tab) => hasPermission(user, DASHBOARD_TAB_PERMISSIONS[tab]));
+  if (tabs.length === 0) {
+    return { success: false, error: 'Permission denied: dashboard tabs' };
   }
 
   try {
@@ -43,9 +53,38 @@ export async function getExecutiveDashboard(): Promise<
       return [];
     });
 
-    return { success: true, data: buildExecutiveModel(erp, qbo, connected, history) };
+    return { success: true, data: pickExecutiveTabs(buildExecutiveModel(erp, qbo, connected, history), tabs) };
   } catch (error) {
     console.error('[ExecutiveDashboard] Failed:', error);
     return { success: false, error: 'Failed to load the executive dashboard' };
+  }
+}
+
+/**
+ * CSV of the rows behind an executive table (download button next to its eye
+ * icon). Needs the permission of the tab the table is on.
+ */
+export async function getTableDrillDownCsv(
+  kind: TableDrillDown
+): Promise<{ success: true; data: CsvExport } | { success: false; error: string }> {
+  const user = await getCurrentUser();
+  if (!user) {
+    return { success: false, error: 'Authentication required' };
+  }
+  if (!TABLE_DRILLDOWNS.includes(kind)) {
+    return { success: false, error: 'Unknown export' };
+  }
+  const permission = DASHBOARD_TAB_PERMISSIONS[tableDrillDownTab(kind)];
+  if (!hasPermission(user, permission)) {
+    return { success: false, error: `Permission denied: ${permission}` };
+  }
+
+  try {
+    return { success: true, data: await buildTableDrillDown(kind) };
+  } catch (error) {
+    console.error('[ExecutiveDashboard] Export failed:', error);
+    const message = error instanceof Error ? error.message : '';
+    // Setup problems are shown as they are; anything else stays generic
+    return { success: false, error: /QuickBooks|Sync now/.test(message) ? message : 'Failed to build the export' };
   }
 }

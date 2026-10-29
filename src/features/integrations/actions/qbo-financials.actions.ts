@@ -3,7 +3,7 @@
 /**
  * QuickBooks Financials — server actions for the management dashboard
  *
- * Read: the latest stored snapshot (dashboard.view_financials).
+ * Read: the latest stored snapshot (Financial Metrics tab permission).
  * Sync now: refresh accounts + read the QuickBooks reports + store today's
  * snapshot (settings.edit or integrations.manage). Without migration 162 the
  * fresh figures are still returned, just not stored.
@@ -11,6 +11,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { getCurrentUser, hasAnyPermission, hasPermission } from '@/shared/lib/auth';
+import { DASHBOARD_TAB_PERMISSIONS, EXECUTIVE_TAB_PERMISSIONS } from '@/features/dashboard/lib/dashboard-tabs';
 import { getConnectionByProvider } from '@/modules/integrations/core';
 import {
   getLatestSnapshot,
@@ -33,8 +34,8 @@ export async function getQuickBooksFinancials(): Promise<Result<QuickBooksFinanc
   if (!user) {
     return { success: false, error: 'Authentication required' };
   }
-  if (!hasPermission(user, 'dashboard.view_financials')) {
-    return { success: false, error: 'Permission denied: dashboard.view_financials' };
+  if (!hasPermission(user, DASHBOARD_TAB_PERMISSIONS.financial)) {
+    return { success: false, error: `Permission denied: ${DASHBOARD_TAB_PERMISSIONS.financial}` };
   }
 
   const connection = await getConnectionByProvider('quickbooks');
@@ -61,14 +62,16 @@ let autoSyncRunning: Promise<Result<{ financials: QboFinancials; stored: boolean
  * may trigger it — it only reads QuickBooks and runs at most once per day
  * (later calls see today's snapshot and return null).
  */
-export async function ensureFreshQuickBooksFinancials(): Promise<Result<{ financials: QboFinancials; stored: boolean } | null>> {
+export async function ensureFreshQuickBooksFinancials(): Promise<Result<{ financials: QboFinancials | null; stored: boolean } | null>> {
   const user = await getCurrentUser();
   if (!user) {
     return { success: false, error: 'Authentication required' };
   }
-  if (!hasPermission(user, 'dashboard.view_financials')) {
-    return { success: false, error: 'Permission denied: dashboard.view_financials' };
+  if (!hasAnyPermission(user, EXECUTIVE_TAB_PERMISSIONS)) {
+    return { success: false, error: 'Permission denied: dashboard tabs' };
   }
+  // The figures go back only to users who may see the Financial Metrics tab
+  const canSeeFigures = hasPermission(user, DASHBOARD_TAB_PERMISSIONS.financial);
 
   const connection = await getConnectionByProvider('quickbooks');
   if (!connection || connection.status !== 'connected' || !connection.external_account_id) {
@@ -95,7 +98,8 @@ export async function ensureFreshQuickBooksFinancials(): Promise<Result<{ financ
       }
     })();
   }
-  return autoSyncRunning;
+  const result = await autoSyncRunning;
+  return result.success && result.data && !canSeeFigures ? { success: true, data: { financials: null, stored: result.data.stored } } : result;
 }
 
 export async function syncQuickBooksFinancialsNow(): Promise<Result<{ financials: QboFinancials; stored: boolean }>> {

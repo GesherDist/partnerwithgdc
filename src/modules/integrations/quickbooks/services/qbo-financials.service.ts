@@ -728,3 +728,159 @@ export async function syncFinancials(): Promise<{ financials: QboFinancials; sto
   const stored = await saveSnapshot(financials);
   return { financials, stored };
 }
+
+// ============================================
+// DRILL-DOWN ROWS (executive dashboard downloads)
+// Read-only: the same reports, parsing and account mapping as the figures
+// ============================================
+
+export interface QboAccountBalance {
+  id: string;
+  name: string;
+  category: DashboardCategory | null;
+  amount: number;
+}
+
+/** Balance Sheet accounts on a date, each with its dashboard category */
+export async function fetchAccountBalances(access: QboAccess, date: string): Promise<QboAccountBalance[]> {
+  const [mapping, report] = await Promise.all([
+    loadAccountMapping(access.realmId),
+    fetchReport(access, 'BalanceSheet', { start_date: date, end_date: date, accounting_method: 'Accrual' }),
+  ]);
+  return accountRows(report.Rows?.Row).map((row) => ({
+    id: row.id,
+    name: row.name,
+    category: mapping.get(row.id)?.category ?? null,
+    amount: round2(row.values[0]),
+  }));
+}
+
+/** Balance Sheet accounts on several dates (one mapping load, max 3 parallel calls) */
+export async function fetchAccountBalancesOn(access: QboAccess, dates: string[]): Promise<Map<string, QboAccountBalance[]>> {
+  const mapping = await loadAccountMapping(access.realmId);
+  const reports = await limited(
+    dates.map((date) => () => fetchReport(access, 'BalanceSheet', { start_date: date, end_date: date, accounting_method: 'Accrual' })),
+    3
+  );
+  return new Map(
+    dates.map((date, i) => [
+      date,
+      accountRows(reports[i]!.Rows?.Row).map((row) => ({
+        id: row.id,
+        name: row.name,
+        category: mapping.get(row.id)?.category ?? null,
+        amount: round2(row.values[0]),
+      })),
+    ])
+  );
+}
+
+export interface QboPurchaseDoc {
+  type: 'Bill' | 'VendorCredit';
+  number: string | null;
+  vendor: string | null;
+  txnDate: string;
+  amount: number;
+}
+
+/** Vendor bills and vendor credits by transaction date (credit purchases, DPO) */
+export async function fetchPurchaseDocs(access: QboAccess, from: string, to: string): Promise<QboPurchaseDoc[]> {
+  type Row = { DocNumber?: string; TxnDate?: string; TotalAmt?: number; VendorRef?: { name?: string } };
+  const where = `TxnDate >= '${from}' AND TxnDate <= '${to}'`;
+  const select = 'Id, DocNumber, TxnDate, TotalAmt, VendorRef';
+  const bills = await fetchQueryAll<Row>(access, 'Bill', select, where);
+  const credits = await fetchQueryAll<Row>(access, 'VendorCredit', select, where);
+  const map = (type: QboPurchaseDoc['type']) => (r: Row): QboPurchaseDoc => ({
+    type,
+    number: r.DocNumber ?? null,
+    vendor: r.VendorRef?.name ?? null,
+    txnDate: r.TxnDate ?? '',
+    amount: round2(Number(r.TotalAmt ?? 0)),
+  });
+  return [...bills.map(map('Bill')), ...credits.map(map('VendorCredit'))].sort((a, b) => a.txnDate.localeCompare(b.txnDate));
+}
+
+export interface QboOpenItem {
+  number: string | null;
+  party: string | null;
+  txnDate: string | null;
+  dueDate: string | null;
+  balance: number;
+  /** Days until due on the given date; overdue counts as 0 (weighted timing rule) */
+  daysUntilDue: number;
+}
+
+/** Open invoices (AR) or bills (AP) behind the weighted timing */
+export async function fetchOpenItems(access: QboAccess, entity: 'Invoice' | 'Bill', today: string): Promise<QboOpenItem[]> {
+  type Row = { DocNumber?: string; TxnDate?: string; DueDate?: string; Balance?: number; CustomerRef?: { name?: string }; VendorRef?: { name?: string } };
+  const ref = entity === 'Invoice' ? 'CustomerRef' : 'VendorRef';
+  const rows = await fetchQueryAll<Row>(access, entity, `Id, DocNumber, TxnDate, DueDate, Balance, ${ref}`, "Balance > '0'");
+  return rows
+    .filter((r) => Number(r.Balance ?? 0) > 0)
+    .map((r) => ({
+      number: r.DocNumber ?? null,
+      party: (entity === 'Invoice' ? r.CustomerRef?.name : r.VendorRef?.name) ?? null,
+      txnDate: r.TxnDate ?? null,
+      dueDate: r.DueDate ?? null,
+      balance: round2(Number(r.Balance ?? 0)),
+      daysUntilDue: r.DueDate ? Math.max(0, daysBetween(today, r.DueDate)) : 0,
+    }))
+    .sort((a, b) => (a.dueDate ?? '').localeCompare(b.dueDate ?? ''));
+}
+
+export interface QboCashFlowLine {
+  /** OperatingActivities, InvestingActivities, FinancingActivities */
+  section: string;
+  line: string;
+  amount: number;
+}
+
+const CASH_FLOW_SECTIONS = ['OperatingActivities', 'InvestingActivities', 'FinancingActivities'];
+
+/** Statement of Cash Flows lines for a period, with the operating and investing totals */
+export async function fetchCashFlowLines(
+  access: QboAccess,
+  from: string,
+  to: string
+): Promise<{ lines: QboCashFlowLine[]; operating: number; investing: number }> {
+  const report = await fetchReport(access, 'CashFlow', { start_date: from, end_date: to });
+  const lines: QboCashFlowLine[] = [];
+  const walk = (rows: ReportRow[] | undefined, section: string | null) => {
+    for (const row of rows ?? []) {
+      const current = row.group && CASH_FLOW_SECTIONS.includes(row.group) ? row.group : section;
+      if (current && row.ColData && row.ColData[0]?.value) {
+        lines.push({ section: current, line: row.ColData[0].value, amount: round2(num(row.ColData[1]?.value)) });
+      }
+      walk(row.Rows?.Row, current);
+    }
+  };
+  walk(report.Rows?.Row, null);
+  return {
+    lines,
+    operating: round2(sectionSummary(report.Rows?.Row, 'OperatingActivities')?.[0]),
+    investing: round2(sectionSummary(report.Rows?.Row, 'InvestingActivities')?.[0]),
+  };
+}
+
+export interface QboOpexAccount {
+  id: string;
+  name: string;
+  group: string;
+  amount: number;
+}
+
+/** Profit and Loss accounts mapped to OPEX for a period (same as the OPEX figures) */
+export async function fetchOpexAccounts(access: QboAccess, from: string, to: string): Promise<QboOpexAccount[]> {
+  const [mapping, report] = await Promise.all([
+    loadAccountMapping(access.realmId),
+    fetchReport(access, 'ProfitAndLoss', { start_date: from, end_date: to, accounting_method: 'Accrual' }),
+  ]);
+  const out: QboOpexAccount[] = [];
+  for (const row of accountRows(report.Rows?.Row)) {
+    const m = mapping.get(row.id);
+    if (m?.category === 'opex' && (row.values[0] ?? 0) !== 0) {
+      out.push({ id: row.id, name: row.name, group: m.opexGroup, amount: round2(row.values[0]) });
+    }
+  }
+  return out;
+}

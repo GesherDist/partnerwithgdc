@@ -41,7 +41,9 @@ import type {
   ProductLegendItem,
   ChannelPerformanceDataPoint,
   MarginDataPoint,
+  DateRange,
 } from '../types';
+import { DrillDownButton } from './DrillDownButton';
 
 // ============================================
 // CONSTANTS
@@ -62,9 +64,10 @@ const COLORS = {
 
 interface RevenueChartProps {
   data: RevenueDataPoint[];
+  dateRange?: DateRange;
 }
 
-export function RevenueChart({ data }: RevenueChartProps) {
+export function RevenueChart({ data, dateRange }: RevenueChartProps) {
   const [isOpen, setIsOpen] = useState(false);
 
   const formatCurrency = (value: number) => {
@@ -128,6 +131,7 @@ Last Year: Same period previous year`}
               </div>
             </PopoverContent>
           </Popover>
+          <DrillDownButton kind="revenue-trend" dateRange={dateRange} label="Revenue Trend" />
         </div>
         <CardDescription>Monthly revenue vs target</CardDescription>
       </CardHeader>
@@ -190,9 +194,10 @@ Last Year: Same period previous year`}
 interface UnitsBySKUChartProps {
   data: UnitsBySKUDataPoint[];
   products?: ProductLegendItem[];
+  dateRange?: DateRange;
 }
 
-export function UnitsBySKUChart({ data, products }: UnitsBySKUChartProps) {
+export function UnitsBySKUChart({ data, products, dateRange }: UnitsBySKUChartProps) {
   const [isOpen, setIsOpen] = useState(false);
 
   // Default products for backward compatibility
@@ -253,6 +258,7 @@ Product Type: item_type = 'inventory' only`}
               </div>
             </PopoverContent>
           </Popover>
+          <DrillDownButton kind="units-by-sku" dateRange={dateRange} label="Units by SKU" />
         </div>
         <CardDescription>Shipment units by ETA to port</CardDescription>
       </CardHeader>
@@ -292,9 +298,10 @@ Product Type: item_type = 'inventory' only`}
 
 interface ChannelPerformanceChartProps {
   data: ChannelPerformanceDataPoint[];
+  dateRange?: DateRange;
 }
 
-export function ChannelPerformanceChart({ data }: ChannelPerformanceChartProps) {
+export function ChannelPerformanceChart({ data, dateRange }: ChannelPerformanceChartProps) {
   const [isOpen, setIsOpen] = useState(false);
 
   const formatCurrency = (value: number) => {
@@ -360,6 +367,7 @@ Excludes: commission-only orders and service lines`}
               </div>
             </PopoverContent>
           </Popover>
+          <DrillDownButton kind="channel" dateRange={dateRange} label="Channel Performance" />
         </div>
         <CardDescription>OEM vs Dealer breakdown</CardDescription>
       </CardHeader>
@@ -434,9 +442,10 @@ Excludes: commission-only orders and service lines`}
 
 interface MarginChartProps {
   data: MarginDataPoint[];
+  dateRange?: DateRange;
 }
 
-export function MarginChart({ data }: MarginChartProps) {
+export function MarginChart({ data, dateRange }: MarginChartProps) {
   const [isOpen, setIsOpen] = useState(false);
 
   return (
@@ -494,6 +503,7 @@ Target: 30% (hardcoded benchmark)`}
               </div>
             </PopoverContent>
           </Popover>
+          <DrillDownButton kind="margin-analysis" dateRange={dateRange} label="Margin Analysis" />
         </div>
         <CardDescription>Blended margin % trend</CardDescription>
       </CardHeader>
@@ -551,6 +561,7 @@ interface DashboardChartsGridProps {
   unitsProducts?: ProductLegendItem[];
   channelData: ChannelPerformanceDataPoint[];
   marginData: MarginDataPoint[];
+  dateRange?: DateRange;
 }
 
 export function DashboardChartsGrid({
@@ -559,13 +570,14 @@ export function DashboardChartsGrid({
   unitsProducts,
   channelData,
   marginData,
+  dateRange,
 }: DashboardChartsGridProps) {
   return (
     <div className="grid gap-4 md:grid-cols-2">
-      <RevenueChart data={revenueData} />
-      <UnitsBySKUChart data={unitsData} products={unitsProducts} />
-      <ChannelPerformanceChart data={channelData} />
-      <MarginChart data={marginData} />
+      <RevenueChart data={revenueData} dateRange={dateRange} />
+      <UnitsBySKUChart data={unitsData} products={unitsProducts} dateRange={dateRange} />
+      <ChannelPerformanceChart data={channelData} dateRange={dateRange} />
+      <MarginChart data={marginData} dateRange={dateRange} />
     </div>
   );
 }

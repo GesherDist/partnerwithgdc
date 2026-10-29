@@ -35,9 +35,9 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
     },
     {
       kpi: 'Projected Cash',
-      formula: '= Cash Today + expected inflows (AR, backlog) − expected outflows (AP, supplier payments, OPEX, debt, taxes, CapEx); Through Date = last modeled cash event',
-      source: 'Pending: supplier payment schedule, OPEX forecast, debt/tax/CapEx dates are not recorded',
-      status: 'pending',
+      formula: '= Cash Today + orders on the books still to be invoiced (backlog revenue: firm confirmed/processing orders not delivered, tire lines net of discounts, excl. tax), quarter by quarter by expected delivery date (requested delivery, else confirmed ETA, else ETA to US port; none or past → current quarter). Through Date = end of the last quarter (at least 4 quarters)',
+      source: 'QuickBooks cash + ERP sales orders (Ankur, Oct 27 call). Open AR, AP and other outflows not included',
+      status: 'live',
     },
   ],
   '1.2': [
@@ -133,12 +133,6 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
       source: 'ERP sales orders',
       status: 'live',
     },
-  ],
-  '2.2': [
-    { kpi: 'Tires Sold', formula: '= Σ quantity of the same delivered tire lines used for Revenue', source: 'ERP sales orders', status: 'live' },
-    { kpi: 'Revenue / Tire', formula: '= Revenue ÷ Tires Sold', source: 'Calculated', status: 'live' },
-    { kpi: 'OPEX / Tire', formula: '= OPEX ÷ Tires Sold', source: 'QuickBooks OPEX ÷ ERP tires', status: 'live' },
-    { kpi: 'COGS / GP / OP per Tire', formula: '= each line ÷ Tires Sold', source: 'Calculated', status: 'live' },
   ],
   '2.3': [
     {

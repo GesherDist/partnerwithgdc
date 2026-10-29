@@ -177,7 +177,7 @@ export function QuickBooksFinancials() {
           setAutoSyncing(true);
           const fresh = await ensureFreshOnce();
           if (fresh.success && fresh.data) {
-            setView((v) => (v ? { ...v, financials: fresh.data!.financials } : v));
+            setView((v) => (v ? { ...v, financials: fresh.data!.financials ?? v.financials } : v));
             setUnsaved(!fresh.data.stored);
           }
           setAutoSyncing(false);

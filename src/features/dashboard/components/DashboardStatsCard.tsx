@@ -17,8 +17,10 @@ import {
 } from '@/shared/components/ui/popover';
 import { Button } from '@/shared/components/ui/button';
 
-import type { DashboardStat } from '../types';
+import type { DashboardStat, DateRange } from '../types';
 import { getIcon } from '../lib/icons';
+import { STAT_DRILLDOWN } from '../lib/drilldown';
+import { DrillDownButton } from './DrillDownButton';
 
 // ============================================
 // CALCULATION FORMULAS
@@ -32,9 +34,9 @@ const TIRE_SIZES =
 
 const CALCULATION_FORMULAS: Record<string, { title: string; formula: string; notes?: string }> = {
   'revenue-mtd': {
-    title: 'Revenue Calculation',
-    formula: `Revenue = Σ tire line totals of firm sales orders delivered in the period − credit notes\n\nDatabase Sources:\n• Sales: sales_order_items.line_total (after line discount, excl. tax), tire products only\n• Returns: credit_notes.subtotal WHERE status IN ("issued", "applied"), by credit_note_date${RECOGNITION_RULE}`,
-    notes: 'Ankur\'s Definition 3.1. Same rule as the Executive tabs (Profitability). Amounts stored in cents.',
+    title: 'Revenue (MTD) Calculation',
+    formula: `Revenue = Σ tire line totals of firm sales orders delivered from the 1st of this month to today − credit notes\n\nDatabase Sources:\n• Sales: sales_order_items.line_total (after line discount, excl. tax), tire products only\n• Returns: credit_notes.subtotal WHERE status IN ("issued", "applied"), by credit_note_date${RECOGNITION_RULE}`,
+    notes: 'Ankur\'s Definition 3.1, month to date. Always MTD: the date filter changes the charts, not this card. Compared to last month. Amounts stored in cents.',
   },
   'revenue-ytd': {
     title: 'Revenue (YTD) Calculation',
@@ -43,8 +45,8 @@ const CALCULATION_FORMULAS: Record<string, { title: string; formula: string; not
   },
   'units-sold': {
     title: 'Units Sold (MTD) Calculation',
-    formula: `Units = Σ quantity of the same delivered tire lines used for Revenue (period)${RECOGNITION_RULE}${TIRE_SIZES}`,
-    notes: 'Tires Sold, Ankur\'s Definition 3.4. Only delivered orders, not open orders.',
+    formula: `Units = Σ quantity of the same delivered tire lines used for Revenue (MTD: 1st of this month to today)${RECOGNITION_RULE}${TIRE_SIZES}`,
+    notes: 'Tires Sold, Ankur\'s Definition 3.4. Only delivered orders, not open orders. Always MTD: the date filter changes the charts, not this card. Compared to last month.',
   },
   'units-sold-ytd': {
     title: 'Units Sold (YTD) Calculation',
@@ -79,13 +81,15 @@ const CALCULATION_FORMULAS: Record<string, { title: string; formula: string; not
 
 interface DashboardStatsCardProps {
   stat: DashboardStat;
+  /** Overview date filter, for the download (drill-down) button */
+  dateRange?: DateRange;
 }
 
 // ============================================
 // COMPONENT
 // ============================================
 
-export function DashboardStatsCard({ stat }: DashboardStatsCardProps) {
+export function DashboardStatsCard({ stat, dateRange }: DashboardStatsCardProps) {
   const Icon = getIcon(stat.icon);
   const isUp = stat.trend === 'up';
   const calculationInfo = CALCULATION_FORMULAS[stat.id];
@@ -168,6 +172,9 @@ export function DashboardStatsCard({ stat }: DashboardStatsCardProps) {
               </PopoverContent>
             </Popover>
           )}
+          {STAT_DRILLDOWN[stat.id] && (
+            <DrillDownButton kind={STAT_DRILLDOWN[stat.id]!} dateRange={dateRange} label={stat.title} />
+          )}
         </div>
         <div className={`rounded-lg p-2 ${stat.color}`}>
           <Icon className="h-4 w-4 text-white" />
@@ -208,13 +215,14 @@ export function DashboardStatsCard({ stat }: DashboardStatsCardProps) {
 
 interface DashboardStatsGridProps {
   stats: DashboardStat[];
+  dateRange?: DateRange;
 }
 
-export function DashboardStatsGrid({ stats }: DashboardStatsGridProps) {
+export function DashboardStatsGrid({ stats, dateRange }: DashboardStatsGridProps) {
   return (
     <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-4">
       {stats.map((stat) => (
-        <DashboardStatsCard key={stat.id} stat={stat} />
+        <DashboardStatsCard key={stat.id} stat={stat} dateRange={dateRange} />
       ))}
     </div>
   );

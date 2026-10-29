@@ -199,6 +199,8 @@ export interface SystemStatus {
 
 export interface RevenueDataPoint {
   month: string;
+  /** YYYY-MM of the point (drill-down) */
+  monthKey?: string;
   revenue: number;
   target: number;
   lastYear?: number;

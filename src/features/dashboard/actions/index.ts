@@ -9,6 +9,9 @@
 
 import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
 import * as dashboardRepo from '../repositories';
+import { buildOverviewDrillDown } from '../services/overview-drilldown.service';
+import { OVERVIEW_DRILLDOWNS, type CsvExport, type OverviewDrillDown } from '../lib/drilldown';
+import { DASHBOARD_TAB_PERMISSIONS } from '../lib/dashboard-tabs';
 import type { UnitsBySKUChartData, ChannelPerformanceDataPoint, InventoryByLocation, DashboardStat, MarginDataPoint, RevenueDataPoint, DateRange, CommissionRevenueStats } from '../types';
 
 // ============================================
@@ -22,9 +25,8 @@ interface ActionResult<T> {
 }
 
 /**
- * Overview KPIs and charts include revenue and margin: the page shows them only
- * with dashboard.view_analytics, so the actions check the same permission.
- * Inventory by location only needs dashboard access.
+ * Everything on the Overview tab (KPIs, charts, inventory by location) needs
+ * the Overview tab permission, the same check the page uses.
  */
 async function requireDashboardPermission(
   permission: string
@@ -43,7 +45,7 @@ async function requireDashboardPermission(
  * Get units sold by ALL products grouped by month
  */
 export async function getUnitsBySKUData(dateRange?: DateRange): Promise<ActionResult<UnitsBySKUChartData>> {
-  const denied = await requireDashboardPermission('dashboard.view_analytics');
+  const denied = await requireDashboardPermission(DASHBOARD_TAB_PERMISSIONS.overview);
   if (denied) {
     return denied;
   }
@@ -64,7 +66,7 @@ export async function getUnitsBySKUData(dateRange?: DateRange): Promise<ActionRe
  * Get channel performance data (OEM vs Dealer)
  */
 export async function getChannelPerformanceData(dateRange?: DateRange): Promise<ActionResult<ChannelPerformanceDataPoint[]>> {
-  const denied = await requireDashboardPermission('dashboard.view_analytics');
+  const denied = await requireDashboardPermission(DASHBOARD_TAB_PERMISSIONS.overview);
   if (denied) {
     return denied;
   }
@@ -85,7 +87,7 @@ export async function getChannelPerformanceData(dateRange?: DateRange): Promise<
  * Get inventory overview by location
  */
 export async function getInventoryByLocationData(): Promise<ActionResult<InventoryByLocation[]>> {
-  const denied = await requireDashboardPermission('dashboard.view_module');
+  const denied = await requireDashboardPermission(DASHBOARD_TAB_PERMISSIONS.overview);
   if (denied) {
     return denied;
   }
@@ -106,7 +108,7 @@ export async function getInventoryByLocationData(): Promise<ActionResult<Invento
  * Get dashboard KPI stats
  */
 export async function getDashboardStatsData(dateRange?: DateRange): Promise<ActionResult<DashboardStat[]>> {
-  const denied = await requireDashboardPermission('dashboard.view_analytics');
+  const denied = await requireDashboardPermission(DASHBOARD_TAB_PERMISSIONS.overview);
   if (denied) {
     return denied;
   }
@@ -127,7 +129,7 @@ export async function getDashboardStatsData(dateRange?: DateRange): Promise<Acti
  * Get margin analysis data for last 6 months
  */
 export async function getMarginAnalysisData(dateRange?: DateRange): Promise<ActionResult<MarginDataPoint[]>> {
-  const denied = await requireDashboardPermission('dashboard.view_analytics');
+  const denied = await requireDashboardPermission(DASHBOARD_TAB_PERMISSIONS.overview);
   if (denied) {
     return denied;
   }
@@ -148,7 +150,7 @@ export async function getMarginAnalysisData(dateRange?: DateRange): Promise<Acti
  * Get revenue trend data for last 8 months
  */
 export async function getRevenueTrendData(dateRange?: DateRange): Promise<ActionResult<RevenueDataPoint[]>> {
-  const denied = await requireDashboardPermission('dashboard.view_analytics');
+  const denied = await requireDashboardPermission(DASHBOARD_TAB_PERMISSIONS.overview);
   if (denied) {
     return denied;
   }
@@ -170,7 +172,7 @@ export async function getRevenueTrendData(dateRange?: DateRange): Promise<Action
  * Tracks expected and actual commission from service items
  */
 export async function getCommissionStatsData(): Promise<ActionResult<CommissionRevenueStats>> {
-  const denied = await requireDashboardPermission('dashboard.view_analytics');
+  const denied = await requireDashboardPermission(DASHBOARD_TAB_PERMISSIONS.overview);
   if (denied) {
     return denied;
   }
@@ -181,4 +183,32 @@ export async function getCommissionStatsData(): Promise<ActionResult<CommissionR
     success: true,
     data,
   };
+}
+
+// ============================================
+// DRILL-DOWN EXPORTS (Overview)
+// ============================================
+
+/**
+ * CSV of the rows behind an Overview KPI card or chart (download button next
+ * to its eye icon). Same data and date range as the figure; last row = TOTAL.
+ */
+export async function getOverviewDrillDownCsv(
+  kind: OverviewDrillDown,
+  dateRange?: DateRange
+): Promise<ActionResult<CsvExport>> {
+  const denied = await requireDashboardPermission(DASHBOARD_TAB_PERMISSIONS.overview);
+  if (denied) {
+    return denied;
+  }
+  if (!OVERVIEW_DRILLDOWNS.includes(kind)) {
+    return { success: false, error: 'Unknown export' };
+  }
+
+  try {
+    return { success: true, data: await buildOverviewDrillDown(kind, dateRange) };
+  } catch (error) {
+    console.error('getOverviewDrillDownCsv error:', error);
+    return { success: false, error: 'Failed to build the export' };
+  }
 }

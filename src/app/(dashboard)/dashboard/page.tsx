@@ -7,9 +7,9 @@
  *
  * Permission-based rendering:
  * - dashboard.view_module: Access to dashboard page
- * - dashboard.view_analytics: Stats Grid (KPIs) and Charts
- * - dashboard.view_inventory: Inventory overview
- * - dashboard.view_financials: Financial Metrics / Profitability / Supply Chain tabs
+ * - One permission per tab (migration 170):
+ *   dashboard.view_financial_metrics_tab, dashboard.view_profitability_tab,
+ *   dashboard.view_supply_chain_tab, dashboard.view_overview_tab
  *
  * Data: All data is fetched from database (no mock data fallback)
  * Date Filters: This Month, Last Month, This Quarter, Last Quarter, YTD, Last Year, etc.
@@ -32,6 +32,7 @@ import {
   getDateRangeFromPreset,
 } from '@/features/dashboard';
 import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
+import { allowedDashboardTabs } from '@/features/dashboard/lib/dashboard-tabs';
 
 // Operations Dashboard imports
 import { OperationsDashboardContent } from './OperationsDashboardContent';
@@ -97,13 +98,11 @@ export default async function DashboardPage() {
     return <OperationsDashboardContent />;
   }
 
-  // Permission checks for sub-sections (for executive dashboard)
-  const canViewAnalytics = hasPermission(user, 'dashboard.view_analytics');
-  const canViewInventory = hasPermission(user, 'dashboard.view_inventory');
-  const canViewFinancials = hasPermission(user, 'dashboard.view_financials');
+  // Tabs this user may open (one permission per tab)
+  const tabs = allowedDashboardTabs((permission) => hasPermission(user, permission));
 
-  // Default date range: Last 6 Months
-  const defaultDateRange = getDateRangeFromPreset('last_6_months');
+  // Default date range: Last 12 Months (charts; same as DashboardContent)
+  const defaultDateRange = getDateRangeFromPreset('last_12_months');
 
   // Fetch real data from database with default date filter (no mock data fallback)
   const [unitsBySKUResult, channelResult, inventoryResult, statsResult, marginResult, revenueResult, commissionResult] = await Promise.all([
@@ -165,9 +164,7 @@ export default async function DashboardPage() {
 
   return (
     <DashboardContent
-      canViewAnalytics={canViewAnalytics}
-      canViewInventory={canViewInventory}
-      canViewFinancials={canViewFinancials}
+      tabs={tabs}
       initialStats={dynamicStats}
       initialUnitsBySKU={dynamicUnitsBySKU}
       initialChannelData={dynamicChannelData}

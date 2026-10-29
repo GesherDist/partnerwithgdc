@@ -56,19 +56,29 @@ export interface RecognizedSaleLine {
   productId: string | null;
   orderSeries: string | null;
   customerChannel: string | null;
+  customerName: string | null;
+  customerPoNumber: string | null;
+  sku: string | null;
+  productName: string | null;
   tireSize: TireSize;
   quantity: number;
   /** cents */
   lineTotal: number;
+  /** cents */
+  unitPrice: number;
   /** cents for the line; null when the tire has no cost */
   cost: number | null;
+  /** cents per tire; 0 when none */
+  unitCost: number;
+  /** Where the cost comes from (drill-down exports) */
+  costSource: 'saved' | 'cycle' | 'base' | 'none';
   isTire: boolean;
 }
 
 export interface RecognizedSales {
   lines: RecognizedSaleLine[];
   /** Credit notes (cents) on their credit-note date */
-  credits: Array<{ date: string; amount: number }>;
+  credits: Array<{ date: string; amount: number; number: string | null; customerName: string | null }>;
 }
 
 export interface RecognizedSummary {
@@ -134,16 +144,16 @@ export async function loadRecognizedSales(): Promise<RecognizedSales> {
     db
       .from('sales_orders')
       .select(
-        'id, order_number, order_date, status, order_series, actual_delivery_date, is_commission_only, ' +
-          'customers (channel), ' +
-          'sales_order_items (id, product_id, quantity, line_total, unit_cost, products (item_type, base_cost, rim_size, name))'
+        'id, order_number, order_date, status, order_series, actual_delivery_date, is_commission_only, customer_po_number, ' +
+          'customers (name, channel), ' +
+          'sales_order_items (id, product_id, sku, description, quantity, unit_price, line_total, unit_cost, products (item_type, base_cost, rim_size, name))'
       )
       .is('deleted_at', null)
       .in('status', RECOGNIZABLE_SO_STATUSES),
     db.from('shipments').select('sales_order_id, load_status, actual_arrival').is('deleted_at', null).not('sales_order_id', 'is', null),
     db
       .from('credit_notes')
-      .select('credit_note_date, subtotal')
+      .select('credit_note_number, credit_note_date, subtotal, customers (name)')
       .in('status', RECOGNIZED_CREDIT_NOTE_STATUSES)
       .is('deleted_at', null),
   ]);
@@ -162,7 +172,7 @@ export async function loadRecognizedSales(): Promise<RecognizedSales> {
     if (!date) {
       continue;
     }
-    const customer = (Array.isArray(so.customers) ? so.customers[0] : so.customers) as { channel: string | null } | null;
+    const customer = (Array.isArray(so.customers) ? so.customers[0] : so.customers) as { name: string | null; channel: string | null } | null;
     const orderSeries = so.order_series ? String(so.order_series) : null;
 
     for (const item of (so.sales_order_items ?? []) as Array<Record<string, unknown>>) {
@@ -173,7 +183,11 @@ export async function loadRecognizedSales(): Promise<RecognizedSales> {
       const quantity = Number(item.quantity ?? 0);
       const isTire = product?.item_type === 'inventory';
       const saved = item.unit_cost === null || item.unit_cost === undefined ? null : Number(item.unit_cost);
-      const unitCost = saved !== null && saved > 0 ? saved : cycleCost(productId, orderSeries, Number(product?.base_cost ?? 0));
+      const baseCost = Number(product?.base_cost ?? 0);
+      const fromCycle = cycleCost(productId, orderSeries, baseCost);
+      const unitCost = saved !== null && saved > 0 ? saved : fromCycle;
+      const costSource: RecognizedSaleLine['costSource'] =
+        unitCost <= 0 ? 'none' : saved !== null && saved > 0 ? 'saved' : fromCycle !== baseCost ? 'cycle' : 'base';
 
       lines.push({
         date,
@@ -183,10 +197,17 @@ export async function loadRecognizedSales(): Promise<RecognizedSales> {
         productId,
         orderSeries,
         customerChannel: customer?.channel ?? null,
+        customerName: customer?.name ?? null,
+        customerPoNumber: so.customer_po_number ? String(so.customer_po_number) : null,
+        sku: item.sku ? String(item.sku) : null,
+        productName: product?.name ?? (item.description ? String(item.description) : null),
         tireSize: detectTireSize(product?.rim_size, product?.name),
         quantity,
+        unitPrice: Number(item.unit_price ?? 0),
         lineTotal: Number(item.line_total ?? 0),
         cost: unitCost > 0 ? unitCost * quantity : null,
+        unitCost: unitCost > 0 ? unitCost : 0,
+        costSource,
         isTire,
       });
     }
@@ -194,7 +215,15 @@ export async function loadRecognizedSales(): Promise<RecognizedSales> {
 
   return {
     lines,
-    credits: (creditRes.data ?? []).map((c) => ({ date: String(c.credit_note_date), amount: Number(c.subtotal ?? 0) })),
+    credits: (creditRes.data ?? []).map((c) => {
+      const customer = (Array.isArray(c.customers) ? c.customers[0] : c.customers) as { name: string | null } | null;
+      return {
+        date: String(c.credit_note_date),
+        amount: Number(c.subtotal ?? 0),
+        number: c.credit_note_number ? String(c.credit_note_number) : null,
+        customerName: customer?.name ?? null,
+      };
+    }),
   };
 }
 

@@ -24,6 +24,11 @@
  * processing that are not delivered yet. Commission-only orders are not
  * Gesher revenue (Galileo invoices the customer) and are left out.
  *
+ * Projected Cash (Ankur, Oct 27 call): orders on the books still to be
+ * invoiced, going forward, quarter by quarter. Each backlog order is placed by
+ * its expected delivery date (invoice on delivery): requested delivery date,
+ * else confirmed ETA, else ETA to US port.
+ *
  * Commission (Ankur, Sep 8 email / Sep 25 call): reported separately from tire
  * revenue and gross margin — commission invoices to Galileo by invoice date,
  * plus commission on commission-only orders not billed yet.
@@ -90,6 +95,8 @@ export interface ErpExecutiveFigures {
   /** Purchase order totals by PO date — DPO denominator */
   purchases: Record<PeriodKey, number>;
   backlog: { tires: number; revenue: number; cogs: number | null; cogsComplete: boolean };
+  /** Backlog per sales order with its expected delivery date (Projected Cash) */
+  backlogOrders: BacklogOrder[];
   /**
    * Commission revenue (Ankur: break commission-only sales out, keep it out of tire
    * revenue and gross margin): commission invoices to Galileo by invoice date.
@@ -106,6 +113,18 @@ export interface ErpExecutiveFigures {
     t3mMonthlyTires: number;
     monthsOfSupply: number | null;
   };
+}
+
+export interface BacklogOrder {
+  order: string;
+  orderDate: string;
+  status: string;
+  /** Expected delivery date, null when the order has none */
+  expectedDate: string | null;
+  dateSource: 'Requested delivery' | 'Confirmed ETA' | 'ETA to US port' | null;
+  tires: number;
+  /** Dollars, same basis as backlog revenue (tire lines, net of discounts, excl. tax) */
+  revenue: number;
 }
 
 /** A recognized sale: a line of a firm sales order, dated by the order's delivery */
@@ -153,7 +172,7 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
       .not('status', 'in', `(${OPEN_PO_EXCLUDED.join(',')})`),
     db
       .from('sales_orders')
-      .select('id, order_number, order_date, status, order_series, actual_delivery_date, is_commission_only, commission_amount, commission_invoice_id, sales_order_items(id, product_id, quantity, customer_qty, line_total, unit_cost)')
+      .select('id, order_number, order_date, status, order_series, actual_delivery_date, requested_delivery_date, confirmed_eta, eta_to_us_port, is_commission_only, commission_amount, commission_invoice_id, sales_order_items(id, product_id, quantity, customer_qty, line_total, unit_cost)')
       .is('deleted_at', null)
       .not('status', 'in', '(draft,cancelled)'),
     db
@@ -315,6 +334,7 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
   let backlogComplete = true;
   let commissionUnbilledAmount = 0;
   let commissionUnbilledOrders = 0;
+  const backlogOrders: BacklogOrder[] = [];
   for (const so of sos) {
     // Commission-only: Galileo invoices the customer, so these tires are not Gesher
     // revenue backlog; their commission is tracked separately
@@ -328,6 +348,8 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
     if (!BACKLOG_SO_STATUSES.includes(String(so.status))) {
       continue;
     }
+    let orderTires = 0;
+    let orderRevenue = 0;
     for (const item of (so.sales_order_items ?? []) as Array<Record<string, unknown>>) {
       const productId = item.product_id ? String(item.product_id) : null;
       if (!productId || !tireIds.has(productId)) {
@@ -342,12 +364,31 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
       const unitNet = qty > 0 ? Number(item.line_total ?? 0) / qty : 0;
       backlogTires += remaining;
       backlogRevenue += remaining * unitNet;
+      orderTires += remaining;
+      orderRevenue += remaining * unitNet;
       const c = costOf(productId, remaining, item.id ? String(item.id) : null, so.order_series ? String(so.order_series) : null);
       if (c.cost !== null) {
         backlogCogs += c.cost;
         backlogAnyCost = true;
       }
       backlogComplete = backlogComplete && c.complete;
+    }
+    if (orderTires > 0) {
+      const dates: Array<[BacklogOrder['dateSource'], unknown]> = [
+        ['Requested delivery', so.requested_delivery_date],
+        ['Confirmed ETA', so.confirmed_eta],
+        ['ETA to US port', so.eta_to_us_port],
+      ];
+      const found = dates.find(([, d]) => Boolean(d));
+      backlogOrders.push({
+        order: String(so.order_number),
+        orderDate: String(so.order_date),
+        status: String(so.status),
+        expectedDate: found ? String(found[1]).slice(0, 10) : null,
+        dateSource: found ? found[0] : null,
+        tires: orderTires,
+        revenue: cents(orderRevenue),
+      });
     }
   }
 
@@ -458,6 +499,7 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
       cogs: backlogTires === 0 ? 0 : backlogAnyCost ? cents(backlogCogs) : null,
       cogsComplete: backlogComplete,
     },
+    backlogOrders,
     commission,
     commissionUnbilled: { amount: cents(commissionUnbilledAmount), orders: commissionUnbilledOrders },
     supply,

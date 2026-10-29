@@ -6,7 +6,7 @@
  * reason it is unavailable — no sample numbers.
  */
 
-import type { ErpExecutiveFigures, SupplyCycle } from '../services/executive-erp.service';
+import type { BacklogOrder, ErpExecutiveFigures, SupplyCycle } from '../services/executive-erp.service';
 import type { DailySnapshot } from '../services/executive-history.service';
 import type { QboBalances, QboFinancials } from '@/modules/integrations/quickbooks/services/qbo-financials.service';
 import { addYears, type PeriodKey } from './periods';
@@ -32,15 +32,58 @@ export const REASON = {
 } as const;
 
 type Cols4 = 'mtd' | 't90' | 'ytd' | 'py';
+
+/** One quarter of the Projected Cash (Ankur, Oct 27 call: quarterly, orders on the books) */
+export interface CashQuarter {
+  label: string;
+  start: string;
+  end: string;
+  opening: number;
+  /** Backlog revenue expected to be invoiced (delivered) in the quarter */
+  inflow: number;
+  closing: number;
+  orders: number;
+  tires: number;
+}
+
+export interface CashProjection {
+  quarters: CashQuarter[];
+  throughDate: string;
+  /** Backlog orders placed in the current quarter: no expected date / date already passed */
+  undatedOrders: number;
+  overdueOrders: number;
+}
 type EffCols = 'pm' | 't90' | 'ytd' | 'py';
 type AvgCols = 'current' | 't90Avg' | 'ytdAvg' | 'py';
 
 export interface ExecutiveDashboardModel {
   asOf: string;
   quickBooks: { connected: boolean; asOf: string | null; environment: string | null; hasPeriods: boolean };
-  liquidity: { cashToday: Cell; cashDate: string | null; cashPy: Cell; lowCash: Cell; highCash: Cell; projectedCash: Cell };
+  liquidity: {
+    cashToday: Cell;
+    cashDate: string | null;
+    cashPy: Cell;
+    lowCash: Cell;
+    highCash: Cell;
+    projectedCash: Cell;
+    /** null without a QuickBooks cash balance */
+    projection: CashProjection | null;
+  };
   workingCapital: Record<'ar' | 'ap' | 'inventory', Record<'current' | 'timing' | 't90Avg' | 'ytdAvg' | 'py', Cell>>;
   efficiency: Record<'dso' | 'dpo' | 'dio' | 'ccc', Record<EffCols, Cell>>;
+  /** Inputs behind table 1.3 per column (drill-down export); null = not available */
+  efficiencyInputs: Record<
+    EffCols,
+    {
+      days: number;
+      avgAr: number | null;
+      creditSales: number;
+      avgAp: number | null;
+      creditPurchases: number | null;
+      avgInventory: number | null;
+      cogs: number | null;
+    }
+  >;
   cashGeneration: Record<'ocf' | 'capex' | 'fcf', Record<Cols4, Cell>>;
   profitability: Record<'revenue' | 'cogs' | 'grossProfit' | 'opex' | 'operatingProfit', Record<Cols4, Cell & { pct?: number | null }>>;
   perTire: Record<'tiresSold' | 'revenue' | 'cogs' | 'grossProfit' | 'opex' | 'operatingProfit', Record<Cols4, Cell>>;
@@ -58,6 +101,66 @@ const none = (note: string): Cell => ({ value: null, note });
 const div = (a: number | null | undefined, b: number | null | undefined) =>
   a === null || a === undefined || b === null || b === undefined || b === 0 ? null : a / b;
 const avg = (values: number[]) => (values.length ? values.reduce((s, x) => s + x, 0) / values.length : null);
+
+const quarterStart = (iso: string) => {
+  const m = Number(iso.slice(5, 7));
+  return `${iso.slice(0, 4)}-${String(Math.floor((m - 1) / 3) * 3 + 1).padStart(2, '0')}-01`;
+};
+const nextQuarter = (start: string) => {
+  const y = Number(start.slice(0, 4));
+  const m = Number(start.slice(5, 7)) + 3;
+  return m > 12 ? `${y + 1}-${String(m - 12).padStart(2, '0')}-01` : `${y}-${String(m).padStart(2, '0')}-01`;
+};
+const quarterEnd = (start: string) => {
+  const next = nextQuarter(start);
+  const d = new Date(`${next}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+};
+const quarterLabel = (start: string) => `Q${Math.floor((Number(start.slice(5, 7)) - 1) / 3) + 1} ${start.slice(0, 4)}`;
+
+/** Quarter an order is expected to be invoiced in: no date / date passed → current quarter */
+export function cashQuarterOf(order: BacklogOrder, asOf: string): string {
+  const current = quarterStart(asOf);
+  return order.expectedDate && order.expectedDate >= current ? quarterStart(order.expectedDate) : current;
+}
+
+/**
+ * Projected Cash (Ankur, Oct 27 call): Cash Today + orders on the books still to
+ * be invoiced, going forward, quarter by quarter. At least 4 quarters, through
+ * the quarter of the last expected order.
+ */
+export function buildCashProjection(cashToday: number, orders: BacklogOrder[], asOf: string): CashProjection {
+  const current = quarterStart(asOf);
+  const byQuarter = new Map<string, { inflow: number; orders: number; tires: number }>();
+  let last = current;
+  for (const o of orders) {
+    const q = cashQuarterOf(o, asOf);
+    const row = byQuarter.get(q) ?? { inflow: 0, orders: 0, tires: 0 };
+    row.inflow += o.revenue;
+    row.orders += 1;
+    row.tires += o.tires;
+    byQuarter.set(q, row);
+    last = q > last ? q : last;
+  }
+
+  const quarters: CashQuarter[] = [];
+  let opening = cashToday;
+  for (let q = current, i = 0; i < 4 || q <= last; q = nextQuarter(q), i++) {
+    const row = byQuarter.get(q) ?? { inflow: 0, orders: 0, tires: 0 };
+    const inflow = Math.round(row.inflow * 100) / 100;
+    const closing = Math.round((opening + inflow) * 100) / 100;
+    quarters.push({ label: quarterLabel(q), start: q, end: quarterEnd(q), opening, inflow, closing, orders: row.orders, tires: row.tires });
+    opening = closing;
+  }
+
+  return {
+    quarters,
+    throughDate: quarters[quarters.length - 1]!.end,
+    undatedOrders: orders.filter((o) => !o.expectedDate).length,
+    overdueOrders: orders.filter((o) => o.expectedDate && o.expectedDate < current).length,
+  };
+}
 
 export function buildExecutiveModel(
   erp: ErpExecutiveFigures,
@@ -115,9 +218,19 @@ export function buildExecutiveModel(
   const dpo = {} as Record<EffCols, Cell>;
   const dio = {} as Record<EffCols, Cell>;
   const ccc = {} as Record<EffCols, Cell>;
+  const efficiencyInputs = {} as ExecutiveDashboardModel['efficiencyInputs'];
   for (const c of effCols) {
     const ar = avgFor('accountsReceivable', c);
     const sales = erp.creditSales[c];
+    efficiencyInputs[c] = {
+      days: p[c].days,
+      avgAr: ar,
+      creditSales: sales,
+      avgAp: avgFor('accountsPayable', c),
+      creditPurchases: q?.creditPurchases?.[c] ?? null,
+      avgInventory: avgFor('inventory', c),
+      cogs: erp.sales[c].cogs,
+    };
     dso[c] = !q
       ? none(qNote)
       : ar === null
@@ -335,6 +448,8 @@ export function buildExecutiveModel(
     },
   };
 
+  const projection = current ? buildCashProjection(current.cash, erp.backlogOrders, erp.asOf) : null;
+
   return {
     asOf: erp.asOf,
     quickBooks: { connected: qboConnected, asOf: qbo?.asOf ?? null, environment: qbo?.environment ?? null, hasPeriods: Boolean(q) },
@@ -344,7 +459,10 @@ export function buildExecutiveModel(
       cashPy: pyBal ? v(pyBal.cash) : none(q ? REASON.noHistory : qNote),
       lowCash: none(REASON.noProjection),
       highCash: none(REASON.noProjection),
-      projectedCash: none(REASON.noProjection),
+      projectedCash: projection
+        ? v(projection.quarters[projection.quarters.length - 1]!.closing, `Through ${projection.throughDate} · orders on the books`)
+        : none(qNote),
+      projection,
     },
     workingCapital: {
       ar: wcRow('accountsReceivable', q ? v(q.arWeightedDays, 'days to receipt') : none(qNote)),
@@ -352,6 +470,7 @@ export function buildExecutiveModel(
       inventory: wcRow('inventory', none('—')),
     },
     efficiency: { dso, dpo, dio, ccc },
+    efficiencyInputs,
     cashGeneration: { ocf, capex, fcf },
     profitability: prof,
     perTire: tire,

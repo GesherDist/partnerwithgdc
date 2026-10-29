@@ -16,13 +16,13 @@ import {
   getAllExecutiveMetrics,
 } from '../services/executive-metrics.service';
 import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
+import { DASHBOARD_TAB_PERMISSIONS, EXECUTIVE_TABS, type ExecutiveTab } from '../lib/dashboard-tabs';
 
-const DENIED = 'Permission denied: dashboard.view_financials';
-
-/** Financial figures: only roles allowed to see them (same rule as the executive dashboard) */
-async function canViewFinancials(): Promise<boolean> {
+/** Permission error for the tabs the user cannot open, or null */
+async function deniedFor(tabs: ExecutiveTab[]): Promise<string | null> {
   const user = await getCurrentUser();
-  return !!user && hasPermission(user, 'dashboard.view_financials');
+  const missing = tabs.map((tab) => DASHBOARD_TAB_PERMISSIONS[tab]).find((p) => !user || !hasPermission(user, p));
+  return missing ? `Permission denied: ${missing}` : null;
 }
 
 // ============================================
@@ -33,8 +33,9 @@ async function canViewFinancials(): Promise<boolean> {
  * Get Profitability data (Table 2.1)
  */
 export async function getExecutiveProfitabilityData(dateRange: DateRange) {
-  if (!(await canViewFinancials())) {
-    return { success: false, error: DENIED, data: null };
+  const denied = await deniedFor(['profitability']);
+  if (denied) {
+    return { success: false, error: denied, data: null };
   }
   try {
     const data = await getProfitabilityTableData(dateRange);
@@ -56,8 +57,9 @@ export async function getExecutiveProfitabilityData(dateRange: DateRange) {
  * Get Per Tire Economics data (Table 2.2)
  */
 export async function getExecutivePerTireEconomicsData(dateRange: DateRange) {
-  if (!(await canViewFinancials())) {
-    return { success: false, error: DENIED, data: null };
+  const denied = await deniedFor(['profitability']);
+  if (denied) {
+    return { success: false, error: denied, data: null };
   }
   try {
     const data = await getPerTireEconomicsTableData(dateRange);
@@ -79,8 +81,9 @@ export async function getExecutivePerTireEconomicsData(dateRange: DateRange) {
  * Get Working Capital Position data (Table 1.2)
  */
 export async function getExecutiveWorkingCapitalData() {
-  if (!(await canViewFinancials())) {
-    return { success: false, error: DENIED, data: null };
+  const denied = await deniedFor(['financial']);
+  if (denied) {
+    return { success: false, error: denied, data: null };
   }
   try {
     const data = await getWorkingCapitalTableData();
@@ -102,8 +105,9 @@ export async function getExecutiveWorkingCapitalData() {
  * Get Current Inventory data (Table 4.2)
  */
 export async function getExecutiveCurrentInventoryData() {
-  if (!(await canViewFinancials())) {
-    return { success: false, error: DENIED, data: null };
+  const denied = await deniedFor(['supply']);
+  if (denied) {
+    return { success: false, error: denied, data: null };
   }
   try {
     const data = await getCurrentInventoryTableData();
@@ -125,8 +129,9 @@ export async function getExecutiveCurrentInventoryData() {
  * Get Backlog Summary data (Table 2.4)
  */
 export async function getExecutiveBacklogSummaryData() {
-  if (!(await canViewFinancials())) {
-    return { success: false, error: DENIED, data: null };
+  const denied = await deniedFor(['profitability']);
+  if (denied) {
+    return { success: false, error: denied, data: null };
   }
   try {
     const data = await getBacklogSummaryTableData();
@@ -149,8 +154,9 @@ export async function getExecutiveBacklogSummaryData() {
  * Useful for initial page load
  */
 export async function getExecutiveMetrics(dateRange: DateRange) {
-  if (!(await canViewFinancials())) {
-    return { success: false, error: DENIED, data: null };
+  const denied = await deniedFor(EXECUTIVE_TABS);
+  if (denied) {
+    return { success: false, error: denied, data: null };
   }
   try {
     const data = await getAllExecutiveMetrics(dateRange);
