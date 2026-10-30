@@ -9,3 +9,4 @@ export { forgotPasswordAction } from './forgot-password';
 export { resetPasswordAction } from './reset-password';
 export { logoutAction } from './logout';
 export { refreshProfileAction } from './refresh-profile';
+export { getMyProfile, updateMyProfile, changeMyPassword, type MyProfile } from './profile';

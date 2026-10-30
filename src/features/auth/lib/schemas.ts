@@ -67,6 +67,7 @@ export const changePasswordSchema = z
       .string()
       .min(1, 'New password is required')
       .min(8, 'Password must be at least 8 characters')
+      .max(72, 'Password must be 72 characters or less')
       .regex(
         /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/,
         'Password must contain at least one uppercase letter, one lowercase letter, and one number'
@@ -76,6 +77,36 @@ export const changePasswordSchema = z
   .refine((data) => data.newPassword === data.confirmNewPassword, {
     message: 'Passwords do not match',
     path: ['confirmNewPassword'],
+  })
+  .refine((data) => data.newPassword !== data.currentPassword, {
+    message: 'New password must be different from your current password',
+    path: ['newPassword'],
   });
 
 export type ChangePasswordFormData = z.infer<typeof changePasswordSchema>;
+
+/**
+ * Profile Details Schema (the signed-in user's own name and phone)
+ */
+const profileNameSchema = (label: string) =>
+  z
+    .string()
+    .trim()
+    .min(1, `${label} is required`)
+    .min(2, `${label} must be at least 2 characters`)
+    .max(100, `${label} must be 100 characters or less`);
+
+export const profileSchema = z.object({
+  firstName: profileNameSchema('First name'),
+  lastName: profileNameSchema('Last name'),
+  phone: z
+    .string()
+    .trim()
+    .max(20, 'Phone must be 20 characters or less')
+    .regex(/^[0-9+\-()\s]*$/, 'Phone may only contain digits, spaces, +, -, and ()')
+    .refine((value) => value === '' || value.replace(/\D/g, '').length >= 10, {
+      message: 'Enter a 10-digit phone number',
+    }),
+});
+
+export type ProfileFormData = z.infer<typeof profileSchema>;

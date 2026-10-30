@@ -10,10 +10,12 @@ export {
   forgotPasswordSchema,
   resetPasswordSchema,
   changePasswordSchema,
+  profileSchema,
   type LoginFormData,
   type ForgotPasswordFormData,
   type ResetPasswordFormData,
   type ChangePasswordFormData,
+  type ProfileFormData,
 } from './schemas';
 
 // Constants
