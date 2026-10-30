@@ -9,7 +9,7 @@
 
 import { redirect } from 'next/navigation';
 import { createClient } from '@/shared/lib/supabase/server';
-import { getAppUserByAuthId } from '@/shared/lib/auth';
+import { getAppUserByAuthId, isOperationsRoleName } from '@/shared/lib/auth';
 import { setCachedProfile } from '@/shared/lib/auth/profile-cache';
 import { loginSchema, type LoginFormData } from '../lib/schemas';
 
@@ -84,6 +84,8 @@ export async function loginAction(data: LoginFormData): Promise<LoginResult | vo
       // Check if user is a supplier - redirect to supplier portal
       if (appUser.supplierId) {
         redirectUrl = '/supplier-portal';
+      } else if (isOperationsRoleName(appUser.role?.name)) {
+        redirectUrl = '/operations';
       }
     }
   }

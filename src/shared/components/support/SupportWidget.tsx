@@ -7,14 +7,14 @@
  * Jaimin and can attach screenshots or PDFs (pick, drag and drop, or paste);
  * the current page is added automatically.
  *
- * Shows on all dashboard pages for logged-in users. Currently UI preview only -
- * sending does not upload, save or email anything yet.
- * TODO: Upload files, save to database, email Jaimin (Postmark).
+ * Shows on all dashboard pages for logged-in users. Sending posts to
+ * /api/support: files go to AWS S3, the message is saved (support_requests)
+ * and emailed to SUPPORT_EMAIL with Reply-To set to the user.
  */
 
 import { useEffect, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
-import { CheckCircle2, FileText, LifeBuoy, MessageCircle, Paperclip, Upload, X } from 'lucide-react';
+import { CheckCircle2, FileText, LifeBuoy, Loader2, MessageCircle, Paperclip, Upload, X } from 'lucide-react';
 import { Button } from '@/shared/components/ui/button';
 import { Textarea } from '@/shared/components/ui/textarea';
 import { Label } from '@/shared/components/ui/label';
@@ -44,6 +44,12 @@ function pageLabel(pathname: string): string {
     .join(' ');
 }
 
+/** Open tab on the page (e.g. dashboard "Supply Chain"), so the message says where the user was */
+function activeTabLabel(): string | null {
+  const tab = document.querySelector('main [role="tab"][data-state="active"]');
+  return tab?.textContent?.trim() || null;
+}
+
 function fileSize(bytes: number): string {
   return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
@@ -59,6 +65,8 @@ export function SupportWidget() {
   const [dragging, setDragging] = useState(false);
   const [preview, setPreview] = useState<Attachment | null>(null);
   const [sent, setSent] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
 
   // Free the preview URLs when the widget goes away
   const attachmentsRef = useRef(attachments);
@@ -117,6 +125,7 @@ export function SupportWidget() {
     setAttachments([]);
     setMessage('');
     setFileError(null);
+    setSendError(null);
   };
 
   const handleOpenChange = (next: boolean) => {
@@ -126,10 +135,34 @@ export function SupportWidget() {
     }
   };
 
-  const handleSend = () => {
-    // Preview: nothing is uploaded, saved or emailed yet
-    reset();
-    setSent(true);
+  const handleSend = async () => {
+    if (!message.trim() || sending) {
+      return;
+    }
+    setSending(true);
+    setSendError(null);
+    try {
+      const tab = activeTabLabel();
+      const form = new FormData();
+      form.append('message', message.trim());
+      form.append('pagePath', tab ? `${pageLabel(pathname)} > ${tab}` : pageLabel(pathname));
+      form.append('pageUrl', window.location.href);
+      attachments.forEach((a) => form.append('files', a.file, a.file.name));
+
+      const response = await fetch('/api/support', { method: 'POST', body: form });
+      const result = (await response.json().catch(() => null)) as
+        | { success: boolean; error?: { message?: string } }
+        | null;
+      if (!response.ok || !result?.success) {
+        throw new Error(result?.error?.message || 'Your message could not be sent. Please try again.');
+      }
+      reset();
+      setSent(true);
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : 'Your message could not be sent. Please try again.');
+    } finally {
+      setSending(false);
+    }
   };
 
   // Ctrl+V a screenshot straight into the message box
@@ -212,6 +245,7 @@ export function SupportWidget() {
                   id="support-message"
                   rows={4}
                   maxLength={MAX_LENGTH}
+                  disabled={sending}
                   value={message}
                   onChange={(e) => setMessage(e.target.value)}
                   onPaste={handlePaste}
@@ -310,10 +344,12 @@ export function SupportWidget() {
                     </p>
                   )}
                 </div>
-                <Button size="sm" disabled={!message.trim()} onClick={handleSend}>
-                  Send message
+                <Button size="sm" disabled={!message.trim() || sending} onClick={handleSend}>
+                  {sending && <Loader2 className="h-4 w-4 animate-spin" />}
+                  {sending ? 'Sending...' : 'Send message'}
                 </Button>
               </div>
+              {sendError && <p className="text-xs text-destructive">{sendError}</p>}
             </div>
           )}
         </PopoverContent>

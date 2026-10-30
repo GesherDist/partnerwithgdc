@@ -13,6 +13,7 @@ export {
   // Check functions
   isSuperAdmin,
   isSuperAdminRoleName,
+  isOperationsRoleName,
   hasPermission,
   hasAnyPermission,
   hasAllPermissions,

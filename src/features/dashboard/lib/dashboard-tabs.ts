@@ -1,12 +1,13 @@
 /**
- * Dashboard tabs and the permission behind each one (migration 170).
+ * Dashboard tabs and the permission behind each one (migration 170), and the
+ * Overview tab's sections, each with its own permission (migration 171).
  *
  * The three executive tabs share one data request; the server sends only the
  * sections of the tabs the user may see.
  */
 
 import type { ExecutiveDashboardModel } from './executive-model';
-import type { TableDrillDown } from './drilldown';
+import type { OverviewDrillDown, TableDrillDown } from './drilldown';
 
 export const DASHBOARD_TAB_PERMISSIONS = {
   financial: 'dashboard.view_financial_metrics_tab',
@@ -66,4 +67,46 @@ export function tableDrillDownTab(kind: TableDrillDown): ExecutiveTab {
     return 'supply';
   }
   return 'profitability';
+}
+
+// ============================================
+// OVERVIEW TAB SECTIONS
+// ============================================
+
+export const OVERVIEW_SECTION_PERMISSIONS = {
+  kpis: 'dashboard.view_overview_kpis',
+  revenueTrend: 'dashboard.view_revenue_trend_chart',
+  unitsBySku: 'dashboard.view_units_by_sku_chart',
+  channel: 'dashboard.view_channel_performance_chart',
+  margin: 'dashboard.view_margin_analysis_chart',
+  inventory: 'dashboard.view_inventory_overview',
+} as const;
+
+export type OverviewSection = keyof typeof OVERVIEW_SECTION_PERMISSIONS;
+
+/** Display order on the Overview tab */
+export const OVERVIEW_SECTIONS: OverviewSection[] = ['kpis', 'revenueTrend', 'unitsBySku', 'channel', 'margin', 'inventory'];
+
+/** Overview sections the user may see: needs the Overview tab and the section's own permission */
+export function allowedOverviewSections(can: (permission: string) => boolean): OverviewSection[] {
+  if (!can(DASHBOARD_TAB_PERMISSIONS.overview)) {
+    return [];
+  }
+  return OVERVIEW_SECTIONS.filter((section) => can(OVERVIEW_SECTION_PERMISSIONS[section]));
+}
+
+/** Section of an Overview export: KPI cards, else the chart it belongs to */
+export function overviewDrillDownSection(kind: OverviewDrillDown): OverviewSection {
+  switch (kind) {
+    case 'revenue-trend':
+      return 'revenueTrend';
+    case 'units-by-sku':
+      return 'unitsBySku';
+    case 'channel':
+      return 'channel';
+    case 'margin-analysis':
+      return 'margin';
+    default:
+      return 'kpis';
+  }
 }

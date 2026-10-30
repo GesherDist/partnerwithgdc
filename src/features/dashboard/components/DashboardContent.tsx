@@ -45,7 +45,7 @@ import type {
   RevenueDataPoint,
 } from '../types';
 import { getDateRangeFromPreset, DATE_RANGE_LABELS } from '../types';
-import type { DashboardTab } from '../lib/dashboard-tabs';
+import type { DashboardTab, OverviewSection } from '../lib/dashboard-tabs';
 
 // ============================================
 // TYPES
@@ -63,6 +63,8 @@ const TAB_GRID_COLS = ['grid-cols-1', 'grid-cols-1', 'grid-cols-2', 'grid-cols-3
 interface DashboardContentProps {
   /** Tabs the user may open (one permission per tab), in display order */
   tabs: DashboardTab[];
+  /** Overview sections the user may see (one permission per section) */
+  overviewSections: OverviewSection[];
   initialStats: DashboardStat[];
   initialUnitsBySKU: UnitsBySKUChartData;
   initialChannelData: ChannelPerformanceDataPoint[];
@@ -77,6 +79,7 @@ interface DashboardContentProps {
 
 export function DashboardContent({
   tabs,
+  overviewSections,
   initialStats,
   initialUnitsBySKU,
   initialChannelData,
@@ -98,9 +101,11 @@ export function DashboardContent({
   const [marginData, setMarginData] = useState<MarginDataPoint[]>(initialMarginData);
   const [revenueData, setRevenueData] = useState<RevenueDataPoint[]>(initialRevenueData);
 
-  // Fetch data when date range changes
+  // Fetch data when date range changes (only the sections the user may see)
   const fetchData = useCallback(async (dateRange: DateRange) => {
     setIsLoading(true);
+    const allowed = (section: OverviewSection) => overviewSections.includes(section);
+    const skipped = Promise.resolve({ success: false, data: undefined });
 
     try {
       const [
@@ -112,13 +117,13 @@ export function DashboardContent({
         revenueResult,
         commissionResult,
       ] = await Promise.all([
-        getDashboardStatsData(dateRange),
-        getUnitsBySKUData(dateRange),
-        getChannelPerformanceData(dateRange),
-        getInventoryByLocationData(), // Inventory doesn't need date filter
-        getMarginAnalysisData(dateRange),
-        getRevenueTrendData(dateRange),
-        getCommissionStatsData(), // Commission is always YTD
+        allowed('kpis') ? getDashboardStatsData(dateRange) : skipped,
+        allowed('unitsBySku') ? getUnitsBySKUData(dateRange) : skipped,
+        allowed('channel') ? getChannelPerformanceData(dateRange) : skipped,
+        allowed('inventory') ? getInventoryByLocationData() : skipped, // Inventory doesn't need date filter
+        allowed('margin') ? getMarginAnalysisData(dateRange) : skipped,
+        allowed('revenueTrend') ? getRevenueTrendData(dateRange) : skipped,
+        allowed('kpis') ? getCommissionStatsData() : skipped, // Commission is always YTD
       ]);
 
       // Process stats and add commission cards
@@ -190,7 +195,7 @@ export function DashboardContent({
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [overviewSections]);
 
   // Handle date range change
   const handleDateRangeChange = (preset: DateRangePreset, customRange?: DateRange) => {
@@ -207,6 +212,7 @@ export function DashboardContent({
   }, [currentDateRange, fetchData]);
 
   const canView = (tab: DashboardTab) => tabs.includes(tab);
+  const canSee = (section: OverviewSection) => overviewSections.includes(section);
 
   if (tabs.length === 0) {
     return (
@@ -242,7 +248,10 @@ export function DashboardContent({
 
         {canView('overview') && (
           <TabsContent value="overview" className="space-y-6 mt-0">
-            <DashboardStatsGrid stats={stats} dateRange={currentDateRange} />
+            {overviewSections.length === 0 && (
+              <p className="text-sm text-muted-foreground">No Overview sections are assigned to your role. Please contact your administrator.</p>
+            )}
+            {canSee('kpis') && <DashboardStatsGrid stats={stats} dateRange={currentDateRange} />}
             <DashboardChartsGrid
               revenueData={revenueData}
               unitsData={unitsBySKU.data}
@@ -250,8 +259,9 @@ export function DashboardContent({
               channelData={channelData}
               marginData={marginData}
               dateRange={currentDateRange}
+              charts={overviewSections}
             />
-            <InventoryOverview byLocation={inventory} />
+            {canSee('inventory') && <InventoryOverview byLocation={inventory} />}
           </TabsContent>
         )}
 

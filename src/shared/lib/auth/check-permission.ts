@@ -44,6 +44,15 @@ export function isSuperAdminRoleName(name: string | null | undefined): boolean {
   return name?.toLowerCase().replace(/[_\s]/g, '') === 'superadmin';
 }
 
+/**
+ * Whether a role name is an Operations role. These users land on /operations
+ * instead of /dashboard.
+ */
+export function isOperationsRoleName(name: string | null | undefined): boolean {
+  const normalized = name?.toLowerCase().replace(/[_\s]/g, '');
+  return ['operations', 'operation', 'operationsmanager', 'operationmanager'].includes(normalized ?? '');
+}
+
 // ============================================
 // PERMISSION CHECK FUNCTIONS
 // ============================================

@@ -44,6 +44,7 @@ import type {
   DateRange,
 } from '../types';
 import { DrillDownButton } from './DrillDownButton';
+import type { OverviewSection } from '../lib/dashboard-tabs';
 
 // ============================================
 // CONSTANTS
@@ -562,6 +563,8 @@ interface DashboardChartsGridProps {
   channelData: ChannelPerformanceDataPoint[];
   marginData: MarginDataPoint[];
   dateRange?: DateRange;
+  /** Charts the user may see (one permission per chart); all when omitted */
+  charts?: OverviewSection[];
 }
 
 export function DashboardChartsGrid({
@@ -571,13 +574,18 @@ export function DashboardChartsGrid({
   channelData,
   marginData,
   dateRange,
+  charts,
 }: DashboardChartsGridProps) {
+  const show = (chart: OverviewSection) => !charts || charts.includes(chart);
+  if (!show('revenueTrend') && !show('unitsBySku') && !show('channel') && !show('margin')) {
+    return null;
+  }
   return (
     <div className="grid gap-4 md:grid-cols-2">
-      <RevenueChart data={revenueData} dateRange={dateRange} />
-      <UnitsBySKUChart data={unitsData} products={unitsProducts} dateRange={dateRange} />
-      <ChannelPerformanceChart data={channelData} dateRange={dateRange} />
-      <MarginChart data={marginData} dateRange={dateRange} />
+      {show('revenueTrend') && <RevenueChart data={revenueData} dateRange={dateRange} />}
+      {show('unitsBySku') && <UnitsBySKUChart data={unitsData} products={unitsProducts} dateRange={dateRange} />}
+      {show('channel') && <ChannelPerformanceChart data={channelData} dateRange={dateRange} />}
+      {show('margin') && <MarginChart data={marginData} dateRange={dateRange} />}
     </div>
   );
 }
