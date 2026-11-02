@@ -64,6 +64,16 @@ export interface OpexMonth {
   groups: Array<{ group: string; amount: number }>;
 }
 
+/** Revenue of one calendar month from the P&L (accounts mapped to Revenue) */
+export interface QboRevenueMonth {
+  /** YYYY-MM */
+  month: string;
+  revenue: number;
+}
+
+/** Months of P&L revenue history kept in the snapshot (Revenue Trend before ERP data) */
+const REVENUE_HISTORY_MONTHS = 24;
+
 export interface QboFinancials {
   realmId: string;
   environment: string;
@@ -95,6 +105,12 @@ export interface QboFinancials {
    */
   periods?: QboPeriodFigures | null;
   periodsError?: string;
+  /**
+   * Revenue per month for the last 24 complete months (P&L, Accrual, accounts
+   * mapped to Revenue). Used by the Revenue Trend for months before the ERP
+   * has sales data. Null / missing when it could not be read.
+   */
+  revenueHistory?: QboRevenueMonth[] | null;
 }
 
 export interface QboBalances {
@@ -274,6 +290,34 @@ export function opexByMonth(
     month.total = Math.round(month.total * 100) / 100;
   });
   return months;
+}
+
+/**
+ * Revenue per month of a P&L summarized by month (accounts mapped to "revenue").
+ * Columns are consecutive months from `fromMonth` (YYYY-MM); the last column is
+ * the Total and is skipped.
+ */
+export function revenueByMonth(
+  pnl: Report,
+  fromMonth: string,
+  mappingOf: (accountId: string, name: string) => { category: DashboardCategory } | undefined
+): QboRevenueMonth[] {
+  const columns = (pnl.Columns?.Column ?? []).slice(1);
+  const monthCount = Math.max(0, columns.length - 1);
+  const [y, m] = fromMonth.split('-').map(Number) as [number, number];
+  const months: QboRevenueMonth[] = Array.from({ length: monthCount }, (_, i) => ({
+    month: new Date(Date.UTC(y, m - 1 + i, 1)).toISOString().slice(0, 7),
+    revenue: 0,
+  }));
+  for (const row of accountRows(pnl.Rows?.Row)) {
+    if (mappingOf(row.id, row.name)?.category !== 'revenue') {
+      continue;
+    }
+    for (let i = 0; i < monthCount; i++) {
+      months[i]!.revenue += row.values[i] ?? 0;
+    }
+  }
+  return months.map((month) => ({ ...month, revenue: Math.round(month.revenue * 100) / 100 }));
 }
 
 // ============================================
@@ -640,6 +684,21 @@ export async function buildFinancials(access: QboAccess): Promise<QboFinancials>
     console.error('[QboFinancials] Period figures failed:', error);
   }
 
+  // Revenue history for the Revenue Trend: optional, never breaks the main figures
+  let revenueHistory: QboRevenueMonth[] | null = null;
+  try {
+    const historyFrom = monthStart(today, REVENUE_HISTORY_MONTHS);
+    const historyPnl = await fetchReport(access, 'ProfitAndLoss', {
+      start_date: historyFrom,
+      end_date: monthEnd(lastMonth),
+      summarize_column_by: 'Month',
+      accounting_method: 'Accrual',
+    });
+    revenueHistory = revenueByMonth(historyPnl, historyFrom.slice(0, 7), (id) => mapping.get(id));
+  } catch (error) {
+    console.error('[QboFinancials] Revenue history failed:', error);
+  }
+
   const round = (n: number | undefined) => Math.round((n ?? 0) * 100) / 100;
   return {
     realmId: access.realmId,
@@ -663,6 +722,7 @@ export async function buildFinancials(access: QboAccess): Promise<QboFinancials>
     unmappedAccounts: [...unmapped].sort(),
     periods: periodFigures,
     ...(periodsError ? { periodsError } : {}),
+    revenueHistory,
   };
 }
 

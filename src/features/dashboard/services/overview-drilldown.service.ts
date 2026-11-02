@@ -113,17 +113,19 @@ async function revenueTrendCsv(span: { from: string; to: string }, dateRange?: D
     return months;
   });
 
+  // Months before ERP data show QuickBooks P&L revenue on the chart (lib/revenue-history)
+  const sourceLabel = (source?: string) => (source === 'quickbooks' ? 'QuickBooks P&L' : 'ERP');
   const summary: Cell[][] = chart.map((p) => {
     const mine = years.map((_, i) => Math.round((byMonth[i]!.get(p.monthKey ?? '')?.total ?? 0) * 100) / 100);
-    return [p.month, mine[0], p.revenue, mine[1], p.lastYear ?? 0];
+    return [p.month, mine[0], p.revenue, sourceLabel(p.source), mine[1], p.lastYear ?? 0, sourceLabel(p.lastYearSource)];
   });
   const sum = (i: number) => summary.reduce((s, r) => s + Number(r[i] ?? 0), 0);
-  summary.push(['TOTAL', Math.round(sum(1) * 100) / 100, sum(2), Math.round(sum(3) * 100) / 100, sum(4)]);
+  summary.push(['TOTAL', Math.round(sum(1) * 100) / 100, sum(2), '', Math.round(sum(4) * 100) / 100, sum(5), '']);
 
   const sections = [
     section(
       `Revenue Trend by month: This year ${years[0]!.from} to ${years[0]!.to} · Last year ${years[1]!.from} to ${years[1]!.to} (chart values are rounded to whole dollars)`,
-      ['Month', 'This Year (rows below)', 'This Year (chart)', 'Last Year (rows below)', 'Last Year (chart)'],
+      ['Month', 'This Year (rows below)', 'This Year (chart)', 'This Year source', 'Last Year (rows below)', 'Last Year (chart)', 'Last Year source'],
       summary
     ),
   ];

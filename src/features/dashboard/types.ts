@@ -84,12 +84,12 @@ export function getDateRangeFromPreset(preset: DateRangePreset): DateRange {
       endDate = new Date(currentYear - 1, 11, 31);
       break;
     case 'last_6_months':
-      // Properly calculate 6 months ago from today
-      startDate = new Date(now.getFullYear(), now.getMonth() - 6, 1);
+      // 6 calendar months including the current one
+      startDate = new Date(now.getFullYear(), now.getMonth() - 5, 1);
       break;
     case 'last_12_months':
-      // Calculate exactly 12 months ago from today
-      startDate = new Date(now.getFullYear(), now.getMonth() - 12, 1);
+      // 12 calendar months including the current one (e.g. Dec 1 → today in November)
+      startDate = new Date(now.getFullYear(), now.getMonth() - 11, 1);
       break;
     case 'custom':
       // For custom, default to this month - actual dates set by picker
@@ -204,6 +204,9 @@ export interface RevenueDataPoint {
   revenue: number;
   target: number;
   lastYear?: number;
+  /** Where revenue / lastYear come from: ERP sales, or QuickBooks P&L for months before ERP data */
+  source?: 'erp' | 'quickbooks';
+  lastYearSource?: 'erp' | 'quickbooks';
 }
 
 export interface UnitsBySKUDataPoint {

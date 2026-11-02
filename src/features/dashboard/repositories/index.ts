@@ -10,6 +10,7 @@
 import { createAdminClient } from '@/shared/lib/supabase/admin';
 import { loadRecognizedSales, summarizeRecognizedSales } from '../services/recognized-sales.service';
 import { getPeriods } from '../lib/periods';
+import { revenueSourceOf } from '../lib/revenue-history';
 import type { UnitsBySKUDataPoint, UnitsBySKUChartData, ProductLegendItem, ChannelPerformanceDataPoint, InventoryByLocation, DashboardStat, MarginDataPoint, RevenueDataPoint, DateRange, CommissionRevenueStats } from '../types';
 
 // Helper to format date as YYYY-MM-DD string
@@ -756,6 +757,20 @@ export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDat
     add(credit.date, -credit.amount);
   }
 
+  // Months before the ERP has sales data: QuickBooks P&L revenue of the month
+  // (daily snapshot). Without a snapshot month the ERP figure stays.
+  const qboRevenue = await loadQboRevenueHistory();
+  const lastYearKey = (key: string) => `${Number(key.slice(0, 4)) - 1}${key.slice(4)}`;
+  const sourceOf = (key: string) => (revenueSourceOf(key) === 'quickbooks' && qboRevenue.has(key) ? 'quickbooks' : 'erp');
+  for (const key of monthKeys) {
+    if (sourceOf(key) === 'quickbooks') {
+      monthlyRevenue.set(key, qboRevenue.get(key)!);
+    }
+    if (sourceOf(lastYearKey(key)) === 'quickbooks') {
+      lastYearRevenue.set(key, qboRevenue.get(lastYearKey(key))!);
+    }
+  }
+
   // TODO: Move to database table (monthly_targets) for dynamic updates
   // For demo: Update this value here if target changes
   // Long-term: Create `monthly_targets` table with year/month/target_amount columns
@@ -771,8 +786,29 @@ export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDat
       revenue: Math.round(monthlyRevenue.get(key) ?? 0),
       target: MONTHLY_TARGET,
       lastYear: Math.round(lastYearRevenue.get(key) ?? 0),
+      source: sourceOf(key),
+      lastYearSource: sourceOf(lastYearKey(key)),
     };
   });
+}
+
+/** QuickBooks P&L revenue per month (YYYY-MM) from the latest snapshot; empty when not connected */
+async function loadQboRevenueHistory(): Promise<Map<string, number>> {
+  try {
+    const [{ getConnectionByProvider }, { getLatestSnapshot }] = await Promise.all([
+      import('@/modules/integrations/core'),
+      import('@/modules/integrations/quickbooks/services/qbo-financials.service'),
+    ]);
+    const connection = await getConnectionByProvider('quickbooks');
+    if (!connection || connection.status !== 'connected' || !connection.external_account_id) {
+      return new Map();
+    }
+    const { financials } = await getLatestSnapshot(connection.external_account_id);
+    return new Map((financials?.revenueHistory ?? []).map((m) => [m.month, m.revenue]));
+  } catch (error) {
+    console.error('Error loading QuickBooks revenue history:', error);
+    return new Map();
+  }
 }
 
 /**

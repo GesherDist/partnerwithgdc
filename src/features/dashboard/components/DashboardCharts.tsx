@@ -44,6 +44,7 @@ import type {
   DateRange,
 } from '../types';
 import { DrillDownButton } from './DrillDownButton';
+import { ERP_REVENUE_START_LABEL } from '../lib/revenue-history';
 import type { OverviewSection } from '../lib/dashboard-tabs';
 
 // ============================================
@@ -117,6 +118,10 @@ Database Sources:
 
 Recognized when delivered: actual delivery date, else delivered shipment arrival, else order date for status Delivered
 Excludes: commission-only orders and service lines
+
+Before ${ERP_REVENUE_START_LABEL} (no ERP sales data yet):
+• QuickBooks Profit & Loss (Accrual), accounts mapped to Revenue in Settings > Chart of Accounts
+
 Target: $220,000/month (hardcoded)
 Last Year: Same period previous year`}
                     </div>
@@ -134,7 +139,11 @@ Last Year: Same period previous year`}
           </Popover>
           <DrillDownButton kind="revenue-trend" dateRange={dateRange} label="Revenue Trend" />
         </div>
-        <CardDescription>Monthly revenue vs target</CardDescription>
+        <CardDescription>
+          Monthly revenue vs target
+          {data.some((p) => p.source === 'quickbooks' || p.lastYearSource === 'quickbooks') &&
+            ` · Before ${ERP_REVENUE_START_LABEL}: QuickBooks P&L revenue`}
+        </CardDescription>
       </CardHeader>
       <CardContent>
         <ResponsiveContainer width="100%" height={300}>
