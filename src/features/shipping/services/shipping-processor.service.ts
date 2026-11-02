@@ -8,15 +8,14 @@
 import { extractShippingInfo } from './shipping-extract.service';
 import * as shippingRepo from '../repositories/shipping.repository';
 import {
-  updateSalesOrderStatus,
+  purchaseOrderStatusForTracking,
+  updatePurchaseOrderStatus,
   updateShipmentLoadStatus,
 } from '../repositories/shipping.repository';
 import type {
   ProcessShippingEmailResult,
   ShippingEmailExtraction,
-  ShipmentTrackingStatus,
 } from '../types';
-import type { OrderStatus } from '@/features/sales-orders/types';
 
 // ============================================
 // CONFIDENCE THRESHOLD
@@ -27,25 +26,6 @@ import type { OrderStatus } from '@/features/sales-orders/types';
  * Extractions below this threshold will be logged but not applied.
  */
 const CONFIDENCE_THRESHOLD = 0.6;
-
-// ============================================
-// STATUS MAPPING: Tracking → Sales Order
-// ============================================
-
-const TRACKING_TO_ORDER_STATUS: Record<ShipmentTrackingStatus, OrderStatus> = {
-  booked: 'confirmed',
-  container_picked: 'processing',
-  loaded_on_vessel: 'processing',
-  departed_origin: 'processing',
-  in_transit: 'processing',
-  arrived_port: 'processing',
-  customs_clearance: 'processing',
-  on_rail: 'shipped',
-  at_ramp: 'shipped',
-  out_for_delivery: 'shipped',
-  delivered: 'delivered',
-  exception: 'processing', // Keep processing, don't change on exception
-};
 
 // ============================================
 // MAIN PROCESSOR
@@ -225,14 +205,14 @@ export async function processShippingEmail(
         await handleShippingIssue(shipment.id, extraction);
       }
 
-      // Step 9: Update Sales Order status based on tracking status
-      if (shipment.sales_order_id && extraction.detectedStatus) {
-        const newOrderStatus = TRACKING_TO_ORDER_STATUS[extraction.detectedStatus];
-        if (newOrderStatus) {
-          await updateSalesOrderStatus(shipment.sales_order_id, newOrderStatus);
-          console.log(
-            `[Shipping] Sales Order status updated based on tracking: ${extraction.detectedStatus} → ${newOrderStatus}`
-          );
+      // Step 9: Supplier purchase order status from the tracking status (same rule
+      // as the CMA CGM sync). The customer's sales order is not changed: tracking
+      // is about the supplier load; Jenny sets the order status.
+      if (extraction.detectedStatus) {
+        const poStatus = purchaseOrderStatusForTracking(extraction.detectedStatus);
+        const purchaseOrderId = poStatus ? await shippingRepo.getShipmentPurchaseOrderId(shipment.id) : null;
+        if (poStatus && purchaseOrderId) {
+          await updatePurchaseOrderStatus(purchaseOrderId, poStatus);
         }
       }
 

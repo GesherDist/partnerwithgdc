@@ -128,7 +128,7 @@ export function InventoryTableColumns(options: ColumnsOptions = {}): ColumnDef<I
               {onAdjust && (
                 <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onAdjust(item); }}>
                   <ArrowUpDown className="mr-2 h-4 w-4" />
-                  Adjust
+                  Update Stock
                 </DropdownMenuItem>
               )}
             </DropdownMenuContent>

@@ -24,8 +24,8 @@ import {
   updateShipmentTracking,
   createStatusHistory,
   updateShipmentLoadStatus,
-  updateSalesOrderStatus,
   updatePurchaseOrderStatus,
+  purchaseOrderStatusForTracking,
 } from '../repositories/shipping.repository';
 
 import { createAdminClient } from '@/shared/lib/supabase/admin';
@@ -353,7 +353,7 @@ export async function fetchContainerEvents(
  */
 export async function updateShipmentFromCmaCgm(
   shipmentId: string,
-  salesOrderId: string | null,
+  _salesOrderId: string | null,
   purchaseOrderId: string | null,
   _containerNumber: string,
   mappedStatus: CmaCgmMappedStatus,
@@ -402,18 +402,13 @@ export async function updateShipmentFromCmaCgm(
       },
     });
 
-    // Update sales order status if applicable
-    if (salesOrderId) {
-      const soStatus = mapTrackingToSalesOrderStatus(mappedStatus.trackingStatus);
-      if (soStatus) {
-        await updateSalesOrderStatus(salesOrderId, soStatus);
-      }
-    }
+    // The customer's sales order is not changed here: tracking is about the
+    // supplier load (shipment + purchase order); Jenny sets the order status.
 
     // Update purchase order status if applicable
     // When shipment is delivered, mark PO as received
     if (purchaseOrderId) {
-      const poStatus = mapTrackingToPurchaseOrderStatus(mappedStatus.trackingStatus);
+      const poStatus = purchaseOrderStatusForTracking(mappedStatus.trackingStatus);
       if (poStatus) {
         await updatePurchaseOrderStatus(purchaseOrderId, poStatus);
       }
@@ -462,46 +457,6 @@ export async function updateShipmentFromCmaCgm(
   }
 }
 
-/**
- * Map tracking status to sales order status
- */
-function mapTrackingToSalesOrderStatus(trackingStatus: string): string | null {
-  switch (trackingStatus) {
-    case 'departed_origin':
-    case 'in_transit':
-      return 'shipped';
-    case 'delivered':
-      return 'delivered';
-    default:
-      return null;
-  }
-}
-
-/**
- * Map tracking status to purchase order status
- * When shipment departs/in transit → PO is in_transit
- * When shipment is delivered → PO is received
- */
-function mapTrackingToPurchaseOrderStatus(trackingStatus: string): string | null {
-  switch (trackingStatus) {
-    case 'booked':
-    case 'container_picked':
-      return 'ready_to_ship';
-    case 'loaded_on_vessel':
-    case 'departed_origin':
-    case 'in_transit':
-    case 'arrived_port':
-    case 'customs_clearance':
-    case 'on_rail':
-    case 'at_ramp':
-    case 'out_for_delivery':
-      return 'in_transit';
-    case 'delivered':
-      return 'received';
-    default:
-      return null;
-  }
-}
 
 /**
  * Container known to CMA but nothing has actually happened yet (booking

@@ -65,7 +65,7 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, loadError, on
   const [pageSize, setPageSize] = useState(20);
 
   // Sorting state
-  type SortColumn = 'no' | 'soNumber' | 'customerPoNumber' | 'totalQty' | 'customer' | 'supplierName' | 'etaToUsPort' | 'confirmedEta' | 'expectedDelivery' | 'status';
+  type SortColumn = 'no' | 'soNumber' | 'customerPoNumber' | 'totalQty' | 'customer' | 'supplierName' | 'containerNumber' | 'etaToUsPort' | 'confirmedEta' | 'expectedDelivery' | 'status';
   const [sortColumn, setSortColumn] = useState<SortColumn | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
 
@@ -137,6 +137,10 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, loadError, on
       case 'supplierName':
         aVal = a.supplierName || '';
         bVal = b.supplierName || '';
+        break;
+      case 'containerNumber':
+        aVal = a.containerNumber || '';
+        bVal = b.containerNumber || '';
         break;
       case 'etaToUsPort':
         aVal = a.etaToUsPort ? new Date(a.etaToUsPort).getTime() : 0;
@@ -304,6 +308,16 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, loadError, on
                     </button>
                   </TableHead>
                   <TableHead className="whitespace-nowrap">
+                    <button onClick={() => handleSort('containerNumber')} className="flex items-center gap-1 hover:text-primary">
+                      Container
+                      {sortColumn === 'containerNumber' ? (
+                        sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                      ) : (
+                        <ArrowUpDown className="h-3 w-3 opacity-40" />
+                      )}
+                    </button>
+                  </TableHead>
+                  <TableHead className="whitespace-nowrap">
                     <button onClick={() => handleSort('etaToUsPort')} className="flex items-center gap-1 hover:text-primary">
                       ETA to US Port
                       {sortColumn === 'etaToUsPort' ? (
@@ -404,6 +418,8 @@ export function GDCInventoryTable({ orderSeries, data, uniqueSkus, loadError, on
                       {/* Supplier column - shows actual supplier name from PO, not allocation info */}
                       <span className="text-sm">{item.supplierName || '-'}</span>
                     </TableCell>
+                    {/* Container on the load's shipment (CMA CGM tracking) */}
+                    <TableCell className="whitespace-nowrap font-mono text-sm">{item.containerNumber || '-'}</TableCell>
                     <TableCell>{formatDate(item.etaToUsPort)}</TableCell>
                     <TableCell>{formatDate(item.confirmedEta)}</TableCell>
                     <TableCell>{formatDate(item.expectedDelivery)}</TableCell>

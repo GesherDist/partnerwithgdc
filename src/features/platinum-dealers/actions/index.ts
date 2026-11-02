@@ -6,6 +6,11 @@
 
 'use server';
 
+import { revalidatePath } from 'next/cache';
+import { db } from '@/shared/lib/supabase/database';
+import { getCurrentUser } from '@/shared/lib/auth';
+import { auditService } from '@/shared/lib/audit';
+import { logDealerInventoryMovement } from '@/features/inventory/services/inventory-movement.service';
 import {
   createDealer,
   getAllDealers,
@@ -477,10 +482,30 @@ export async function updateDealerInventoryAction(params: {
   onHand: number;
 }): Promise<ActionResult<PlatinumDealerInventory>> {
   try {
-    if (params.onHand < 0) {
+    const user = await getCurrentUser();
+    if (!user) {
+      return { success: false, error: 'Authentication required' };
+    }
+
+    if (!Number.isInteger(params.onHand) || params.onHand < 0) {
       return {
         success: false,
-        error: 'On-hand quantity cannot be negative',
+        error: 'On-hand quantity must be a whole number of 0 or more',
+      };
+    }
+
+    // Current record (null when this call creates it)
+    const { data: before, error: beforeError } = await getDealerInventory({
+      dealerLocationId: params.dealerLocationId,
+      productId: params.productId,
+    });
+    if (beforeError) {
+      return { success: false, error: 'Failed to read current dealer inventory' };
+    }
+    if (before && params.onHand < before.allocated) {
+      return {
+        success: false,
+        error: `On-hand cannot be lower than allocated quantity (${before.allocated})`,
       };
     }
 
@@ -497,6 +522,86 @@ export async function updateDealerInventoryAction(params: {
         error: error?.message || 'Failed to update inventory',
       };
     }
+
+    const isCreate = !before;
+    const oldOnHand = before?.onHand ?? 0;
+    const delta = data.onHand - oldOnHand;
+
+    // Names for readable log entries (fall back to ids)
+    const [dealerRes, locationRes, productRes] = await Promise.all([
+      getDealerById(params.dealerId),
+      getDealerLocationById(params.dealerLocationId),
+      db.from('products').select('sku, name').eq('id', params.productId).single(),
+    ]);
+    const dealerName = dealerRes.data?.dealerName ?? params.dealerId;
+    const locationName = locationRes.data?.locationName ?? params.dealerLocationId;
+    const productSku = productRes.data?.sku ?? params.productId;
+    const where = `${dealerName} - ${locationName}`;
+
+    // Movement log (only when the quantity actually changed)
+    if (delta !== 0) {
+      const movement = await logDealerInventoryMovement({
+        productId: params.productId,
+        dealerLocationId: params.dealerLocationId,
+        movementType: 'adjust',
+        quantity: delta,
+        referenceType: 'adjustment',
+        referenceId: data.id,
+        reason: isCreate ? 'opening_stock' : 'manual_adjustment',
+        notes: isCreate
+          ? `Opening stock: ${data.onHand} units added at ${where}`
+          : `Manual adjustment at ${where}: ${oldOnHand} -> ${data.onHand} (${delta > 0 ? '+' : ''}${delta})`,
+        createdBy: user.id,
+      });
+      if (!movement.success) {
+        console.error('[updateDealerInventoryAction] Dealer movement log failed:', movement.error);
+      }
+    }
+
+    // Audit log (auditService never throws on failure)
+    const auditContext = {
+      userId: user.id,
+      userEmail: user.email,
+      userName: `${user.firstName} ${user.lastName}`.trim(),
+    };
+    const auditData = {
+      id: data.id,
+      sourceType: 'platinum_dealer',
+      dealerId: params.dealerId,
+      dealerName: dealerRes.data?.dealerName ?? null,
+      dealerLocationId: params.dealerLocationId,
+      dealerLocationName: locationRes.data?.locationName ?? null,
+      productId: params.productId,
+      productSku: productRes.data?.sku ?? null,
+      productName: productRes.data?.name ?? null,
+      onHand: data.onHand,
+      allocated: data.allocated,
+      origin: 'platinum_dealers',
+    };
+
+    if (isCreate) {
+      await auditService.logCreate(
+        'inventory',
+        'PlatinumDealerInventory',
+        data.id,
+        auditData,
+        auditContext,
+        `Added dealer inventory: ${productSku} at ${where} (On Hand ${data.onHand})`
+      );
+    } else if (delta !== 0) {
+      await auditService.logUpdate(
+        'inventory',
+        'PlatinumDealerInventory',
+        data.id,
+        { onHand: oldOnHand, allocated: before.allocated },
+        { ...auditData, adjustment: delta },
+        auditContext,
+        `Adjusted dealer inventory: ${productSku} at ${where} (On Hand ${oldOnHand} -> ${data.onHand})`
+      );
+    }
+
+    revalidatePath('/platinum-dealers');
+    revalidatePath('/master-inventory');
 
     return {
       success: true,

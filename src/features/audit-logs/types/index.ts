@@ -119,6 +119,7 @@ export const AUDIT_MODULE_OPTIONS = [
   { value: 'customers', label: 'Customers' },
   { value: 'products', label: 'Products' },
   { value: 'sales_orders', label: 'Sales Orders' },
+  { value: 'inventory', label: 'Inventory' },
   { value: 'quotes', label: 'Quotes' },
   { value: 'integrations', label: 'Integrations' },
   { value: 'auth', label: 'Authentication' },

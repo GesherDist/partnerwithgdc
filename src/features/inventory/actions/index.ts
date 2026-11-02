@@ -9,6 +9,7 @@
 import { revalidatePath } from 'next/cache';
 import { inventoryService } from '../services/inventory.service';
 import { createClient } from '@/shared/lib/supabase/server';
+import { getCurrentUser } from '@/shared/lib/auth';
 import { getPipelineQuantities } from '../services/pipeline-quantities';
 import type {
   InventoryListParams,
@@ -78,8 +79,16 @@ export async function getInventoryByProductIds(productIds: string[]) {
 // ============================================
 
 export async function createInventory(data: CreateInventoryDTO) {
-  const userId = await getCurrentUserId();
-  const result = await inventoryService.create(data, userId);
+  const user = await getCurrentUser();
+  if (!user) {
+    return { success: false as const, error: 'Authentication required' };
+  }
+
+  const result = await inventoryService.create(data, user.id, {
+    userEmail: user.email,
+    userName: `${user.firstName} ${user.lastName}`.trim(),
+    origin: 'inventory',
+  });
 
   if (result.success) {
     revalidatePath('/inventory');

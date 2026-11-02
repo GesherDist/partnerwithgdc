@@ -498,32 +498,8 @@ export async function updateProductionStatus(
     }
   }
 
-  // 3. Update Sales Order status when production status is "shipped"
-  if (data.productionStatus === 'shipped') {
-    // Get shipment to find sales_order_id
-    const { data: shipment } = await db
-      .from('shipments')
-      .select('sales_order_id')
-      .eq('purchase_order_id', poId)
-      .single();
-
-    if (shipment?.sales_order_id) {
-      const { error: soError } = await db
-        .from('sales_orders')
-        .update({
-          status: 'processing',
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', shipment.sales_order_id)
-        .in('status', ['confirmed']); // Only update if currently confirmed
-
-      if (soError) {
-        console.error('[updateProductionStatus] Error updating SO status:', soError);
-      } else {
-        console.log(`[updateProductionStatus] Updated SO ${shipment.sales_order_id} status to processing`);
-      }
-    }
-  }
+  // The customer's sales order is not changed here: the supplier's status only
+  // moves the supplier load (purchase order + shipment); Jenny sets the order status.
 
   return { success: true };
 }

@@ -188,13 +188,8 @@ export const shipmentService = {
         };
       }
 
-      if (!['pending', 'in_transit'].includes(existing.status)) {
-        return {
-          success: false,
-          error: `Cannot edit shipment in ${existing.status} status`,
-        };
-      }
-
+      // Details can be corrected in any status (delivered and failed too).
+      // The status itself only changes through updateStatus and its transitions.
       const validation = updateShipmentSchema.safeParse(input);
       if (!validation.success) {
         return {

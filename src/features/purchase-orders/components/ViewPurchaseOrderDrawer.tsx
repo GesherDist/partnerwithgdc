@@ -187,7 +187,8 @@ export function ViewPurchaseOrderDrawer({
   };
 
   // Can edit only for draft and sent POs
-  const canInlineEdit = po && ['draft', 'sent'].includes(po.status);
+  // Editable at any status except cancelled (receipts and allocations are checked on save)
+  const canInlineEdit = po && po.status !== 'cancelled';
 
   const handleSendToSupplier = () => {
     if (!po) {
@@ -566,7 +567,7 @@ export function ViewPurchaseOrderDrawer({
                   Receive into Warehouse
                 </Button>
               )}
-              {onEdit && ['draft', 'sent'].includes(po.status) && (
+              {onEdit && po.status !== 'cancelled' && (
                 <Button
                   variant="outline"
                   onClick={handleEditClick}

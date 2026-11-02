@@ -275,8 +275,8 @@ export function EditShipmentDrawer({
         return;
       }
 
-      // A status change is applied after the field edits, not before: the
-      // service refuses to edit a shipment once it is delivered or failed.
+      // A status change is applied after the field edits, so a delivered
+      // shipment's side effects (inventory receive) run on the saved details.
       if (pendingStatus) {
         const statusResult = await applyStatus(shipmentId, pendingStatus);
 
@@ -314,7 +314,7 @@ export function EditShipmentDrawer({
   };
 
   const nextStatuses = shipment ? allowedNextStatuses(shipment.status) : [];
-  const isLocked = shipment ? !['pending', 'in_transit'].includes(shipment.status) : false;
+  const isFinal = shipment ? ['delivered', 'failed'].includes(shipment.status) : false;
 
   return (
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && handleClose()}>
@@ -380,10 +380,10 @@ export function EditShipmentDrawer({
               )}
             </div>
 
-            {isLocked && (
+            {isFinal && (
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-                This shipment is {SHIPMENT_STATUS_LABELS[shipment.status].toLowerCase()}, so its
-                details are read-only. Only pending and in-transit shipments can be edited.
+                This shipment is {SHIPMENT_STATUS_LABELS[shipment.status].toLowerCase()}. You can
+                still correct its details; the status stays as it is.
               </div>
             )}
 
@@ -401,7 +401,7 @@ export function EditShipmentDrawer({
                     <FormItem>
                       <FormLabel>Shipment #</FormLabel>
                       <FormControl>
-                        <Input disabled={isLocked} {...field} />
+                        <Input {...field} />
                       </FormControl>
                       <p className="text-xs text-muted-foreground">
                         Freight update emails are matched by this number. It must be unique.
@@ -420,7 +420,7 @@ export function EditShipmentDrawer({
                       <FormItem>
                         <FormLabel>Shipment date</FormLabel>
                         <FormControl>
-                          <Input type="date" disabled={isLocked} {...field} />
+                          <Input type="date" {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -433,7 +433,7 @@ export function EditShipmentDrawer({
                       <FormItem>
                         <FormLabel>Estimated arrival</FormLabel>
                         <FormControl>
-                          <Input type="date" disabled={isLocked} {...field} />
+                          <Input type="date" {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -446,7 +446,7 @@ export function EditShipmentDrawer({
                       <FormItem>
                         <FormLabel>Actual arrival</FormLabel>
                         <FormControl>
-                          <Input type="date" disabled={isLocked} {...field} />
+                          <Input type="date" {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -459,7 +459,7 @@ export function EditShipmentDrawer({
                       <FormItem>
                         <FormLabel>Last Free Day (LFD)</FormLabel>
                         <FormControl>
-                          <Input type="date" disabled={isLocked} {...field} />
+                          <Input type="date" {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -478,7 +478,7 @@ export function EditShipmentDrawer({
                       <FormItem>
                         <FormLabel>Carrier</FormLabel>
                         <FormControl>
-                          <Input placeholder="e.g. CMA CGM" disabled={isLocked} {...field} />
+                          <Input placeholder="e.g. CMA CGM" {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -491,7 +491,7 @@ export function EditShipmentDrawer({
                       <FormItem>
                         <FormLabel>Service type</FormLabel>
                         <FormControl>
-                          <Input placeholder="e.g. Ocean FCL" disabled={isLocked} {...field} />
+                          <Input placeholder="e.g. Ocean FCL" {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -507,7 +507,7 @@ export function EditShipmentDrawer({
                       <FormItem>
                         <FormLabel>Tracking number</FormLabel>
                         <FormControl>
-                          <Input placeholder="Bill of Lading" disabled={isLocked} {...field} />
+                          <Input placeholder="Bill of Lading" {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -520,7 +520,7 @@ export function EditShipmentDrawer({
                       <FormItem>
                         <FormLabel>Container number</FormLabel>
                         <FormControl>
-                          <Input placeholder="e.g. CMAU1234567" disabled={isLocked} {...field} />
+                          <Input placeholder="e.g. CMAU1234567" {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -540,7 +540,7 @@ export function EditShipmentDrawer({
                       <FormItem>
                         <FormLabel>Recipient</FormLabel>
                         <FormControl>
-                          <Input disabled={isLocked} {...field} />
+                          <Input {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -553,7 +553,7 @@ export function EditShipmentDrawer({
                       <FormItem>
                         <FormLabel>Street</FormLabel>
                         <FormControl>
-                          <Input disabled={isLocked} {...field} />
+                          <Input {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -567,7 +567,7 @@ export function EditShipmentDrawer({
                         <FormItem className="sm:col-span-2">
                           <FormLabel>City</FormLabel>
                           <FormControl>
-                            <Input disabled={isLocked} {...field} />
+                            <Input {...field} />
                           </FormControl>
                           <FormMessage />
                         </FormItem>
@@ -580,7 +580,7 @@ export function EditShipmentDrawer({
                         <FormItem>
                           <FormLabel>State</FormLabel>
                           <FormControl>
-                            <Input disabled={isLocked} {...field} />
+                            <Input {...field} />
                           </FormControl>
                           <FormMessage />
                         </FormItem>
@@ -593,7 +593,7 @@ export function EditShipmentDrawer({
                         <FormItem>
                           <FormLabel>ZIP</FormLabel>
                           <FormControl>
-                            <Input disabled={isLocked} {...field} />
+                            <Input {...field} />
                           </FormControl>
                           <FormMessage />
                         </FormItem>
@@ -607,7 +607,7 @@ export function EditShipmentDrawer({
                       <FormItem>
                         <FormLabel>Country</FormLabel>
                         <FormControl>
-                          <Input disabled={isLocked} {...field} />
+                          <Input {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -630,7 +630,7 @@ export function EditShipmentDrawer({
                             type="number"
                             step="0.01"
                             min="0"
-                            disabled={isLocked}
+                           
                             {...field}
                           />
                         </FormControl>
@@ -647,7 +647,7 @@ export function EditShipmentDrawer({
                         <Select
                           value={field.value}
                           onValueChange={field.onChange}
-                          disabled={isLocked}
+                         
                         >
                           <FormControl>
                             <SelectTrigger>
@@ -670,7 +670,7 @@ export function EditShipmentDrawer({
                       <FormItem>
                         <FormLabel>Packages</FormLabel>
                         <FormControl>
-                          <Input type="number" min="1" step="1" disabled={isLocked} {...field} />
+                          <Input type="number" min="1" step="1" {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -688,7 +688,7 @@ export function EditShipmentDrawer({
                     <FormItem>
                       <FormLabel>Notes</FormLabel>
                       <FormControl>
-                        <Textarea rows={3} disabled={isLocked} {...field} />
+                        <Textarea rows={3} {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -701,7 +701,7 @@ export function EditShipmentDrawer({
                     <FormItem>
                       <FormLabel>Delivery instructions</FormLabel>
                       <FormControl>
-                        <Textarea rows={3} disabled={isLocked} {...field} />
+                        <Textarea rows={3} {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -724,7 +724,7 @@ export function EditShipmentDrawer({
           <Button
             type="submit"
             form="edit-shipment-form"
-            disabled={isSubmitting || isLoading || isLocked || !shipment}
+            disabled={isSubmitting || isLoading || !shipment}
           >
             {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Save changes

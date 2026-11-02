@@ -5,7 +5,7 @@
  */
 
 import { inventoryRepository } from '../repositories/inventory.repository';
-import { auditService } from '@/shared/lib/audit';
+import { auditService, type AuditContext } from '@/shared/lib/audit';
 import type {
   Inventory,
   InventoryWithDetails,
@@ -164,9 +164,25 @@ export const inventoryService = {
    */
   async create(
     data: CreateInventoryDTO,
-    userId?: string
+    userId?: string,
+    auditContext?: Omit<AuditContext, 'userId'> & { origin?: string }
   ): Promise<ServiceResult<Inventory>> {
     try {
+      const onHandInput = data.onHand ?? 0;
+      const allocatedInput = data.allocated ?? 0;
+      const reorderPointInput = data.reorderPoint ?? 0;
+      const reorderQtyInput = data.reorderQty ?? 0;
+      if (
+        [onHandInput, allocatedInput, reorderPointInput, reorderQtyInput].some(
+          (n) => !Number.isInteger(n) || n < 0
+        )
+      ) {
+        return {
+          success: false,
+          error: 'Quantities must be whole numbers of 0 or more',
+        };
+      }
+
       // Check if inventory already exists for this product/location combo
       const existing = await inventoryRepository.findByProductAndLocation(
         data.productId,
@@ -192,17 +208,30 @@ export const inventoryService = {
 
       const inventory = await inventoryRepository.create(data, userId);
 
-      // Log audit event (fire and forget)
-      auditService.logCreate(
+      // Readable names for the audit entry (fall back to ids if lookup fails)
+      const details = await inventoryRepository.findById(inventory.id).catch(() => null);
+      const productLabel = details?.product?.sku ?? data.productId;
+      const locationLabel = details?.location?.name ?? data.locationId;
+      const { origin, ...context } = auditContext ?? {};
+
+      // Log audit event (awaited so it is written before the request ends;
+      // auditService never throws on failure)
+      await auditService.logCreate(
         'inventory',
         'Inventory',
         inventory.id,
-        inventoryToAuditData(inventory),
-        { userId },
-        `Created inventory record for product ${data.productId} at location ${data.locationId}`
-      ).catch((err) => {
-        console.error('Failed to log inventory create audit:', err);
-      });
+        {
+          ...inventoryToAuditData(inventory),
+          sourceType: 'warehouse',
+          productSku: details?.product?.sku ?? null,
+          productName: details?.product?.name ?? null,
+          locationCode: details?.location?.code ?? null,
+          locationName: details?.location?.name ?? null,
+          origin: origin ?? 'inventory',
+        },
+        { ...context, userId },
+        `Added inventory: ${productLabel} at ${locationLabel} (On Hand ${inventory.onHand}, Reorder Point ${inventory.reorderPoint}, Reorder Qty ${inventory.reorderQty})`
+      );
 
       return {
         success: true,
@@ -212,7 +241,7 @@ export const inventoryService = {
       console.error('InventoryService.create error:', error);
       return {
         success: false,
-        error: 'Failed to create inventory',
+        error: error instanceof Error ? error.message : 'Failed to create inventory',
       };
     }
   },

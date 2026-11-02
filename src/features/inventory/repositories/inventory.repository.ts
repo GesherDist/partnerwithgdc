@@ -259,10 +259,33 @@ class InventoryRepositoryImpl {
       .single();
 
     if (error) {
+      if (error.code === '23505') {
+        throw new Error('Inventory record already exists for this product and location');
+      }
       throw new Error(`Failed to create inventory: ${error.message}`);
     }
 
-    return this.mapToInventory(result as DbInventory);
+    const created = this.mapToInventory(result as DbInventory);
+
+    // Record the opening stock in the movement log so the audit trail
+    // explains where the first on-hand quantity came from.
+    if (created.onHand > 0) {
+      await this.logMovement({
+        productId: created.productId,
+        locationId: created.locationId,
+        movementType: 'adjust',
+        quantity: created.onHand,
+        onHandAfter: created.onHand,
+        allocatedAfter: created.allocated,
+        referenceType: 'adjustment',
+        referenceId: created.id,
+        reason: 'opening_stock',
+        notes: `Opening stock: ${created.onHand} units added when the inventory record was created`,
+        createdBy: userId,
+      });
+    }
+
+    return created;
   }
 
   /**
@@ -317,6 +340,47 @@ class InventoryRepositoryImpl {
     }
 
     return this.update(id, { onHand: newOnHand }, userId);
+  }
+
+  /**
+   * Add or remove on-hand stock by hand (Update Stock dialog) and log it as an
+   * 'adjust' movement with its reason. Never goes below the allocated quantity.
+   */
+  async changeOnHand(
+    id: string,
+    delta: number,
+    userId?: string,
+    details?: { reason?: string; notes?: string }
+  ): Promise<Inventory> {
+    const current = await this.findById(id);
+    if (!current) {
+      throw new Error('Inventory record not found');
+    }
+
+    const newOnHand = current.onHand + delta;
+    if (newOnHand < current.allocated) {
+      throw new Error(
+        `Cannot remove ${-delta} - only ${current.onHand - current.allocated} available (${current.allocated} allocated to orders)`
+      );
+    }
+
+    const result = await this.update(id, { onHand: newOnHand }, userId);
+
+    await this.logMovement({
+      productId: current.productId,
+      locationId: current.locationId,
+      movementType: 'adjust',
+      quantity: delta,
+      onHandAfter: result.onHand,
+      allocatedAfter: result.allocated,
+      referenceType: 'adjustment',
+      referenceId: id,
+      reason: details?.reason,
+      notes: details?.notes,
+      createdBy: userId,
+    });
+
+    return result;
   }
 
   /**
@@ -477,6 +541,79 @@ class InventoryRepositoryImpl {
     return result;
   }
 
+  /**
+   * Transfer on-hand stock of a product from one location to another.
+   * Only unallocated stock moves (on_hand - allocated at the source).
+   * Logs a transfer_out at the source and a transfer_in at the destination.
+   */
+  async transfer(
+    productId: string,
+    fromLocationId: string,
+    toLocationId: string,
+    quantity: number,
+    userId?: string,
+    reference?: { type: string; id: string; number: string }
+  ): Promise<void> {
+    if (quantity <= 0 || fromLocationId === toLocationId) {
+      return;
+    }
+
+    const source = await this.findByProductAndLocation(productId, fromLocationId);
+    const available = source ? source.onHand - source.allocated : 0;
+    if (!source || available < quantity) {
+      throw new Error(`Cannot transfer ${quantity} - only ${Math.max(0, available)} available`);
+    }
+
+    let target = await this.findByProductAndLocation(productId, toLocationId);
+    if (!target) {
+      target = await this.create({
+        productId,
+        locationId: toLocationId,
+        onHand: 0,
+        allocated: 0,
+        reorderPoint: 0,
+        reorderQty: 0,
+      }, userId);
+    }
+
+    const sourceAfter = await this.update(source.id, { onHand: source.onHand - quantity }, userId);
+    let targetAfter: Inventory;
+    try {
+      targetAfter = await this.update(target.id, { onHand: target.onHand + quantity }, userId);
+    } catch (error) {
+      // Put the stock back at the source so nothing is lost
+      await this.update(source.id, { onHand: source.onHand }, userId);
+      throw error;
+    }
+
+    await this.logMovement({
+      productId,
+      locationId: fromLocationId,
+      relatedLocationId: toLocationId,
+      movementType: 'transfer_out',
+      quantity: -quantity,
+      onHandAfter: sourceAfter.onHand,
+      allocatedAfter: sourceAfter.allocated,
+      referenceType: reference?.type,
+      referenceId: reference?.id,
+      referenceNumber: reference?.number,
+      createdBy: userId,
+    });
+    await this.logMovement({
+      productId,
+      locationId: toLocationId,
+      relatedLocationId: fromLocationId,
+      movementType: 'transfer_in',
+      quantity,
+      onHandAfter: targetAfter.onHand,
+      allocatedAfter: targetAfter.allocated,
+      referenceType: reference?.type,
+      referenceId: reference?.id,
+      referenceNumber: reference?.number,
+      createdBy: userId,
+    });
+  }
+
   // ==========================================
   // INVENTORY MOVEMENTS LOGGING
   // ==========================================
@@ -487,6 +624,7 @@ class InventoryRepositoryImpl {
   private async logMovement(data: {
     productId: string;
     locationId: string;
+    relatedLocationId?: string;
     movementType: 'receive' | 'allocate' | 'deallocate' | 'ship' | 'adjust' | 'transfer_out' | 'transfer_in';
     quantity: number;
     onHandAfter: number;
@@ -502,6 +640,7 @@ class InventoryRepositoryImpl {
       await db.from('inventory_movements').insert({
         product_id: data.productId,
         location_id: data.locationId,
+        related_location_id: data.relatedLocationId || null,
         movement_type: data.movementType,
         quantity: data.quantity,
         on_hand_after: data.onHandAfter,

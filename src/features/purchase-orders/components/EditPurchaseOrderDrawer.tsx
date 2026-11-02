@@ -5,7 +5,9 @@
  *
  * Modal dialog for editing an existing purchase order.
  * Features toggle for single supplier vs product-wise supplier assignment.
- * Only draft POs can be edited.
+ * Editable at any status except cancelled. After the supplier confirms, the
+ * server keeps tires already received or allocated (it refuses an edit that
+ * would lose them), and changes are not sent to the supplier.
  */
 
 import { useEffect, useState, useTransition, useMemo } from 'react';
@@ -65,6 +67,8 @@ export function EditPurchaseOrderDrawer({
   const [isPending, startTransition] = useTransition();
   const [suppliers, setSuppliers] = useState<SupplierSummary[]>([]);
   const [isLoadingSuppliers, setIsLoadingSuppliers] = useState(false);
+  const [warehouses, setWarehouses] = useState<Array<{ id: string; name: string }>>([]);
+  const [isLoadingWarehouses, setIsLoadingWarehouses] = useState(false);
   const [po, setPO] = useState<PurchaseOrderWithItems | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -113,6 +117,7 @@ export function EditPurchaseOrderDrawer({
     if (open && poId) {
       loadPO();
       loadSuppliers();
+      loadWarehouses();
     } else {
       setPO(null);
       setError(null);
@@ -136,9 +141,10 @@ export function EditPurchaseOrderDrawer({
     try {
       const result = await getPurchaseOrder(poId);
       if (result.success && result.data) {
-        // Check if PO can be edited (allow draft and sent, block after supplier confirms)
-        if (!['draft', 'sent'].includes(result.data.status)) {
-          setError(`Cannot edit PO in "${result.data.status}" status. Only draft and sent POs can be edited before supplier confirmation.`);
+        // Editable at any status except cancelled; the server keeps received and
+        // allocated tires (it refuses an edit that would lose them)
+        if (result.data.status === 'cancelled') {
+          setError('Cannot edit a cancelled PO.');
           setPO(null);
         } else {
           setPO(result.data);
@@ -207,6 +213,25 @@ export function EditPurchaseOrderDrawer({
       toast.error('Failed to load suppliers');
     } finally {
       setIsLoadingSuppliers(false);
+    }
+  };
+
+  const loadWarehouses = async () => {
+    setIsLoadingWarehouses(true);
+    try {
+      const { getAllLocationsAction } = await import('@/features/locations/actions');
+      const result = await getAllLocationsAction({ type: 'warehouse' });
+      if (result.success && result.data) {
+        setWarehouses(result.data.map((loc) => ({
+          id: loc.id,
+          name: `${loc.locationCode} - ${loc.name}`,
+        })));
+      }
+    } catch (error) {
+      console.error('Failed to load warehouses:', error);
+      toast.error('Failed to load warehouses');
+    } finally {
+      setIsLoadingWarehouses(false);
     }
   };
 
@@ -334,7 +359,8 @@ export function EditPurchaseOrderDrawer({
       }
 
       return {
-        id: item.id,
+        // New rows carry a temporary id; the server inserts them
+        id: item.id.startsWith('temp_') ? undefined : item.id,
         productId: item.productId,
         salesOrderItemId: item.salesOrderItemId,
         sku: item.sku,
@@ -388,6 +414,9 @@ export function EditPurchaseOrderDrawer({
 
         if (result.success) {
           toast.success(`Purchase Order ${poNumber} updated successfully`);
+          if ('warning' in result && result.warning) {
+            toast.warning(result.warning);
+          }
           await onSuccess?.();
           onClose();
         } else {
@@ -443,6 +472,15 @@ export function EditPurchaseOrderDrawer({
             ) : po ? (
               <Form {...form}>
                 <form id="edit-po-form" onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+                  {!['draft', 'sent'].includes(po.status) && (
+                    <Alert>
+                      <AlertDescription>
+                        This PO is <b>{po.status.replace(/_/g, ' ')}</b>. Changes are saved here only and are not
+                        sent to the supplier. Quantities cannot go below tires already received or allocated to
+                        customer orders.
+                      </AlertDescription>
+                    </Alert>
+                  )}
                   {/* Order Details - PO Date, Expected Delivery, Order Series */}
                   <div className="space-y-4">
                     <h3 className="text-sm font-medium">Order Details</h3>
@@ -455,23 +493,24 @@ export function EditPurchaseOrderDrawer({
                         This is an unallocated PO (no linked Sales Order). Select Order Series for GDC tracking.
                       </p>
                     )}
-                    <FormField
-                      control={form.control}
-                      name="poNumber"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>PO # *</FormLabel>
-                          <FormControl>
-                            <Input {...field} />
-                          </FormControl>
-                          <p className="text-xs text-muted-foreground">
-                            Must be unique. The shipment for this PO is numbered from it.
-                          </p>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <div className="grid grid-cols-2 gap-4">
+                    {/* Row 1: PO #, PO Date, Expected Delivery */}
+                    <div className="grid grid-cols-3 gap-4">
+                      <FormField
+                        control={form.control}
+                        name="poNumber"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>PO # *</FormLabel>
+                            <FormControl>
+                              <Input {...field} />
+                            </FormControl>
+                            <p className="text-xs text-muted-foreground">
+                              Must be unique; the shipment uses it.
+                            </p>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
                       <FormField
                         control={form.control}
                         name="poDate"
@@ -499,36 +538,90 @@ export function EditPurchaseOrderDrawer({
                         )}
                       />
                     </div>
-                    {/* Order Series - only show for unallocated POs */}
-                    {!po.salesOrderId && (
+                    {/* Row 2: Warehouse/Location, Order Series */}
+                    <div className="grid grid-cols-2 gap-4">
+                      {/* Warehouse / Location - where the tires are received */}
                       <FormField
                         control={form.control}
-                        name="orderSeries"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>Order Series *</FormLabel>
-                            <Select onValueChange={field.onChange} value={field.value}>
-                              <FormControl>
-                                <SelectTrigger>
-                                  <SelectValue placeholder="Select Order Series" />
-                                </SelectTrigger>
-                              </FormControl>
-                              <SelectContent>
-                                {ORDER_SERIES.map((series) => (
-                                  <SelectItem key={series.code} value={series.code}>
-                                    {series.name}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                            <p className="text-xs text-muted-foreground">
-                              Select which GDC cycle this order belongs to
-                            </p>
-                            <FormMessage />
-                          </FormItem>
-                        )}
+                        name="warehouseId"
+                        render={({ field }) => {
+                          const receivedQty = po.items.reduce((t, i) => t + Number(i.quantityReceived ?? 0), 0);
+                          // A warehouse no longer in the list (e.g. inactive) still shows by name
+                          const current = po.warehouse && !warehouses.some((w) => w.id === po.warehouse?.id)
+                            ? [{ id: po.warehouse.id, name: `${po.warehouse.code} - ${po.warehouse.name}` }]
+                            : [];
+                          return (
+                            <FormItem>
+                              <FormLabel>Warehouse/Location</FormLabel>
+                              <Select
+                                onValueChange={(value) => field.onChange(value === 'none' ? '' : value)}
+                                value={(field.value as string) || 'none'}
+                                disabled={isLoadingWarehouses}
+                              >
+                                <FormControl>
+                                  <SelectTrigger>
+                                    <SelectValue placeholder={isLoadingWarehouses ? 'Loading...' : 'Select warehouse'} />
+                                  </SelectTrigger>
+                                </FormControl>
+                                <SelectContent>
+                                  <SelectItem value="none">None (Unallocated)</SelectItem>
+                                  {[...current, ...warehouses].map((warehouse) => (
+                                    <SelectItem key={warehouse.id} value={warehouse.id}>
+                                      {warehouse.name}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              <p className="text-xs text-muted-foreground">
+                                {receivedQty > 0
+                                  ? `${receivedQty} tires are already received. Changing the warehouse moves their stock to the new one.`
+                                  : 'Inventory will be received at this location'}
+                              </p>
+                              <FormMessage />
+                            </FormItem>
+                          );
+                        }}
                       />
-                    )}
+                      {/* Order Series - only show for unallocated POs */}
+                      {!po.salesOrderId && (
+                        <FormField
+                          control={form.control}
+                          name="orderSeries"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>Order Series *</FormLabel>
+                              <Select onValueChange={field.onChange} value={field.value}>
+                                <FormControl>
+                                  <SelectTrigger>
+                                    <SelectValue placeholder="Select Order Series" />
+                                  </SelectTrigger>
+                                </FormControl>
+                                <SelectContent>
+                                  {ORDER_SERIES.map((series) => (
+                                    <SelectItem key={series.code} value={series.code}>
+                                      {series.name}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              <p className="text-xs text-muted-foreground">
+                                Select which GDC cycle this order belongs to
+                              </p>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      )}
+                    </div>
+                    {/* Customer - not stored on the PO */}
+                    <div className="space-y-1">
+                      <Label>Customer</Label>
+                      <p className="text-xs text-muted-foreground">
+                        {po.salesOrder
+                          ? `Comes from the linked Sales Order ${po.salesOrder.orderNumber}. Change the customer on that sales order.`
+                          : 'A PO has no customer of its own. Customers get these tires through allocations to their sales orders.'}
+                      </p>
+                    </div>
                   </div>
 
                   <Separator />

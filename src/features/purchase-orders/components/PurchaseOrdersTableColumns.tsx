@@ -268,7 +268,7 @@ export function PurchaseOrdersTableColumns(options: ColumnsOptions = {}): Column
                     Send to Supplier
                   </DropdownMenuItem>
                 )}
-                {onEdit && ['draft', 'sent'].includes(po.status) && (
+                {onEdit && po.status !== 'cancelled' && (
                   <DropdownMenuItem onClick={() => onEdit(po)}>
                     <Pencil className="mr-2 h-4 w-4" />
                     Edit

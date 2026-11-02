@@ -646,6 +646,26 @@ export async function getShipmentStatusHistory(
 // ============================================
 
 /**
+ * Purchase order (supplier load) of a shipment, or null
+ */
+export async function getShipmentPurchaseOrderId(shipmentId: string): Promise<string | null> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase
+    .from('shipments')
+    .select('purchase_order_id')
+    .eq('id', shipmentId)
+    .maybeSingle();
+
+  if (error) {
+    console.error('[Shipping] Error reading shipment purchase order:', error);
+    return null;
+  }
+
+  return data?.purchase_order_id ?? null;
+}
+
+/**
  * Link shipping email to shipment
  */
 export async function linkShippingEmailToShipment(
@@ -824,66 +844,34 @@ export async function updateShipmentLoadStatus(
 }
 
 // ============================================
-// SALES ORDER STATUS UPDATE
+// PURCHASE ORDER STATUS (supplier load tracking)
 // ============================================
 
 /**
- * Update sales order status based on shipping tracking status
+ * Purchase order status for a tracking status (CMA CGM sync and shipping emails).
+ * Tracking only moves the supplier load: the shipment and its purchase order.
+ * The customer's sales order status is never changed by tracking.
+ * Departed / in transit → in_transit; delivered → received.
  */
-export async function updateSalesOrderStatus(
-  salesOrderId: string,
-  newStatus: string
-): Promise<boolean> {
-  const supabase = createAdminClient();
-
-  // First get current status to check if update is needed
-  const { data: currentOrder, error: fetchError } = await supabase
-    .from('sales_orders')
-    .select('status')
-    .eq('id', salesOrderId)
-    .single();
-
-  if (fetchError || !currentOrder) {
-    console.error('[Shipping] Error fetching sales order:', fetchError);
-    return false;
+export function purchaseOrderStatusForTracking(trackingStatus: string): string | null {
+  switch (trackingStatus) {
+    case 'booked':
+    case 'container_picked':
+      return 'ready_to_ship';
+    case 'loaded_on_vessel':
+    case 'departed_origin':
+    case 'in_transit':
+    case 'arrived_port':
+    case 'customs_clearance':
+    case 'on_rail':
+    case 'at_ramp':
+    case 'out_for_delivery':
+      return 'in_transit';
+    case 'delivered':
+      return 'received';
+    default:
+      return null;
   }
-
-  // Don't update if already at target status or beyond
-  const statusOrder = ['draft', 'pending', 'confirmed', 'processing', 'shipped', 'delivered'];
-  const currentIndex = statusOrder.indexOf(currentOrder.status);
-  const newIndex = statusOrder.indexOf(newStatus);
-
-  // Only update if moving forward in the workflow
-  if (newIndex <= currentIndex) {
-    console.log(
-      `[Shipping] Skipping SO status update: current=${currentOrder.status}, proposed=${newStatus}`
-    );
-    return true; // Not an error, just no update needed
-  }
-
-  // Don't update cancelled orders
-  if (currentOrder.status === 'cancelled') {
-    console.log('[Shipping] Skipping SO status update: order is cancelled');
-    return true;
-  }
-
-  const { error } = await supabase
-    .from('sales_orders')
-    .update({
-      status: newStatus,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', salesOrderId);
-
-  if (error) {
-    console.error('[Shipping] Error updating sales order status:', error);
-    return false;
-  }
-
-  console.log(
-    `[Shipping] Updated SO ${salesOrderId} status: ${currentOrder.status} → ${newStatus}`
-  );
-  return true;
 }
 
 /**

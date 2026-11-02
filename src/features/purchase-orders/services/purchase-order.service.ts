@@ -46,6 +46,7 @@ interface ServiceResult<T> {
   data?: T;
   error?: string;
   errors?: Record<string, string[]>;
+  warning?: string;
 }
 
 interface PaginatedServiceResult<T> {
@@ -76,6 +77,220 @@ function isValidStatusTransition(currentStatus: POStatus, newStatus: POStatus): 
 // ============================================
 // SERVICE
 // ============================================
+
+// ============================================
+// WAREHOUSE CHANGE: MOVE RECEIVED STOCK
+// ============================================
+
+interface StockMove {
+  productId: string;
+  fromLocationId: string;
+  toLocationId: string;
+  quantity: number;
+}
+
+interface WarehouseMove {
+  toLocationId: string;
+  moves: StockMove[];
+  /** Received on the PO but with no receive movement (e.g. imported data) */
+  untrackedQty: number;
+}
+
+/**
+ * Where this PO's received tires are in stock now, from its inventory movements
+ * (receive + transfers referencing the PO), and what has to move to the new warehouse.
+ */
+async function planWarehouseMove(poId: string, toLocationId: string | null): Promise<WarehouseMove | { error: string }> {
+  if (!toLocationId) {
+    return { error: 'Tires of this PO are already received into stock, so it needs a warehouse. Select the warehouse they are in now.' };
+  }
+
+  const { data: location } = await db
+    .from('locations')
+    .select('id, location_code, location_type')
+    .eq('id', toLocationId)
+    .maybeSingle();
+  if (!location || location.location_type !== 'warehouse' || location.location_code === 'GDC-INV') {
+    return { error: 'Received tires can only move to a physical warehouse (not GDC Inventory).' };
+  }
+
+  const [{ data: movements, error }, { data: items }] = await Promise.all([
+    db
+      .from('inventory_movements')
+      .select('product_id, location_id, quantity')
+      .eq('reference_type', 'purchase_order')
+      .eq('reference_id', poId)
+      .in('movement_type', ['receive', 'transfer_in', 'transfer_out']),
+    db
+      .from('purchase_order_items')
+      .select('quantity_received')
+      .eq('purchase_order_id', poId),
+  ]);
+  if (error) {
+    return { error: `Could not load the stock received from this PO: ${error.message}` };
+  }
+
+  // Net stock from this PO per product and location
+  const net = new Map<string, { productId: string; locationId: string; quantity: number }>();
+  for (const m of movements || []) {
+    const key = `${m.product_id}|${m.location_id}`;
+    const row = net.get(key) || { productId: m.product_id, locationId: m.location_id, quantity: 0 };
+    row.quantity += Number(m.quantity) || 0;
+    net.set(key, row);
+  }
+
+  const inStock = [...net.values()].filter((r) => r.quantity > 0);
+  const trackedQty = inStock.reduce((t, r) => t + r.quantity, 0);
+  const receivedQty = (items || []).reduce((t, i) => t + Number(i.quantity_received ?? 0), 0);
+
+  const moves: StockMove[] = inStock
+    .filter((r) => r.locationId !== toLocationId)
+    .map((r) => ({ productId: r.productId, fromLocationId: r.locationId, toLocationId, quantity: r.quantity }));
+
+  // Every source must have the tires free (not allocated to orders) before any move
+  for (const move of moves) {
+    const { data: stock } = await db
+      .from('inventory')
+      .select('on_hand, allocated, products(sku), locations(name)')
+      .eq('product_id', move.productId)
+      .eq('location_id', move.fromLocationId)
+      .maybeSingle();
+    const available = stock ? Number(stock.on_hand) - Number(stock.allocated) : 0;
+    if (available < move.quantity) {
+      const sku = (stock?.products as { sku?: string } | null)?.sku || 'a product';
+      const from = (stock?.locations as { name?: string } | null)?.name || 'the current warehouse';
+      return {
+        error: `Cannot move ${move.quantity} x ${sku} from ${from}: only ${Math.max(0, available)} there are free (the rest are allocated to orders or already shipped). Nothing was changed.`,
+      };
+    }
+  }
+
+  return { toLocationId, moves, untrackedQty: Math.max(0, receivedQty - trackedQty) };
+}
+
+function reverseStockMoves(moves: StockMove[]): StockMove[] {
+  return moves.map((m) => ({ ...m, fromLocationId: m.toLocationId, toLocationId: m.fromLocationId }));
+}
+
+/** Transfer the stock; undoes the moves already done if one fails. Returns an error or null. */
+async function applyStockMoves(
+  moves: StockMove[],
+  reference: { type: string; id: string; number: string },
+  userId?: string
+): Promise<string | null> {
+  const { inventoryRepository } = await import('@/features/inventory/repositories/inventory.repository');
+  const done: StockMove[] = [];
+  for (const move of moves) {
+    try {
+      await inventoryRepository.transfer(move.productId, move.fromLocationId, move.toLocationId, move.quantity, userId, reference);
+      done.push(move);
+    } catch (error) {
+      for (const undo of reverseStockMoves(done).reverse()) {
+        await inventoryRepository
+          .transfer(undo.productId, undo.fromLocationId, undo.toLocationId, undo.quantity, userId, reference)
+          .catch((err) => console.error('[PO warehouse] Failed to undo stock transfer:', err));
+      }
+      return `Could not move the received stock: ${error instanceof Error ? error.message : 'unknown error'}. Nothing was changed.`;
+    }
+  }
+  return null;
+}
+
+/** Leftover container tires earmarked for the old warehouse now go to the new one */
+async function moveContainerAllocations(poId: string, fromLocationId: string | null, toLocationId: string): Promise<void> {
+  if (!fromLocationId) {
+    return;
+  }
+  const { error } = await db
+    .from('fulfillment_allocations')
+    .update({ location_id: toLocationId, updated_at: new Date().toISOString() })
+    .eq('purchase_order_id', poId)
+    .eq('location_id', fromLocationId)
+    .neq('status', 'cancelled');
+  if (error) {
+    console.error('[PO warehouse] Failed to move container allocations:', error);
+  }
+}
+
+/** A PO can be edited at any status except cancelled (Nov 2026: edit any time) */
+const isEditablePO = (status: string) => status !== 'cancelled';
+
+type ItemChange = NonNullable<UpdatePOInput['items']>[number];
+
+/**
+ * Checks that an item edit does not lose tires already received into stock or
+ * allocated to customer orders. Returns an error message, or null when OK.
+ */
+async function checkItemChanges(poId: string, items: ItemChange[]): Promise<string | null> {
+  const [{ data: rows, error: rowsError }, { data: allocations, error: allocError }] = await Promise.all([
+    db.from('purchase_order_items').select('id, sku, product_id, quantity_received').eq('purchase_order_id', poId),
+    db
+      .from('fulfillment_allocations')
+      .select('quantity, sales_order_items (product_id)')
+      .eq('purchase_order_id', poId)
+      .neq('status', 'cancelled'),
+  ]);
+  if (rowsError || allocError) {
+    return 'Could not check received and allocated quantities';
+  }
+
+  const incomingById = new Map(items.filter((i) => i.id).map((i) => [i.id as string, i]));
+  for (const row of rows ?? []) {
+    const received = Number(row.quantity_received ?? 0);
+    const next = incomingById.get(row.id);
+    if (!next && received > 0) {
+      return `${row.sku}: ${received} tires were already received, so this item cannot be removed`;
+    }
+    if (next && received > 0 && next.productId !== row.product_id) {
+      return `${row.sku}: ${received} tires were already received, so the product cannot be changed`;
+    }
+    if (next && next.quantityOrdered < received) {
+      return `${row.sku}: quantity cannot be lower than the ${received} tires already received`;
+    }
+  }
+
+  // Tires allocated to customer orders, per product, must stay on the PO
+  const allocatedByProduct = new Map<string, number>();
+  for (const a of (allocations ?? []) as unknown as Array<{ quantity: number; sales_order_items: { product_id: string | null } | null }>) {
+    const productId = a.sales_order_items?.product_id;
+    if (productId) {
+      allocatedByProduct.set(productId, (allocatedByProduct.get(productId) ?? 0) + Number(a.quantity ?? 0));
+    }
+  }
+  for (const [productId, allocated] of allocatedByProduct) {
+    const ordered = items.filter((i) => i.productId === productId).reduce((t, i) => t + i.quantityOrdered, 0);
+    if (ordered < allocated) {
+      const sku = (rows ?? []).find((r) => r.product_id === productId)?.sku ?? 'Product';
+      return `${sku}: ${allocated} tires are allocated to customer orders, so the quantity cannot be lower than ${allocated}`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Keeps the load shipment quantity in step with the PO after an item edit.
+ * Only when the PO has exactly one shipment and it carried the old PO total
+ * (a split or hand-set shipment quantity is left alone).
+ */
+async function syncShipmentQuantity(poId: string, oldTotal: number, newTotal: number): Promise<void> {
+  if (oldTotal === newTotal) {
+    return;
+  }
+  const { data: shipments } = await db
+    .from('shipments')
+    .select('id, total_qty')
+    .eq('purchase_order_id', poId)
+    .is('deleted_at', null);
+  if (shipments?.length === 1 && Number(shipments[0]!.total_qty ?? 0) === oldTotal) {
+    const { error } = await db
+      .from('shipments')
+      .update({ total_qty: newTotal, updated_at: new Date().toISOString() })
+      .eq('id', shipments[0]!.id);
+    if (error) {
+      console.error('[PurchaseOrderService] Shipment quantity sync failed:', error);
+    }
+  }
+}
 
 export const purchaseOrderService = {
   /**
@@ -246,7 +461,7 @@ export const purchaseOrderService = {
         };
       }
 
-      if (!['draft', 'sent'].includes(existing.status)) {
+      if (!isEditablePO(existing.status)) {
         return {
           success: false,
           error: `Cannot edit purchase order in ${existing.status} status`,
@@ -274,10 +489,60 @@ export const purchaseOrderService = {
         }
       }
 
+      // Items: never lose tires already received or allocated to customer orders
+      const newItems = validation.data.items;
+      if (newItems && newItems.length > 0) {
+        const problem = await checkItemChanges(id, newItems);
+        if (problem) {
+          return { success: false, error: problem };
+        }
+      }
+
+      // Warehouse: tires already received from this PO move with it to the new
+      // warehouse (stock transfer). Checked here, applied after the PO saves.
+      const newWarehouseId = validation.data.warehouseId;
+      let warehouseMove: WarehouseMove | null = null;
+      if (newWarehouseId !== undefined && (newWarehouseId || null) !== (existing.warehouseId || null)) {
+        const receivedQty = (existing.items ?? []).reduce((t, i) => t + Number(i.quantityReceived ?? 0), 0);
+        if (receivedQty > 0) {
+          const plan = await planWarehouseMove(id, newWarehouseId || null);
+          if ('error' in plan) {
+            return { success: false, error: plan.error };
+          }
+          warehouseMove = plan;
+        }
+      }
+
       // Capture old data for audit before update
       const oldAuditData = purchaseOrderToAuditData(existing);
+      const oldTotalQty = (existing.items ?? []).reduce((t, i) => t + Number(i.quantityOrdered ?? 0), 0);
 
-      const po = await purchaseOrderRepository.update(id, validation.data, userId);
+      // Move the received stock first; if the PO then fails to save, move it back
+      const reference = { type: 'purchase_order', id, number: existing.poNumber };
+      if (warehouseMove) {
+        const moveError = await applyStockMoves(warehouseMove.moves, reference, userId);
+        if (moveError) {
+          return { success: false, error: moveError };
+        }
+      }
+
+      let po: PurchaseOrder;
+      try {
+        po = await purchaseOrderRepository.update(id, validation.data, userId);
+      } catch (error) {
+        if (warehouseMove) {
+          await applyStockMoves(reverseStockMoves(warehouseMove.moves), reference, userId);
+        }
+        throw error;
+      }
+
+      if (warehouseMove) {
+        await moveContainerAllocations(id, existing.warehouseId || null, warehouseMove.toLocationId);
+      }
+
+      if (newItems && newItems.length > 0) {
+        await syncShipmentQuantity(id, oldTotalQty, newItems.reduce((t, i) => t + i.quantityOrdered, 0));
+      }
 
       // Log audit event (fire and forget)
       auditService.logUpdate(
@@ -295,6 +560,9 @@ export const purchaseOrderService = {
       return {
         success: true,
         data: po,
+        ...(warehouseMove?.untrackedQty
+          ? { warning: `${warehouseMove.untrackedQty} received tires have no receive record in inventory, so their stock was not moved. Adjust it on the Inventory page if needed.` }
+          : {}),
       };
     } catch (error) {
       console.error('PurchaseOrderService.update error:', error);
@@ -374,7 +642,7 @@ export const purchaseOrderService = {
         };
       }
 
-      if (!['draft', 'sent'].includes(existing.status)) {
+      if (!isEditablePO(existing.status)) {
         return {
           success: false,
           error: `Cannot edit purchase order in ${existing.status} status`,
@@ -427,7 +695,7 @@ export const purchaseOrderService = {
         };
       }
 
-      if (!['draft', 'sent'].includes(existing.status)) {
+      if (!isEditablePO(existing.status)) {
         return {
           success: false,
           error: `Cannot edit purchase order in ${existing.status} status`,

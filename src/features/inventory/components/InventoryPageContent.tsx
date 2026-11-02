@@ -24,8 +24,7 @@ import { Card, CardContent } from '@/shared/components/ui/card';
 import { InventoryTable } from './InventoryTable';
 import { LocationInventoryGrid } from './LocationInventoryGrid';
 import { ViewInventoryDrawer } from './ViewInventoryDrawer';
-import { AddInventoryDrawer } from './AddInventoryDrawer';
-import { AdjustInventoryDialog } from './AdjustInventoryDialog';
+import { AddMasterInventoryDialog } from '@/features/master-inventory/components/AddMasterInventoryDialog';
 import { useInventory } from '../hooks/useInventory';
 import { getInventoryStats, type InventoryStats } from '../actions';
 import type { InventoryListItem, InventoryListParams } from '../types';
@@ -253,7 +252,7 @@ export function InventoryPageContent() {
           </Button>
           <Button size="sm" onClick={() => setIsAddDrawerOpen(true)}>
             <Plus className="h-4 w-4 mr-2" />
-            Add Inventory
+            Update Stock
           </Button>
         </div>
       </div>
@@ -316,17 +315,18 @@ export function InventoryPageContent() {
         inventoryId={selectedInventoryId}
       />
 
-      {/* Add Drawer */}
-      <AddInventoryDrawer
+      {/* Update Stock: new stock from the header button, a row's stock from Update Stock */}
+      <AddMasterInventoryDialog
         open={isAddDrawerOpen}
+        defaultSource="warehouse"
         onClose={() => setIsAddDrawerOpen(false)}
         onSuccess={refetch}
       />
-
-      {/* Adjust Dialog */}
-      <AdjustInventoryDialog
-        open={isAdjustDialogOpen}
-        item={selectedItemForAdjust}
+      <AddMasterInventoryDialog
+        open={isAdjustDialogOpen && !!selectedItemForAdjust}
+        defaultSource="warehouse"
+        defaultProductId={selectedItemForAdjust?.productId}
+        defaultLocationId={selectedItemForAdjust?.locationId}
         onClose={handleCloseAdjustDialog}
         onSuccess={refetch}
       />

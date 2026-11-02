@@ -180,6 +180,80 @@ export interface PaginatedResult<T> {
 }
 
 // ============================================
+// ADD INVENTORY
+// ============================================
+
+/**
+ * Dropdown options for the Master Inventory "Add Inventory" dialog
+ */
+export interface MasterInventoryFormOptions {
+  products: { id: string; sku: string; name: string }[];
+  warehouses: { id: string; locationCode: string; name: string }[];
+  dealers: {
+    id: string;
+    dealerName: string;
+    locations: { id: string; locationName: string; locationCode: string | null }[];
+  }[];
+}
+
+/**
+ * Input for creating an inventory record from Master Inventory
+ */
+export type CreateMasterInventoryInput =
+  | {
+      sourceType: 'warehouse';
+      productId: string;
+      locationId: string;
+      onHand: number;
+      reorderPoint: number;
+      reorderQty: number;
+    }
+  | {
+      sourceType: 'platinum_dealer';
+      productId: string;
+      dealerId: string;
+      dealerLocationId: string;
+      onHand: number;
+    };
+
+// ============================================
+// UPDATE STOCK (warehouse)
+// ============================================
+
+export type StockChangeDirection = 'add' | 'remove';
+
+/** Why stock was added or removed by hand (stored as the movement reason) */
+export const STOCK_CHANGE_REASONS: { value: string; label: string; direction: StockChangeDirection | 'both' }[] = [
+  { value: 'received', label: 'Received (container / delivery)', direction: 'add' },
+  { value: 'returned', label: 'Returned by customer', direction: 'add' },
+  { value: 'physical_count', label: 'Physical count correction', direction: 'both' },
+  { value: 'damaged', label: 'Damaged / scrapped', direction: 'remove' },
+  { value: 'lost', label: 'Lost / missing', direction: 'remove' },
+  { value: 'other', label: 'Other', direction: 'both' },
+];
+
+/** Current stock of a product at a warehouse (exists = false when there is no row yet) */
+export interface WarehouseStockLevel {
+  exists: boolean;
+  onHand: number;
+  allocated: number;
+  available: number;
+  lowStockAlertAt: number;
+}
+
+export interface UpdateWarehouseStockInput {
+  productId: string;
+  locationId: string;
+  direction: StockChangeDirection;
+  /** 0 = only change the low stock alert */
+  quantity: number;
+  reason: string;
+  note?: string;
+  /** Low stock alert when on hand reaches this (0 = off) */
+  lowStockAlertAt: number;
+}
+
+// ============================================
 // COMPONENT PROPS
 // ============================================
 

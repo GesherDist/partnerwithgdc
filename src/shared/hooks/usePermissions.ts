@@ -32,17 +32,19 @@ export interface PermissionCheck {
  * Check if user has a specific permission
  */
 export function usePermission(permission: string): PermissionCheck {
-  const { user, appUser, isLoading, hasPermission } = useAuthStore();
+  const { appUser, isLoading, hasPermission } = useAuthStore();
 
   const role = appUser?.role?.name ?? null;
   const permissions = appUser?.permissions ?? [];
 
   const hasAccess = useMemo(() => {
-    if (!user) {
+    // appUser is the persisted, hydrated profile; the Supabase `user`
+    // object is only set on interactive login and is null after a refresh.
+    if (!appUser) {
       return false;
     }
     return hasPermission(permission);
-  }, [user, permission, hasPermission]);
+  }, [appUser, permission, hasPermission]);
 
   return {
     hasAccess,
@@ -56,17 +58,19 @@ export function usePermission(permission: string): PermissionCheck {
  * Check if user has ALL of the specified permissions
  */
 export function usePermissions(requiredPermissions: string[]): PermissionCheck {
-  const { user, appUser, isLoading, hasPermission } = useAuthStore();
+  const { appUser, isLoading, hasPermission } = useAuthStore();
 
   const role = appUser?.role?.name ?? null;
   const permissions = appUser?.permissions ?? [];
 
   const hasAccess = useMemo(() => {
-    if (!user) {
+    // appUser is the persisted, hydrated profile; the Supabase `user`
+    // object is only set on interactive login and is null after a refresh.
+    if (!appUser) {
       return false;
     }
     return requiredPermissions.every((p) => hasPermission(p));
-  }, [user, requiredPermissions, hasPermission]);
+  }, [appUser, requiredPermissions, hasPermission]);
 
   return {
     hasAccess,
@@ -80,17 +84,19 @@ export function usePermissions(requiredPermissions: string[]): PermissionCheck {
  * Check if user has ANY of the specified permissions
  */
 export function useAnyPermission(requiredPermissions: string[]): PermissionCheck {
-  const { user, appUser, isLoading, hasAnyPermission } = useAuthStore();
+  const { appUser, isLoading, hasAnyPermission } = useAuthStore();
 
   const role = appUser?.role?.name ?? null;
   const permissions = appUser?.permissions ?? [];
 
   const hasAccess = useMemo(() => {
-    if (!user) {
+    // appUser is the persisted, hydrated profile; the Supabase `user`
+    // object is only set on interactive login and is null after a refresh.
+    if (!appUser) {
       return false;
     }
     return hasAnyPermission(requiredPermissions);
-  }, [user, requiredPermissions, hasAnyPermission]);
+  }, [appUser, requiredPermissions, hasAnyPermission]);
 
   return {
     hasAccess,
@@ -104,17 +110,17 @@ export function useAnyPermission(requiredPermissions: string[]): PermissionCheck
  * Check if user has a specific role
  */
 export function useRole(requiredRole: string): PermissionCheck {
-  const { user, appUser, isLoading } = useAuthStore();
+  const { appUser, isLoading } = useAuthStore();
 
   const role = appUser?.role?.name ?? null;
   const permissions = appUser?.permissions ?? [];
 
   const hasAccess = useMemo(() => {
-    if (!user || !role) {
+    if (!appUser || !role) {
       return false;
     }
     return role.toLowerCase() === requiredRole.toLowerCase();
-  }, [user, role, requiredRole]);
+  }, [appUser, role, requiredRole]);
 
   return {
     hasAccess,
@@ -128,19 +134,19 @@ export function useRole(requiredRole: string): PermissionCheck {
  * Check if user has any of the specified roles
  */
 export function useAnyRole(requiredRoles: string[]): PermissionCheck {
-  const { user, appUser, isLoading } = useAuthStore();
+  const { appUser, isLoading } = useAuthStore();
 
   const role = appUser?.role?.name ?? null;
   const permissions = appUser?.permissions ?? [];
 
   const hasAccess = useMemo(() => {
-    if (!user || !role) {
+    if (!appUser || !role) {
       return false;
     }
     return requiredRoles.some(
       (r) => r.toLowerCase() === role.toLowerCase()
     );
-  }, [user, role, requiredRoles]);
+  }, [appUser, role, requiredRoles]);
 
   return {
     hasAccess,

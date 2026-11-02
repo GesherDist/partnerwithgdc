@@ -528,7 +528,13 @@ class PurchaseOrderRepositoryImpl {
   }
 
   /**
-   * Update items for a PO (delete and re-insert)
+   * Update items for a PO, keeping the existing rows (diff by item id):
+   * - an item with the id of an existing row updates that row; its
+   *   quantity_received and id stay, so receipts, shipment items and cost
+   *   components linked to it are kept
+   * - an item without a known id is inserted (quantity_received 0)
+   * - an existing row not in the list is deleted
+   * The service checks beforehand that received / allocated tires are not lost.
    */
   private async updateItems(
     poId: string,
@@ -539,25 +545,25 @@ class PurchaseOrderRepositoryImpl {
       return;
     }
 
-    // Delete existing items
-    const { error: deleteError } = await db
+    const { data: existingRows, error: loadError } = await db
       .from('purchase_order_items')
-      .delete()
+      .select('id')
       .eq('purchase_order_id', poId);
 
-    if (deleteError) {
-      throw new Error(`Failed to delete existing PO items: ${deleteError.message}`);
+    if (loadError) {
+      throw new Error(`Failed to load PO items: ${loadError.message}`);
     }
 
-    // Insert new items
-    const itemsToInsert = items.map((item, index) => ({
-      purchase_order_id: poId,
+    const existingIds = new Set((existingRows ?? []).map((row) => row.id as string));
+    const keptIds = new Set<string>();
+    const now = new Date().toISOString();
+
+    const fieldsOf = (item: NonNullable<UpdatePurchaseOrderDTO['items']>[number], index: number) => ({
       product_id: item.productId,
       sales_order_item_id: item.salesOrderItemId || null,
       sku: item.sku,
       description: item.description,
       quantity_ordered: item.quantityOrdered,
-      quantity_received: 0,
       unit_code: item.unitCode,
       unit_price: item.unitPrice,
       tax_rate: item.taxRate,
@@ -565,16 +571,45 @@ class PurchaseOrderRepositoryImpl {
       sort_order: index,
       supplier_id: item.supplierId || null,
       supplier_name: item.supplierName || null,
-      created_by: userId || null,
       updated_by: userId || null,
-    }));
+      updated_at: now,
+    });
 
-    const { error: insertError } = await db
-      .from('purchase_order_items')
-      .insert(itemsToInsert);
+    const toInsert: Record<string, unknown>[] = [];
+    for (const [index, item] of items.entries()) {
+      if (item.id && existingIds.has(item.id)) {
+        keptIds.add(item.id);
+        const { error } = await db
+          .from('purchase_order_items')
+          .update(fieldsOf(item, index))
+          .eq('id', item.id)
+          .eq('purchase_order_id', poId);
+        if (error) {
+          throw new Error(`Failed to update PO item: ${error.message}`);
+        }
+      } else {
+        toInsert.push({
+          ...fieldsOf(item, index),
+          purchase_order_id: poId,
+          quantity_received: 0,
+          created_by: userId || null,
+        });
+      }
+    }
 
-    if (insertError) {
-      throw new Error(`Failed to insert updated PO items: ${insertError.message}`);
+    if (toInsert.length > 0) {
+      const { error } = await db.from('purchase_order_items').insert(toInsert);
+      if (error) {
+        throw new Error(`Failed to insert PO items: ${error.message}`);
+      }
+    }
+
+    const removedIds = [...existingIds].filter((id) => !keptIds.has(id));
+    if (removedIds.length > 0) {
+      const { error } = await db.from('purchase_order_items').delete().in('id', removedIds).eq('purchase_order_id', poId);
+      if (error) {
+        throw new Error(`Failed to delete removed PO items: ${error.message}`);
+      }
     }
   }
 

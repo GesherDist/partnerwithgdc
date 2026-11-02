@@ -44,6 +44,7 @@ export interface LogDealerMovementParams {
   referenceId?: string;
   referenceNumber?: string;
   notes?: string;
+  reason?: string;
   createdBy?: string;
 }
 
@@ -248,11 +249,12 @@ export async function logDealerInventoryMovement(
       return { success: true };
     }
 
-    // Insert movement record (using dealer_location_id as location_id)
-    // This is a workaround since inventory_movements table expects location_id
+    // Dealer movements use dealer_location_id; location_id stays NULL
+    // (see migration 173_inventory_movements_dealer_location.sql)
     const { error } = await db.from('inventory_movements').insert({
       product_id: params.productId,
-      location_id: params.dealerLocationId, // Using dealer location as location
+      location_id: null,
+      dealer_location_id: params.dealerLocationId,
       movement_type: params.movementType,
       quantity: params.quantity,
       on_hand_after: snapshot.onHand,
@@ -261,24 +263,23 @@ export async function logDealerInventoryMovement(
       reference_id: params.referenceId || null,
       reference_number: params.referenceNumber || null,
       notes: params.notes || null,
+      reason: params.reason || null,
       created_by: params.createdBy || null,
     });
 
     if (error) {
+      // Logging must never fail the main operation; callers can inspect the result
       console.error('Failed to log dealer inventory movement:', error);
-      // ⚠️ TEMPORARY FIX: Don't fail allocation if movement log fails
-      // Root cause: dealer_location_id not in locations table (foreign key constraint)
-      // TODO: Add dealer_location_id column to inventory_movements table
-      console.warn('⚠️ Skipping movement log for dealer inventory (foreign key constraint issue)');
-      return { success: true }; // Return success anyway - allocation already created
+      return { success: false, error: error.message };
     }
 
     return { success: true };
   } catch (error) {
     console.error('Error logging dealer inventory movement:', error);
-    // Don't fail allocation on logging errors
-    console.warn('⚠️ Skipping movement log due to error');
-    return { success: true }; // Return success anyway
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
   }
 }
 
@@ -313,7 +314,10 @@ export async function logMovementBatch(
 export interface MovementRecord {
   id: string;
   productId: string;
-  locationId: string;
+  /** Warehouse location (null for dealer movements) */
+  locationId: string | null;
+  /** Platinum dealer location (null for warehouse movements) */
+  dealerLocationId: string | null;
   movementType: MovementType;
   quantity: number;
   onHandAfter: number;
@@ -358,7 +362,8 @@ export async function getMovementHistory(
       data?.map((m) => ({
         id: m.id,
         productId: m.product_id,
-        locationId: m.location_id,
+        locationId: m.location_id ?? null,
+        dealerLocationId: m.dealer_location_id ?? null,
         movementType: m.movement_type,
         quantity: m.quantity,
         onHandAfter: m.on_hand_after,
@@ -374,6 +379,53 @@ export async function getMovementHistory(
     );
   } catch (error) {
     console.error('Error getting movement history:', error);
+    return [];
+  }
+}
+
+/**
+ * Get movement history for a product at a platinum dealer location
+ */
+export async function getDealerMovementHistory(
+  productId: string,
+  dealerLocationId: string,
+  limit: number = 50
+): Promise<MovementRecord[]> {
+  try {
+    const { data, error } = await db
+      .from('inventory_movements')
+      .select('*')
+      .eq('product_id', productId)
+      .eq('dealer_location_id', dealerLocationId)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      console.error('Failed to get dealer movement history:', error);
+      return [];
+    }
+
+    return (
+      data?.map((m) => ({
+        id: m.id,
+        productId: m.product_id,
+        locationId: m.location_id ?? null,
+        dealerLocationId: m.dealer_location_id ?? null,
+        movementType: m.movement_type,
+        quantity: m.quantity,
+        onHandAfter: m.on_hand_after,
+        allocatedAfter: m.allocated_after,
+        referenceType: m.reference_type,
+        referenceId: m.reference_id,
+        referenceNumber: m.reference_number,
+        notes: m.notes,
+        reason: m.reason,
+        createdAt: m.created_at,
+        createdBy: m.created_by,
+      })) || []
+    );
+  } catch (error) {
+    console.error('Error getting dealer movement history:', error);
     return [];
   }
 }
@@ -401,7 +453,8 @@ export async function getMovementsByAllocation(
       data?.map((m) => ({
         id: m.id,
         productId: m.product_id,
-        locationId: m.location_id,
+        locationId: m.location_id ?? null,
+        dealerLocationId: m.dealer_location_id ?? null,
         movementType: m.movement_type,
         quantity: m.quantity,
         onHandAfter: m.on_hand_after,

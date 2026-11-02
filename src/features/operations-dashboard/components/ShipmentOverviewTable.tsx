@@ -38,6 +38,7 @@ import {
   SelectValue,
 } from '@/shared/components/ui/select';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { inTransitNext7DaysLoads, normalizeLoadStatus, SETTLED_LOAD_STATUSES } from '../lib/in-transit';
 import type { ImmediateAttentionItem, GDCInventoryData } from '../types';
 import { StatusBadge } from '../lib/status-badge';
 
@@ -108,49 +109,8 @@ export function ShipmentOverviewTable({
 
   // Calculate KPI stats
   const stats = useMemo(() => {
-    // "In transit / next 7 days" calculation:
-    // 1. Include every load whose Status is exactly "IN TRANSIT"
-    // 2. Also include loads NOT in (IN_TRANSIT, INVOICED, SOLD, AVAILABLE)
-    //    AND Outstanding Qty > 0 AND Customer ETA/Due <= Today + 7 days
-    // 3. Apply across GDC 0, GDC 1, GDC 2 (unique loads only)
-
-    const excludedStatuses = ['IN_TRANSIT', 'IN TRANSIT', 'INVOICED', 'SOLD', 'AVAILABLE'];
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const next7Days = new Date(today);
-    next7Days.setDate(next7Days.getDate() + 7);
-
-    const inTransitNext7DaysSet = new Set<string>();
-
-    // Check all GDC inventories (GDC 0, 1, 2)
-    gdcInventories.forEach(gdcData => {
-      // Only include GDC 0, GDC 1, GDC 2
-      if (!['GDC 0', 'GDC 1', 'GDC 2'].includes(gdcData.orderSeries)) return;
-
-      gdcData.items.forEach(item => {
-        if (!item.shipmentNumber) return;
-
-        const status = String(item.status || '').trim().toUpperCase();
-
-        // Condition 1: Status is exactly IN_TRANSIT
-        if (status === 'IN_TRANSIT' || status === 'IN TRANSIT') {
-          inTransitNext7DaysSet.add(item.shipmentNumber);
-          return;
-        }
-
-        // Condition 2: NOT in excluded statuses AND Outstanding Qty > 0 AND ETA within 7 days
-        if (!excludedStatuses.includes(status)) {
-          const outstandingQty = Number(item.outstandingQty) || 0;
-          const etaDate = item.expectedDelivery ? new Date(item.expectedDelivery) : null;
-
-          if (outstandingQty > 0 && etaDate && etaDate >= today && etaDate <= next7Days) {
-            inTransitNext7DaysSet.add(item.shipmentNumber);
-          }
-        }
-      });
-    });
-
-    const inTransitNext7Days = inTransitNext7DaysSet.size;
+    // "In transit / next 7 days": same rule as the KPI card and the master sheet (lib/in-transit)
+    const inTransitNext7Days = inTransitNext7DaysLoads(gdcInventories).size;
 
     // Open loads = unique SO numbers with OPEN status (from dropship + GDC inventory)
     // Use Set to avoid double-counting same SO appearing in both places
@@ -176,18 +136,17 @@ export function ShipmentOverviewTable({
 
     const openLoads = openSoNumbers.size;
 
-    // Outstanding Qty = SUM of MAX(Total Qty - Qty Delivered, 0) from GDC 0+1+2
-    // EXCLUDE: AVAILABLE, INVOICED, SOLD statuses
-    const excludedStatusesForOutstanding = ['AVAILABLE', 'INVOICED', 'SOLD'];
+    // Outstanding Qty = SUM of MAX(Total Qty - Qty Delivered, 0) from GDC 0+1+2 (master sheet)
+    // Loads only (rows of sales from stock have no load), and only loads still on their
+    // way to the customer: AVAILABLE, SOLD, INVOICED, NOT INVOICED, DELIVERED… are skipped
     const outstandingQty = gdcInventories.reduce((total, gdcData) => {
       // Only include GDC 0, GDC 1, GDC 2
       if (!['GDC 0', 'GDC 1', 'GDC 2'].includes(gdcData.orderSeries)) return total;
 
       return total + gdcData.items.reduce((sum, item) => {
-        const status = String(item.status || '').trim().toUpperCase();
-
-        // Skip AVAILABLE, INVOICED, SOLD
-        if (excludedStatusesForOutstanding.includes(status)) return sum;
+        if (!item.shipmentNumber || SETTLED_LOAD_STATUSES.includes(normalizeLoadStatus(item.status))) {
+          return sum;
+        }
 
         // Outstanding Qty = MAX(Total Qty - Qty Delivered, 0)
         const totalQty = Number(item.totalQty) || 0;
@@ -199,8 +158,8 @@ export function ShipmentOverviewTable({
     }, 0);
 
     // Invoice Amount = SUM(GDC 0 + GDC 1 + GDC 2 Invoice Amount)
-    // INCLUDE ONLY: AVAILABLE, OPEN, IN TRANSIT, INVOICED, SOLD
-    const allowedStatusesForInvoice = ['AVAILABLE', 'OPEN', 'IN_TRANSIT', 'IN TRANSIT', 'INVOICED', 'SOLD'];
+    // INCLUDE ONLY: AVAILABLE, OPEN, IN TRANSIT, INVOICED, NOT INVOICED, SOLD (master sheet)
+    const allowedStatusesForInvoice = ['AVAILABLE', 'OPEN', 'IN_TRANSIT', 'IN TRANSIT', 'INVOICED', 'NOT_INVOICED', 'NOT INVOICED', 'SOLD'];
 
     const invoiceAmount = gdcInventories.reduce((total, gdcData) => {
       // Only include GDC 0, GDC 1, GDC 2

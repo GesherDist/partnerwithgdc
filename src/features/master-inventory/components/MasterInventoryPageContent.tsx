@@ -7,8 +7,9 @@
  */
 
 import { useState, useCallback, useEffect } from 'react';
-import { Search, Filter, RefreshCw } from 'lucide-react';
+import { Search, Filter, RefreshCw, Plus } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/shared/components/ui/tabs';
+import { usePermission } from '@/shared/hooks/usePermissions';
 import { Input } from '@/shared/components/ui/input';
 import { Button } from '@/shared/components/ui/button';
 import { Badge } from '@/shared/components/ui/badge';
@@ -24,6 +25,7 @@ import { MasterInventoryStatsGrid } from './MasterInventoryStatsGrid';
 import { SourceBreakdownCards } from './SourceBreakdownCards';
 import { MasterInventoryTable } from './MasterInventoryTable';
 import { ViewMasterInventoryModal } from './ViewMasterInventoryModal';
+import { AddMasterInventoryDialog } from './AddMasterInventoryDialog';
 import { getMasterInventory, getMasterInventoryStats } from '../actions';
 import type {
   MasterInventoryItem,
@@ -60,6 +62,8 @@ export function MasterInventoryPageContent() {
   // Drawer state
   const [selectedItem, setSelectedItem] = useState<MasterInventoryItem | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+  const { hasAccess: canAddInventory } = usePermission('inventory.adjust');
 
   // Fetch data
   const fetchData = useCallback(async () => {
@@ -208,6 +212,14 @@ export function MasterInventoryPageContent() {
               <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
               Refresh
             </Button>
+
+            {/* Add Inventory (Operations / Super Admin) */}
+            {canAddInventory && (
+              <Button size="sm" onClick={() => setIsAddDialogOpen(true)}>
+                <Plus className="h-4 w-4 mr-2" />
+                {activeTab === 'platinum_dealer' ? 'Add Inventory' : 'Update Stock'}
+              </Button>
+            )}
           </div>
         </div>
 
@@ -245,6 +257,14 @@ export function MasterInventoryPageContent() {
         open={isDrawerOpen}
         onClose={handleCloseDrawer}
         item={selectedItem}
+      />
+
+      {/* Add Inventory Dialog */}
+      <AddMasterInventoryDialog
+        open={isAddDialogOpen && canAddInventory}
+        defaultSource={activeTab === 'platinum_dealer' ? 'platinum_dealer' : 'warehouse'}
+        onClose={() => setIsAddDialogOpen(false)}
+        onSuccess={fetchData}
       />
 
       {/* Summary Footer */}

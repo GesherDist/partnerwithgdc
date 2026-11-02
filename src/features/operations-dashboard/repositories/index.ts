@@ -8,6 +8,7 @@
 import { createAdminClient } from '@/shared/lib/supabase/admin';
 import { ORDER_SERIES } from '@/shared/lib/global-data';
 import { productCycleCostRepository } from '@/features/products/repositories/product-cycle-cost.repository';
+import { inTransitNext7DaysLoads, normalizeLoadStatus, SETTLED_LOAD_STATUSES } from '../lib/in-transit';
 import type {
   OperationsStats,
   SKUBreakdown,
@@ -93,7 +94,6 @@ export async function getOperationsStats(filters?: OperationsFilters): Promise<O
   const supabase = createAdminClient();
 
   const now = new Date();
-  const next7Days = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
 
   // Get ALL sales orders with items for KPI calculation
   let soQuery = supabase
@@ -207,23 +207,9 @@ export async function getOperationsStats(filters?: OperationsFilters): Promise<O
 
   // ============================================
   // 2. IN TRANSIT / NEXT 7 DAYS from GDC Inventories
-  // Calculate: Count of IN_TRANSIT status items with ETA in next 7 days
+  // Same rule as Jenny's master sheet and the Shipment Overview tab (lib/in-transit)
   // ============================================
-  gdcInventories.forEach(gdcData => {
-    const inTransitItems = gdcData.items.filter(item => {
-      // Check if status is IN_TRANSIT
-      if (item.status !== 'IN_TRANSIT' && item.status !== 'in_transit') return false;
-
-      // Check if ETA to US Port is in next 7 days
-      const etaDate = item.etaToUsPort;
-      if (!etaDate) return false;
-
-      const eta = new Date(etaDate);
-      return eta >= now && eta <= next7Days;
-    });
-
-    inTransitNext7Days += inTransitItems.length;
-  });
+  inTransitNext7Days = inTransitNext7DaysLoads(gdcInventories, now).size;
 
   // ============================================
   // 3. CUSTOMER COMMITTED from GDC Inventories
@@ -857,6 +843,7 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
         id,
         po_number,
         sales_order_id,
+        warehouse:warehouse_id(name),
         sales_orders(
           id,
           order_number,
@@ -911,9 +898,11 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
     // For shipments linked to PO (but not direct SO), try to get SO from PO
     const poLinkedSO = purchaseOrderData?.sales_orders ? toOne(purchaseOrderData.sales_orders) : null;
 
-    // Customer resolution order: Direct SO > PO → SO > ship_to_name (warehouse location) > Unknown
+    // Customer resolution order: Direct SO > PO → SO > the PO's warehouse (stock load,
+    // e.g. "Kansas Warehouse", same as the GDC tabs and the master sheet) > ship_to_name > Unknown
     const finalSO = salesOrderData || poLinkedSO;
-    const customerName = toOne(finalSO?.customers)?.name || s.ship_to_name || 'Unknown';
+    const poWarehouse = purchaseOrderData?.warehouse ? toOne(purchaseOrderData.warehouse as { name: string } | { name: string }[]) : null;
+    const customerName = toOne(finalSO?.customers)?.name || poWarehouse?.name || s.ship_to_name || 'Unknown';
 
     // PO Number resolution: SO customer PO > PO number (for unallocated) > N/A
     const customerPoNumber = finalSO?.customer_po_number || purchaseOrderData?.po_number || 'N/A';
@@ -964,17 +953,21 @@ export async function getImmediateAttention(filters?: OperationsFilters): Promis
     const isAutoDelayed = etaPort && etaPort < now && !isDelivered;
     const isDelayed = isManuallyDelayed || isAutoDelayed;
 
-    // CRITICAL CHANGE (Oct 6, 2026): Only include records with:
-    // 1. ETA in next 7 days (isThisWeek)
-    // 2. OR Overdue (customer due date passed)
-    // 3. OR Delayed (manual flag or auto-detected)
-    // 4. OR LFD Alert (approaching/critical)
-    // REMOVED: isActive condition (don't include just because status is open/in_transit)
+    // Same lists as Jenny's master sheet (Shipment Overview) and the
+    // "In transit / next 7 days" KPI (lib/in-transit):
+    // 1. "In transit": every IN TRANSIT load, whatever its ETA
+    // 2. "Immediate action": a load still on its way to the customer (not sold /
+    //    invoiced / available / delivered) whose customer due date is within
+    //    7 days or has passed
+    // 3. OR Delayed (manual flag or auto-detected), OR LFD Alert (approaching/critical)
     const hasLFDAlert = isLFDCritical || isLFDApproaching;
+    const loadStatus = normalizeLoadStatus(s.load_status);
+    const isInTransitLoad = loadStatus === 'IN_TRANSIT';
+    const isDueSoon = !SETTLED_LOAD_STATUSES.includes(loadStatus) && customerDue !== null && customerDue <= next7Days;
 
     const shouldInclude = filters?.status
       ? true  // Status filter already applied in query
-      : (isThisWeek || isOverdue || isDelayed || hasLFDAlert);
+      : (isInTransitLoad || isDueSoon || isDelayed || hasLFDAlert);
 
     // Exclude delivered shipments from "Immediate Attention" section
     // EXCEPT if user specifically selects "DELIVERED" status filter

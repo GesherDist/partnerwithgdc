@@ -139,6 +139,8 @@ export async function updatePurchaseOrder(id: string, data: UpdatePOInput) {
   if (result.success) {
     revalidatePath('/purchase-orders');
     revalidatePath(`/purchase-orders/${id}`);
+    // A warehouse change moves received stock
+    revalidatePath('/inventory');
   }
 
   return result;

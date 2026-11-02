@@ -130,7 +130,9 @@ export async function updateShipment(id: string, data: UpdateShipmentInput) {
   if (result.success) {
     // A new or changed container number is tracked right away instead of
     // waiting for the daily sync. Tracking problems never fail the save.
-    if (data.containerNumber && before?.data?.containerNumber !== data.containerNumber) {
+    // Not for a delivered shipment: its tracking is final.
+    if (data.containerNumber && before?.data?.containerNumber !== data.containerNumber
+      && before?.data?.status !== 'delivered') {
       try {
         const { syncShipmentContainer } = await import('@/features/shipping/services');
         await syncShipmentContainer(id);
