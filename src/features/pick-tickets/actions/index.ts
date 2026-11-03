@@ -655,7 +655,8 @@ export async function createPickTicketFromSalesOrder(
         .from('fulfillment_allocations')
         .select('sales_order_item_id, quantity')
         .eq('fulfillment_source', 'gdc_inventory')
-        .eq('location_id', finalWarehouseId);
+        .eq('location_id', finalWarehouseId)
+        .neq('status', 'cancelled');
 
       if (specificAllocationIds && specificAllocationIds.length > 0) {
         // Use ONLY the allocation IDs provided by frontend (no auto-fetch)

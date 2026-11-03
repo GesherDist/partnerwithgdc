@@ -510,12 +510,21 @@ export async function submitSalesOrder(id: string): Promise<ActionResult<SalesOr
  * Confirm a pending order (pending -> confirmed)
  * Also creates a Purchase Order automatically for direct orders
  * Note: Inventory allocation happens when Pick Ticket is created (not here)
+ *
+ * skipPickTicket: the warehouse order was already picked up, so warehouse
+ * allocations still 'pending' (no Pick Ticket) count as ready and are marked
+ * 'allocated' once the order is confirmed.
  */
-export async function confirmSalesOrder(id: string): Promise<ActionResult<SalesOrder>> {
+export async function confirmSalesOrder(
+  id: string,
+  options: { skipPickTicket?: boolean } = {}
+): Promise<ActionResult<SalesOrder>> {
   const auth = await authorize('orders.approve');
   if (!auth.ok) {
     return auth.result;
   }
+
+  const skippedWarehouseAllocationIds: string[] = [];
 
   // Check if all allocations are 'allocated' before confirming
   const { data: itemsWithAllocations } = await db
@@ -530,9 +539,10 @@ export async function confirmSalesOrder(id: string): Promise<ActionResult<SalesO
   if (itemsWithAllocations && itemsWithAllocations.length > 0) {
     // Check each item has allocations
     for (const item of itemsWithAllocations) {
-      const allocations = item.allocations as any[];
+      // Cancelled allocations released their stock and no longer count
+      const allocations = ((item.allocations as any[]) ?? []).filter((a: { status: string }) => a.status !== 'cancelled');
 
-      if (!allocations || allocations.length === 0) {
+      if (allocations.length === 0) {
         return {
           success: false,
           error: 'Cannot confirm order. Some items have no allocations. Please allocate fulfillment sources for all items.',
@@ -546,6 +556,14 @@ export async function confirmSalesOrder(id: string): Promise<ActionResult<SalesO
         // 2. It's manufacturer direct AND has purchase_order_id (PO already linked)
         const isAllocated = a.status === 'allocated';
         const hasPOLinked = a.fulfillment_source === 'direct' && a.purchase_order_id;
+        // 3. Pick Ticket skipped for a warehouse allocation still pending
+        const isSkippedWarehouse =
+          options.skipPickTicket === true && a.fulfillment_source === 'gdc_inventory' && a.status === 'pending';
+
+        if (isSkippedWarehouse) {
+          skippedWarehouseAllocationIds.push(a.id);
+          return false;
+        }
 
         // Debug logging
         if (!isAllocated && !hasPOLinked) {
@@ -584,6 +602,18 @@ export async function confirmSalesOrder(id: string): Promise<ActionResult<SalesO
   const result = await salesOrderService.confirm(id, auth.user.id);
 
   console.log('📊 [confirmSalesOrder] Confirm result:', result.success ? 'SUCCESS' : 'FAILED');
+
+  if (result.success && skippedWarehouseAllocationIds.length > 0) {
+    // Stock was reserved when the allocation was created; only the status changes
+    const { error: skipError } = await db
+      .from('fulfillment_allocations')
+      .update({ status: 'allocated', updated_at: new Date().toISOString() })
+      .in('id', skippedWarehouseAllocationIds)
+      .eq('status', 'pending');
+    if (skipError) {
+      console.error('❌ [confirmSalesOrder] Failed to mark skipped warehouse allocations:', skipError.message);
+    }
+  }
 
   if (result.success) {
     // Check if any allocations have direct fulfillment source (manufacturer)

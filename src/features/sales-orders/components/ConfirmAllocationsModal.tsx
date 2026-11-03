@@ -130,7 +130,10 @@ export function ConfirmAllocationsModal({
           const itemWithAllocations = item as any;
           if (itemWithAllocations.allocations && itemWithAllocations.allocations.length > 0) {
             // Add sales order item data to each allocation for display
-            const allocationsWithItem = itemWithAllocations.allocations.map((alloc: any) => ({
+            // (cancelled allocations released their stock and need no action)
+            const allocationsWithItem = itemWithAllocations.allocations
+              .filter((alloc: { status: string }) => alloc.status !== 'cancelled')
+              .map((alloc: any) => ({
               ...alloc,
               salesOrderItem: {
                 sku: item.sku,
@@ -464,8 +467,10 @@ export function ConfirmAllocationsModal({
 
       console.log('✅ [handleCreatePickTicket] Pick Ticket created:', ptResult.data);
 
-      // Update allocation status to 'allocated'
-      await updateAllocationStatus(allocation.id, 'allocated');
+      // Update status to 'allocated' for every allocation on this Pick Ticket
+      for (const allocId of groupAllocationIds || [allocation.id]) {
+        await updateAllocationStatus(allocId, 'allocated');
+      }
 
       return {
         success: true,
@@ -680,7 +685,7 @@ export function ConfirmAllocationsModal({
       // Only confirm if not already confirmed
       if (currentStatus === 'draft' || currentStatus === 'pending') {
         console.log('📞 [Modal] Calling confirmSalesOrder...');
-        const confirmResult = await confirmSalesOrder(salesOrderId);
+        const confirmResult = await confirmSalesOrder(salesOrderId, { skipPickTicket });
 
         console.log('📊 [Modal] confirmSalesOrder result:', confirmResult);
 

@@ -699,9 +699,19 @@ export async function updateAllocationStatus(
   status: 'pending' | 'allocated' | 'fulfilled' | 'cancelled'
 ): Promise<ActionResult<FulfillmentAllocation | null>> {
   try {
-    const { updateAllocation } = await import(
+    const { updateAllocation, getAllocationById } = await import(
       '@/features/sales-orders/repositories/fulfillment-allocations.repository'
     );
+
+    // A cancelled allocation already released its stock; reviving it here
+    // would mark it allocated without reserving any inventory
+    const { data: current } = await getAllocationById(allocationId);
+    if (current?.status === 'cancelled' && status !== 'cancelled') {
+      return {
+        success: false,
+        error: 'This allocation was cancelled. Add a new allocation instead.',
+      };
+    }
 
     const result = await updateAllocation({
       id: allocationId,
