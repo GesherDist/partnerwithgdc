@@ -618,7 +618,7 @@ async function commissionTableCsv(): Promise<string> {
       .eq('is_commission_only', true)
       .is('commission_invoice_id', null)
       .is('deleted_at', null)
-      .not('status', 'in', '(draft,cancelled)')
+      .eq('status', 'delivered')
       .gt('commission_amount', 0)
       .order('order_number', { ascending: true }),
   ]);
@@ -667,7 +667,7 @@ async function commissionTableCsv(): Promise<string> {
   return sectionsCsv([
     ...billedSections,
     {
-      title: 'Commission not billed yet: commission-only orders without a commission invoice',
+      title: 'Commission not billed yet: delivered commission-only orders without a commission invoice',
       columns: ['SO #', 'Customer', 'Customer PO', 'Order Series', 'Status', 'Tires', 'Rate', 'Commission'],
       rows: unbilledRows,
     },

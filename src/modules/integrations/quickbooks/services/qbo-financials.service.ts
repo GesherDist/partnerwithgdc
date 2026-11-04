@@ -293,9 +293,16 @@ export function opexByMonth(
 }
 
 /**
- * Revenue per month of a P&L summarized by month (accounts mapped to "revenue").
- * Columns are consecutive months from `fromMonth` (YYYY-MM); the last column is
- * the Total and is skipped.
+ * Commission income accounts (e.g. "Commission Revenue - Manufacturer").
+ * The Revenue Trend tracks tire sales only (Ankur, Nov 4 2026): commission
+ * is tracked separately and ends this year.
+ */
+const COMMISSION_ACCOUNT = /commission/i;
+
+/**
+ * Sales revenue per month of a P&L summarized by month (accounts mapped to
+ * "revenue", commission accounts excluded). Columns are consecutive months from
+ * `fromMonth` (YYYY-MM); the last column is the Total and is skipped.
  */
 export function revenueByMonth(
   pnl: Report,
@@ -310,7 +317,7 @@ export function revenueByMonth(
     revenue: 0,
   }));
   for (const row of accountRows(pnl.Rows?.Row)) {
-    if (mappingOf(row.id, row.name)?.category !== 'revenue') {
+    if (mappingOf(row.id, row.name)?.category !== 'revenue' || COMMISSION_ACCOUNT.test(row.name)) {
       continue;
     }
     for (let i = 0; i < monthCount; i++) {

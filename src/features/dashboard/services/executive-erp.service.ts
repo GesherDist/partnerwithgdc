@@ -31,7 +31,8 @@
  *
  * Commission (Ankur, Sep 8 email / Sep 25 call): reported separately from tire
  * revenue and gross margin — commission invoices to Galileo by invoice date,
- * plus commission on commission-only orders not billed yet.
+ * plus commission on delivered commission-only orders not billed yet
+ * (commission counts only after delivery: Ankur, Nov 4 2026).
  *
  * Money in the database is in cents; this service returns dollars.
  */
@@ -102,7 +103,7 @@ export interface ErpExecutiveFigures {
    * revenue and gross margin): commission invoices to Galileo by invoice date.
    */
   commission: Record<PeriodKey, number>;
-  /** Commission-only orders whose commission is not billed to Galileo yet */
+  /** Delivered commission-only orders whose commission is not billed to Galileo yet */
   commissionUnbilled: { amount: number; orders: number };
   supply: SupplyCycle[];
   inventory: {
@@ -339,7 +340,7 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
     // Commission-only: Galileo invoices the customer, so these tires are not Gesher
     // revenue backlog; their commission is tracked separately
     if (so.is_commission_only === true) {
-      if (!so.commission_invoice_id && Number(so.commission_amount ?? 0) > 0) {
+      if (so.status === 'delivered' && !so.commission_invoice_id && Number(so.commission_amount ?? 0) > 0) {
         commissionUnbilledAmount += Number(so.commission_amount);
         commissionUnbilledOrders += 1;
       }

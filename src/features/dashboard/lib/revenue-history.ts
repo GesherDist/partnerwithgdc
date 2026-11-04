@@ -3,8 +3,8 @@
  *
  * The ERP has sales data from September 2026. For months before that the
  * Revenue Trend shows the QuickBooks P&L revenue of the month (accounts mapped
- * to Revenue in Settings > Chart of Accounts), from the daily QuickBooks
- * snapshot. From this month on it shows ERP recognized tire revenue.
+ * to Revenue in Settings > Chart of Accounts, commission accounts excluded),
+ * from the daily QuickBooks snapshot. From this month on it shows ERP recognized tire revenue.
  *
  * Client-safe (no server imports).
  */

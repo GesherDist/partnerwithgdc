@@ -232,7 +232,7 @@ async function commissionCsv(withUnbilled: boolean, ytd: { from: string; to: str
           .eq('is_commission_only', true)
           .is('commission_invoice_id', null)
           .is('deleted_at', null)
-          .not('status', 'in', '(draft,cancelled)')
+          .eq('status', 'delivered')
           .gt('commission_amount', 0)
           .order('order_number', { ascending: true })
       : Promise.resolve({ data: [], error: null }),

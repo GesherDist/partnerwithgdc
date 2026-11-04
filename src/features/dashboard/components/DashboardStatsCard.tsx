@@ -65,7 +65,7 @@ const CALCULATION_FORMULAS: Record<string, { title: string; formula: string; not
   },
   'commission-expected-ytd': {
     title: 'Commission Expected (YTD) Calculation',
-    formula: 'Commission Expected = Commission Actual (YTD) + commission not billed yet\n\nNot billed yet: Σ sales_orders.commission_amount of commission-only orders (tires allocated Manufacturer Direct × rate per tire) that are not on a commission invoice (not draft/cancelled)',
+    formula: 'Commission Expected = Commission Actual (YTD) + commission not billed yet\n\nNot billed yet: Σ sales_orders.commission_amount of commission-only orders (tires allocated Manufacturer Direct × rate per tire) that are delivered and not on a commission invoice (not draft/cancelled)\n\nCommission counts only after delivery',
     notes: 'Same figures as the Executive dashboard (Profitability › Commission). Compared to the same period last year (billed commission).',
   },
   'commission-actual-ytd': {

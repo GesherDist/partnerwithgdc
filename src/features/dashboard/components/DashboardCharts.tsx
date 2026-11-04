@@ -121,6 +121,7 @@ Excludes: commission-only orders and service lines
 
 Before ${ERP_REVENUE_START_LABEL} (no ERP sales data yet):
 • QuickBooks Profit & Loss (Accrual), accounts mapped to Revenue in Settings > Chart of Accounts
+• Commission accounts excluded (tire sales only)
 
 Target: $220,000/month (hardcoded)
 Last Year: Same period previous year`}
@@ -142,7 +143,7 @@ Last Year: Same period previous year`}
         <CardDescription>
           Monthly revenue vs target
           {data.some((p) => p.source === 'quickbooks' || p.lastYearSource === 'quickbooks') &&
-            ` · Before ${ERP_REVENUE_START_LABEL}: QuickBooks P&L revenue`}
+            ` · Before ${ERP_REVENUE_START_LABEL}: QuickBooks P&L sales (commission excluded)`}
         </CardDescription>
       </CardHeader>
       <CardContent>

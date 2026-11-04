@@ -814,7 +814,8 @@ async function loadQboRevenueHistory(): Promise<Map<string, number>> {
 /**
  * Get commission revenue statistics (YTD)
  * Commission from Galileo: billed on commission invoices, plus commission on
- * commission-only orders not billed yet (same as the Executive tabs)
+ * delivered commission-only orders not billed yet (same as the Executive tabs).
+ * Commission counts only after delivery (Ankur, Nov 4 2026).
  */
 export async function getCommissionRevenue(): Promise<CommissionRevenueStats> {
   const supabase = createAdminClient();
@@ -822,7 +823,7 @@ export async function getCommissionRevenue(): Promise<CommissionRevenueStats> {
 
   // Same figures as the Executive tabs (Profitability › Commission):
   // Actual   = commission invoices to Galileo (not draft/cancelled) by invoice date
-  // Expected = Actual + commission on commission-only orders not billed yet
+  // Expected = Actual + commission on delivered commission-only orders not billed yet
   const [invoicesRes, unbilledRes] = await Promise.all([
     supabase
       .from('invoices')
@@ -838,7 +839,7 @@ export async function getCommissionRevenue(): Promise<CommissionRevenueStats> {
       .eq('is_commission_only', true)
       .is('commission_invoice_id', null)
       .is('deleted_at', null)
-      .not('status', 'in', '(draft,cancelled)')
+      .eq('status', 'delivered')
       .gt('commission_amount', 0),
   ]);
 
