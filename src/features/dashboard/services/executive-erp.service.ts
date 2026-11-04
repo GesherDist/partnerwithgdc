@@ -40,6 +40,7 @@
 import { db } from '@/shared/lib/supabase/database';
 import { productCycleCostRepository } from '@/features/products/repositories/product-cycle-cost.repository';
 import {
+  deliveryDate,
   recognitionDate,
   shipmentDeliveryDates,
   type RecognitionOrder,
@@ -340,7 +341,8 @@ export async function buildErpExecutiveFigures(asOf: string = businessToday()): 
     // Commission-only: Galileo invoices the customer, so these tires are not Gesher
     // revenue backlog; their commission is tracked separately
     if (so.is_commission_only === true) {
-      if (so.status === 'delivered' && !so.commission_invoice_id && Number(so.commission_amount ?? 0) > 0) {
+      const delivered = deliveryDate(so as unknown as RecognitionOrder, shipmentDates) !== null;
+      if (delivered && !so.commission_invoice_id && Number(so.commission_amount ?? 0) > 0) {
         commissionUnbilledAmount += Number(so.commission_amount);
         commissionUnbilledOrders += 1;
       }

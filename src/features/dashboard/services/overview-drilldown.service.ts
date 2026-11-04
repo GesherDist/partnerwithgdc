@@ -11,6 +11,7 @@
 import { db } from '@/shared/lib/supabase/database';
 import {
   loadRecognizedSales,
+  loadUnbilledDeliveredCommissionOrders,
   type RecognizedSaleLine,
   type RecognizedSales,
 } from './recognized-sales.service';
@@ -226,15 +227,8 @@ async function commissionCsv(withUnbilled: boolean, ytd: { from: string; to: str
       .lte('invoice_date', ytd.to)
       .order('invoice_date', { ascending: true }),
     withUnbilled
-      ? db
-          .from('sales_orders')
-          .select('order_number, customer_po_number, order_series, status, commission_rate, commission_amount, customers (name)')
-          .eq('is_commission_only', true)
-          .is('commission_invoice_id', null)
-          .is('deleted_at', null)
-          .eq('status', 'delivered')
-          .gt('commission_amount', 0)
-          .order('order_number', { ascending: true })
+      ? loadUnbilledDeliveredCommissionOrders('order_number, customer_po_number, order_series, commission_rate, commission_amount, customers (name)')
+          .then((data) => ({ data, error: null }), (error: Error) => ({ data: null, error }))
       : Promise.resolve({ data: [], error: null }),
   ]);
   if (invoicesRes.error) {

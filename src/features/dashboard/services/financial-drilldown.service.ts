@@ -28,7 +28,12 @@ import {
 } from '@/modules/integrations/quickbooks/services/qbo-financials.service';
 import { buildErpExecutiveFigures, type ErpExecutiveFigures } from './executive-erp.service';
 import { loadDailyHistory, type DailySnapshot } from './executive-history.service';
-import { loadRecognizedSales, type RecognizedSaleLine, type RecognizedSales } from './recognized-sales.service';
+import {
+  loadRecognizedSales,
+  loadUnbilledDeliveredCommissionOrders,
+  type RecognizedSaleLine,
+  type RecognizedSales,
+} from './recognized-sales.service';
 import { dollars, toCsv, type Cell } from './overview-drilldown.service';
 import { buildExecutiveModel, cashQuarterOf, type ExecutiveDashboardModel } from '../lib/executive-model';
 import { addDays, addYears, getPeriods, monthEnd, monthStart } from '../lib/periods';
@@ -612,15 +617,8 @@ async function commissionTableCsv(): Promise<string> {
       .gte('invoice_date', from)
       .lte('invoice_date', model.asOf)
       .order('invoice_date', { ascending: true }),
-    db
-      .from('sales_orders')
-      .select('order_number, customer_po_number, order_series, status, commission_rate, commission_amount, customers (name)')
-      .eq('is_commission_only', true)
-      .is('commission_invoice_id', null)
-      .is('deleted_at', null)
-      .eq('status', 'delivered')
-      .gt('commission_amount', 0)
-      .order('order_number', { ascending: true }),
+    loadUnbilledDeliveredCommissionOrders('order_number, customer_po_number, order_series, commission_rate, commission_amount, customers (name)')
+      .then((data) => ({ data, error: null }), (error: Error) => ({ data: null, error })),
   ]);
   const error = invoicesRes.error ?? unbilledRes.error;
   if (error) {

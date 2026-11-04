@@ -124,7 +124,19 @@ export function shipmentDeliveryDates(shipments: RecognitionShipment[]): Map<str
 
 /** Date the order's tires are recognized, or null while they are backlog */
 export function recognitionDate(order: RecognitionOrder, shipmentDates: Map<string, string>): string | null {
-  if (order.is_commission_only === true || !RECOGNIZABLE_SO_STATUSES.includes(String(order.status))) {
+  if (order.is_commission_only === true) {
+    return null;
+  }
+  return deliveryDate(order, shipmentDates);
+}
+
+/**
+ * Date a firm order was delivered, or null while it is not (same rule for
+ * commission-only orders, whose commission counts only after delivery:
+ * Ankur, Nov 4 2026).
+ */
+export function deliveryDate(order: RecognitionOrder, shipmentDates: Map<string, string>): string | null {
+  if (!RECOGNIZABLE_SO_STATUSES.includes(String(order.status))) {
     return null;
   }
   if (order.actual_delivery_date) {
@@ -135,6 +147,40 @@ export function recognitionDate(order: RecognitionOrder, shipmentDates: Map<stri
     return fromShipment;
   }
   return order.status === 'delivered' && order.order_date ? String(order.order_date).slice(0, 10) : null;
+}
+
+/**
+ * Delivered commission-only orders whose commission is not on a commission
+ * invoice yet. `columns` adds what the caller needs (not id, order_date,
+ * status, actual_delivery_date or is_commission_only, which are always loaded).
+ */
+export async function loadUnbilledDeliveredCommissionOrders<T>(columns: string): Promise<Array<RecognitionOrder & T>> {
+  const { data, error } = await db
+    .from('sales_orders')
+    .select(`id, order_date, status, actual_delivery_date, is_commission_only, ${columns}`)
+    .eq('is_commission_only', true)
+    .is('commission_invoice_id', null)
+    .is('deleted_at', null)
+    .not('status', 'in', '(draft,cancelled)')
+    .gt('commission_amount', 0)
+    .order('order_number', { ascending: true });
+  if (error) {
+    throw new Error(error.message);
+  }
+  const orders = (data ?? []) as unknown as Array<RecognitionOrder & T>;
+  if (orders.length === 0) {
+    return [];
+  }
+  const { data: shipments, error: shipmentError } = await db
+    .from('shipments')
+    .select('sales_order_id, load_status, actual_arrival')
+    .in('sales_order_id', orders.map((o) => o.id))
+    .is('deleted_at', null);
+  if (shipmentError) {
+    throw new Error(shipmentError.message);
+  }
+  const dates = shipmentDeliveryDates((shipments ?? []) as RecognitionShipment[]);
+  return orders.filter((o) => deliveryDate(o, dates) !== null);
 }
 
 /** Recognized tire and non-tire lines of all delivered firm orders, with their cost */

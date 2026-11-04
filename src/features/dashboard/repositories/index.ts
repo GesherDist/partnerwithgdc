@@ -8,7 +8,7 @@
  */
 
 import { createAdminClient } from '@/shared/lib/supabase/admin';
-import { loadRecognizedSales, summarizeRecognizedSales } from '../services/recognized-sales.service';
+import { loadRecognizedSales, loadUnbilledDeliveredCommissionOrders, summarizeRecognizedSales } from '../services/recognized-sales.service';
 import { getPeriods } from '../lib/periods';
 import { revenueSourceOf } from '../lib/revenue-history';
 import type { UnitsBySKUDataPoint, UnitsBySKUChartData, ProductLegendItem, ChannelPerformanceDataPoint, InventoryByLocation, DashboardStat, MarginDataPoint, RevenueDataPoint, DateRange, CommissionRevenueStats } from '../types';
@@ -824,7 +824,7 @@ export async function getCommissionRevenue(): Promise<CommissionRevenueStats> {
   // Same figures as the Executive tabs (Profitability › Commission):
   // Actual   = commission invoices to Galileo (not draft/cancelled) by invoice date
   // Expected = Actual + commission on delivered commission-only orders not billed yet
-  const [invoicesRes, unbilledRes] = await Promise.all([
+  const [invoicesRes, unbilledOrders] = await Promise.all([
     supabase
       .from('invoices')
       .select('invoice_date, invoice_items(line_total)')
@@ -833,21 +833,14 @@ export async function getCommissionRevenue(): Promise<CommissionRevenueStats> {
       .is('deleted_at', null)
       .gte('invoice_date', periods.py.from)
       .lte('invoice_date', periods.ytd.to),
-    supabase
-      .from('sales_orders')
-      .select('commission_amount')
-      .eq('is_commission_only', true)
-      .is('commission_invoice_id', null)
-      .is('deleted_at', null)
-      .eq('status', 'delivered')
-      .gt('commission_amount', 0),
+    loadUnbilledDeliveredCommissionOrders<{ commission_amount: number | null }>('commission_amount').catch((error) => {
+      console.error('Error fetching unbilled commission:', error);
+      return [];
+    }),
   ]);
 
   if (invoicesRes.error) {
     console.error('Error fetching commission invoices:', invoicesRes.error);
-  }
-  if (unbilledRes.error) {
-    console.error('Error fetching unbilled commission:', unbilledRes.error);
   }
 
   // Cents
@@ -861,7 +854,7 @@ export async function getCommissionRevenue(): Promise<CommissionRevenueStats> {
       );
   const actualCents = billedIn(periods.ytd.from, periods.ytd.to);
   const lastYearCents = billedIn(periods.py.from, periods.py.to);
-  const unbilledCents = (unbilledRes.data ?? []).reduce((sum, so) => sum + Number(so.commission_amount ?? 0), 0);
+  const unbilledCents = unbilledOrders.reduce((sum, so) => sum + Number(so.commission_amount ?? 0), 0);
 
   const actualYTD = actualCents / 100;
   const lastYearActualYTD = lastYearCents / 100;
