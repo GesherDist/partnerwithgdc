@@ -49,7 +49,8 @@ const ISSUE_KEYWORDS: Record<ShipmentIssueType, string[]> = {
   delayed: ['delayed', 'delay', 'postponed', 'behind schedule', 'rolled'],
   lfd_approaching: ['last free day', 'lfd', 'free time expiring', 'demurrage warning'],
   demurrage_risk: ['demurrage', 'storage charges', 'detention', 'per diem'],
-  address_change: ['address change', 'new address', 'delivery address', 'update address'],
+  // Not 'delivery address': every SEAIR email has a "Delivery Address:" field
+  address_change: ['address change', 'new address', 'update address', 'address updated', 'change of address'],
   additional_charges: ['additional charge', 'extra charge', 'surcharge', 'chassis fee'],
 };
 
@@ -104,7 +105,7 @@ ISSUE TYPES (if any issue detected):
 - delayed: Behind schedule
 - lfd_approaching: Last Free Day is within 3 days
 - demurrage_risk: Risk of storage charges
-- address_change: Delivery address changed
+- address_change: The email says the delivery address is new or has changed (a "Delivery Address:" field on its own is NOT an issue)
 - additional_charges: Extra fees needed
 
 DATE FORMAT: Return dates as YYYY-MM-DD (e.g., 2025-08-25)
@@ -218,14 +219,9 @@ Return ONLY valid JSON, no markdown code blocks or additional text.`;
       }
     }
 
-    // Check for issues via keywords if AI didn't detect
-    if (!extracted.hasIssue) {
-      const detectedIssue = detectIssueFromKeywords(fullText);
-      if (detectedIssue) {
-        extracted.hasIssue = true;
-        extracted.issueType = detectedIssue;
-      }
-    }
+    // Issues: the AI read the email in context, so its "no issue" stands.
+    // Keyword matching is only the fallback when the AI call fails: SEAIR
+    // emails carry labels like "Delivery Address:" that are not issues.
 
     return finish(extracted);
   } catch (error) {

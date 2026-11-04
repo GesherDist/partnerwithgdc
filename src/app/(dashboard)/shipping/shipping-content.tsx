@@ -17,6 +17,8 @@ import {
   RefreshCw,
   Package,
   Eye,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/shared/components/ui/card';
@@ -36,6 +38,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/shared/components/ui/dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/shared/components/ui/select';
 import { getShippingEmails, getShippingStats, getInboundEmailContent } from '@/features/shipping/actions';
 import type { ShippingEmailWithInbound } from '@/features/shipping/types';
 
@@ -95,6 +104,9 @@ function formatIssueType(issueType: string | null): string {
     .join(' ');
 }
 
+// Rows per page options (same as the other list pages)
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+
 // Email preview type
 interface EmailPreview {
   id: string;
@@ -127,16 +139,25 @@ export function ShippingContent() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [emailPreview, setEmailPreview] = useState<EmailPreview | null>(null);
 
+  // Pagination state
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [totalEmails, setTotalEmails] = useState(0);
+  const totalPages = Math.max(1, Math.ceil(totalEmails / pageSize));
+  const startRow = totalEmails === 0 ? 0 : (page - 1) * pageSize + 1;
+  const endRow = Math.min(page * pageSize, totalEmails);
+
   const fetchData = async () => {
     setLoading(true);
     try {
       const [emailsResult, statsResult] = await Promise.all([
-        getShippingEmails({ page: 1, limit: 50 }),
+        getShippingEmails({ page, limit: pageSize }),
         getShippingStats(),
       ]);
 
       if (emailsResult.success && emailsResult.data) {
         setEmails(emailsResult.data.data);
+        setTotalEmails(emailsResult.data.meta.total);
       }
 
       if (statsResult.success && statsResult.data) {
@@ -151,7 +172,8 @@ export function ShippingContent() {
 
   useEffect(() => {
     fetchData();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refetch only when the page changes
+  }, [page, pageSize]);
 
   const handleViewEmail = async (inboundEmailId: string) => {
     setPreviewLoading(true);
@@ -361,6 +383,63 @@ export function ShippingContent() {
                 ))}
               </TableBody>
             </Table>
+          )}
+
+          {/* Pagination (same layout as the Quotes list) */}
+          {!loading && totalEmails > 0 && (
+            <div className="flex flex-col gap-4 px-2 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-sm text-muted-foreground">
+                Showing {startRow} to {endRow} of {totalEmails} results
+              </div>
+              <div className="flex items-center gap-6">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-muted-foreground">Rows per page</span>
+                  <Select
+                    value={pageSize.toString()}
+                    onValueChange={(value) => {
+                      setPageSize(Number(value));
+                      setPage(1);
+                    }}
+                  >
+                    <SelectTrigger className="h-8 w-[70px]">
+                      <SelectValue placeholder={pageSize} />
+                    </SelectTrigger>
+                    <SelectContent side="top">
+                      {PAGE_SIZE_OPTIONS.map((size) => (
+                        <SelectItem key={size} value={size.toString()}>
+                          {size}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 gap-1"
+                    onClick={() => setPage((p) => p - 1)}
+                    disabled={page <= 1}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                    <span>Previous</span>
+                  </Button>
+                  <div className="text-sm font-medium">
+                    Page {page} of {totalPages}
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 gap-1"
+                    onClick={() => setPage((p) => p + 1)}
+                    disabled={page >= totalPages}
+                  >
+                    <span>Next</span>
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </div>
           )}
         </CardContent>
       </Card>

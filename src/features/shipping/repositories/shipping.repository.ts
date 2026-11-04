@@ -285,9 +285,43 @@ function normalizeSoNumber(soNumber: string): string[] {
 // SHIPMENT MATCHING
 // ============================================
 
+/** Shipment columns + its sales order, for matching results */
+const SHIPMENT_REFERENCE_SELECT = `
+  id,
+  shipment_number,
+  sales_order_id,
+  sales_orders (
+    order_number,
+    customer_po_number,
+    customers (
+      id,
+      name
+    )
+  )
+`;
+
+function toShipmentReference(row: Record<string, unknown>): ShipmentReference {
+  const salesOrderData = row.sales_orders as unknown as {
+    order_number: string;
+    customer_po_number: string | null;
+    customers: { id: string; name: string } | null;
+  } | null;
+  return {
+    id: String(row.id),
+    shipment_number: String(row.shipment_number),
+    sales_order_id: (row.sales_order_id as string | null) ?? null,
+    order_number: salesOrderData?.order_number,
+    customer_name: salesOrderData?.customers?.name || null,
+    customer_po_number: salesOrderData?.customer_po_number || null,
+  };
+}
+
 /**
- * Find shipment by SO number or container number
- * Priority: SO number FIRST (business identifier), then container number (can be shared)
+ * Find shipment by Shipment Order number or container number
+ * Priority: a purchase order number in the email (PO26200004 → that PO's
+ * shipment), the Shipment Order (SO2600034 = shipments.shipment_number), its
+ * purchase order (PO-2600034), a customer sales order (C-SO…), then the
+ * container number (can be shared)
  *
  * NOTE: SO/Shipment number matching handles multiple formats:
  * - SO2600012 (compact - Galileo shipment/load numbers - SOYYNNNNN)
@@ -295,134 +329,136 @@ function normalizeSoNumber(soNumber: string): string[] {
  * - C-SO-2026-00012 (old expanded customer format - backward compatibility)
  * - SO-2026-00012 (very old expanded format - backward compatibility)
  */
+/** PO2600034 / PO-2600034 → both spellings */
+function purchaseOrderFormats(reference: string): string[] {
+  const digits = reference.replace(/^PO-?/, '');
+  return [...new Set([reference, `PO-${digits}`, `PO${digits}`])];
+}
+
+/** Newest shipment of the first purchase order found among these numbers */
+async function findShipmentByPurchaseOrder(
+  supabase: ReturnType<typeof createAdminClient>,
+  poNumbers: string[],
+  reference: string
+): Promise<ShipmentReference | null> {
+  if (poNumbers.length === 0) {
+    return null;
+  }
+  const { data: po } = await supabase
+    .from('purchase_orders')
+    .select('id, po_number')
+    .in('po_number', poNumbers)
+    .is('deleted_at', null)
+    .limit(1)
+    .maybeSingle();
+  if (!po) {
+    return null;
+  }
+  const { data: shipment } = await supabase
+    .from('shipments')
+    .select(SHIPMENT_REFERENCE_SELECT)
+    .eq('purchase_order_id', po.id)
+    .is('deleted_at', null)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!shipment) {
+    return null;
+  }
+  console.log(`[Shipping] Matched by purchase order: ${reference} → ${po.po_number} → ${shipment.shipment_number}`);
+  return toShipmentReference(shipment);
+}
+
 export async function findShipmentByReference(
   containerNumber?: string | null,
   soNumber?: string | null
 ): Promise<ShipmentReference | null> {
   const supabase = createAdminClient();
+  const reference = soNumber?.trim().toUpperCase() || null;
+  // C-SO… is a customer sales order; PO… is our purchase order; SO… in a
+  // shipping email is the Shipment Order (load), the shipment created from
+  // PO-… (PO-2600034 → SO2600034)
+  const isCustomerOrder = !!reference && reference.startsWith('C-');
+  const isPurchaseOrder = !!reference && reference.startsWith('PO');
 
-  // PRIORITY 1: Try SO number first (more reliable business identifier)
-  if (soNumber) {
-    // Get all possible SO number formats
-    const soFormats = normalizeSoNumber(soNumber);
-    console.log(`[Shipping] Trying SO formats: ${soFormats.join(', ')}`);
+  // PRIORITY 1a: purchase order number → that PO's shipment
+  if (reference && isPurchaseOrder) {
+    const byPurchaseOrder = await findShipmentByPurchaseOrder(supabase, purchaseOrderFormats(reference), reference);
+    if (byPurchaseOrder) {
+      return byPurchaseOrder;
+    }
+  }
 
-    // First find the sales order with customer info (try all formats)
+  if (reference && !isCustomerOrder && !isPurchaseOrder) {
+    const shipmentFormats = normalizeSoNumber(reference).filter((f) => !f.startsWith('C-'));
+
+    // PRIORITY 1: Shipment Order number = shipments.shipment_number
+    const { data: byNumber } = await supabase
+      .from('shipments')
+      .select(SHIPMENT_REFERENCE_SELECT)
+      .in('shipment_number', shipmentFormats)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (byNumber) {
+      console.log(`[Shipping] Matched by shipment order: ${reference} → ${byNumber.shipment_number}`);
+      return toShipmentReference(byNumber);
+    }
+
+    // PRIORITY 2: the load's purchase order (the shipment got another number
+    // because SO… was taken)
+    const poNumbers = shipmentFormats.filter((f) => /^SO\d/.test(f)).map((f) => `PO-${f.slice(2)}`);
+    const byPurchaseOrder = await findShipmentByPurchaseOrder(supabase, poNumbers, reference);
+    if (byPurchaseOrder) {
+      return byPurchaseOrder;
+    }
+  }
+
+  // PRIORITY 3: a customer sales order (C-SO…) named in the email
+  if (reference && isCustomerOrder) {
     const { data: salesOrder } = await supabase
       .from('sales_orders')
-      .select(`
-        id,
-        order_number,
-        customer_po_number,
-        customers!inner (
-          id,
-          name
-        )
-      `)
-      .in('order_number', soFormats)
+      .select('id')
+      .in('order_number', [...normalizeSoNumber(reference), reference.replace(/^C-SO-?/, 'C-SO')])
       .is('deleted_at', null)
       .limit(1)
-      .single();
+      .maybeSingle();
 
     if (salesOrder) {
-      // Then find shipment linked to this sales order
-      const { data: shipment } = await supabase
+      const { data: bySalesOrder } = await supabase
         .from('shipments')
-        .select('id, shipment_number, sales_order_id')
+        .select(SHIPMENT_REFERENCE_SELECT)
         .eq('sales_order_id', salesOrder.id)
         .is('deleted_at', null)
-        .single();
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-      if (shipment) {
-        console.log(`[Shipping] Matched by SO number: ${soNumber} → ${shipment.shipment_number}`);
-        const customerData = salesOrder.customers as unknown as { id: string; name: string } | null;
-        return {
-          id: shipment.id,
-          shipment_number: shipment.shipment_number,
-          sales_order_id: shipment.sales_order_id,
-          order_number: salesOrder.order_number,
-          customer_name: customerData?.name || null,
-          customer_po_number: salesOrder.customer_po_number || null,
-        };
+      if (bySalesOrder) {
+        console.log(`[Shipping] Matched by sales order: ${reference} → ${bySalesOrder.shipment_number}`);
+        return toShipmentReference(bySalesOrder);
       }
     }
   }
 
-  // PRIORITY 2: Try container number (fallback if SO doesn't match)
+  // PRIORITY 4: container number, then the original container (transload)
   if (containerNumber) {
-    // Try current container_number first
-    const { data } = await supabase
-      .from('shipments')
-      .select(`
-        id,
-        shipment_number,
-        sales_order_id,
-        sales_orders (
-          order_number,
-          customer_po_number,
-          customers (
-            id,
-            name
-          )
-        )
-      `)
-      .eq('container_number', containerNumber)
-      .is('deleted_at', null)
-      .single();
+    for (const column of ['container_number', 'original_container_number']) {
+      const { data } = await supabase
+        .from('shipments')
+        .select(SHIPMENT_REFERENCE_SELECT)
+        .eq(column, containerNumber)
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-    if (data) {
-      console.log(`[Shipping] Matched by container number: ${containerNumber} → ${data.shipment_number}`);
-      const salesOrderData = data.sales_orders as unknown as {
-        order_number: string;
-        customer_po_number: string | null;
-        customers: { id: string; name: string } | null;
-      } | null;
-      return {
-        id: data.id,
-        shipment_number: data.shipment_number,
-        sales_order_id: data.sales_order_id,
-        order_number: salesOrderData?.order_number,
-        customer_name: salesOrderData?.customers?.name || null,
-        customer_po_number: salesOrderData?.customer_po_number || null,
-      };
-    }
-
-    // PRIORITY 3: Try original_container_number (for transload scenarios)
-    // The shipment may have been updated with new container, but email refers to original
-    const { data: transloadMatch } = await supabase
-      .from('shipments')
-      .select(`
-        id,
-        shipment_number,
-        sales_order_id,
-        sales_orders (
-          order_number,
-          customer_po_number,
-          customers (
-            id,
-            name
-          )
-        )
-      `)
-      .eq('original_container_number', containerNumber)
-      .is('deleted_at', null)
-      .single();
-
-    if (transloadMatch) {
-      console.log(`[Shipping] Matched by ORIGINAL container number: ${containerNumber} → ${transloadMatch.shipment_number}`);
-      const salesOrderData = transloadMatch.sales_orders as unknown as {
-        order_number: string;
-        customer_po_number: string | null;
-        customers: { id: string; name: string } | null;
-      } | null;
-      return {
-        id: transloadMatch.id,
-        shipment_number: transloadMatch.shipment_number,
-        sales_order_id: transloadMatch.sales_order_id,
-        order_number: salesOrderData?.order_number,
-        customer_name: salesOrderData?.customers?.name || null,
-        customer_po_number: salesOrderData?.customer_po_number || null,
-      };
+      if (data) {
+        console.log(`[Shipping] Matched by ${column}: ${containerNumber} → ${data.shipment_number}`);
+        return toShipmentReference(data);
+      }
     }
   }
 
