@@ -7,7 +7,8 @@
  * - Warehouse/GDC ("Update Stock"): pick product + warehouse, see the current
  *   stock, then add or remove tires with a reason and set the low stock alert.
  *   Works whether or not the product already has stock at that warehouse.
- * - Platinum Dealer: product + dealer + dealer location + on hand (new record)
+ * - Platinum Dealer: same Update Stock flow at a dealer location (current
+ *   stock, add or remove with a reason); creates the record when none exists.
  */
 
 import { useState, useEffect, useMemo } from 'react';
@@ -37,10 +38,11 @@ import { Textarea } from '@/shared/components/ui/textarea';
 import { RadioGroup, RadioGroupItem } from '@/shared/components/ui/radio-group';
 
 import {
-  createMasterInventory,
   getMasterInventoryFormOptions,
   getWarehouseStock,
   updateWarehouseStock,
+  getDealerStock,
+  updateDealerStock,
 } from '../actions';
 import {
   INVENTORY_SOURCE_LABELS,
@@ -103,7 +105,6 @@ export function AddMasterInventoryDialog({
   const [locationId, setLocationId] = useState('');
   const [dealerId, setDealerId] = useState('');
   const [dealerLocationId, setDealerLocationId] = useState('');
-  const [onHand, setOnHand] = useState('0');
 
   // Warehouse: Update Stock
   const [stock, setStock] = useState<WarehouseStockLevel | null>(null);
@@ -125,7 +126,6 @@ export function AddMasterInventoryDialog({
     setLocationId(defaultLocationId ?? '');
     setDealerId('');
     setDealerLocationId('');
-    setOnHand('0');
     setStock(null);
     setDirection('add');
     setQuantity('');
@@ -164,16 +164,19 @@ export function AddMasterInventoryDialog({
     };
   }, [open, defaultSource, defaultProductId, defaultLocationId]);
 
-  // Warehouse: load the current stock whenever product + warehouse are both picked
+  // Load the current stock whenever product + warehouse / dealer location are picked
+  const stockLocationId = sourceType === 'warehouse' ? locationId : dealerLocationId;
   useEffect(() => {
-    if (!open || sourceType !== 'warehouse' || !productId || !locationId) {
+    if (!open || !productId || !stockLocationId) {
       setStock(null);
       return;
     }
 
     let cancelled = false;
     setIsLoadingStock(true);
-    getWarehouseStock(productId, locationId)
+    (sourceType === 'warehouse'
+      ? getWarehouseStock(productId, stockLocationId)
+      : getDealerStock(productId, stockLocationId))
       .then((result) => {
         if (cancelled) {
           return;
@@ -204,7 +207,7 @@ export function AddMasterInventoryDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, sourceType, productId, locationId]);
+  }, [open, sourceType, productId, stockLocationId]);
 
   const reasonOptions = STOCK_CHANGE_REASONS.filter(
     (r) => r.direction === 'both' || r.direction === direction
@@ -249,33 +252,39 @@ export function AddMasterInventoryDialog({
       return;
     }
 
-    const onHandQty = parseQty(onHand);
-    if (onHandQty === null) {
-      toast.error('On Hand must be a whole number of 0 or more');
-      return;
-    }
-
     if (!dealerId || !dealerLocationId) {
       toast.error('Please select a dealer and dealer location');
       return;
     }
-    const input: Parameters<typeof createMasterInventory>[0] = {
-      sourceType: 'platinum_dealer',
-      productId,
-      dealerId,
-      dealerLocationId,
-      onHand: onHandQty,
-    };
+    const qty = parseQty(quantity || '0');
+    if (qty === null || qty === 0) {
+      toast.error('Enter a quantity to add or remove');
+      return;
+    }
+    if (direction === 'remove' && stock && qty > stock.available) {
+      toast.error(
+        `Only ${stock.available} available to remove (${stock.allocated} allocated to orders)`
+      );
+      return;
+    }
 
     setIsSubmitting(true);
     try {
-      const result = await createMasterInventory(input);
+      const result = await updateDealerStock({
+        productId,
+        dealerId,
+        dealerLocationId,
+        direction,
+        quantity: qty,
+        reason,
+        note,
+      });
       if (result.success) {
-        toast.success('Inventory record created successfully');
+        toast.success(`Stock updated. On hand is now ${result.data.onHand}`);
         onSuccess?.();
         onClose();
       } else {
-        toast.error(result.error || 'Failed to create inventory record');
+        toast.error(result.error || 'Failed to update stock');
       }
     } catch (error) {
       console.error('Create master inventory error:', error);
@@ -344,12 +353,12 @@ export function AddMasterInventoryDialog({
       <DialogContent className="flex max-h-[90vh] w-full max-w-xl flex-col gap-0 overflow-hidden p-0">
         <DialogHeader className="flex-shrink-0 border-b px-6 py-4">
           <DialogTitle className="text-xl font-semibold">
-            {isWarehouse ? 'Update Stock' : 'Add Inventory'}
+            Update Stock
           </DialogTitle>
           <DialogDescription>
             {isWarehouse
               ? 'Add or remove tires at a warehouse and set its low stock alert.'
-              : 'Add inventory for a product at a platinum dealer location.'}
+              : 'Add or remove tires at a platinum dealer location.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -488,17 +497,18 @@ export function AddMasterInventoryDialog({
 
               <Separator />
 
-              {/* Quantities */}
-              {isWarehouse ? (
-                <div className="space-y-4">
+              {/* Quantities (same Update Stock flow for warehouse and dealer) */}
+              <div className="space-y-4">
                   {/* Current stock (read-only) */}
                   <div className="bg-muted/30 rounded-lg border p-3">
                     <p className="text-muted-foreground mb-2 text-xs font-medium">
                       Current stock
                     </p>
-                    {!productId || !locationId ? (
+                    {!productId || !stockLocationId ? (
                       <p className="text-muted-foreground text-sm">
-                        Select a product and a warehouse.
+                        {isWarehouse
+                          ? 'Select a product and a warehouse.'
+                          : 'Select a product and a dealer location.'}
                       </p>
                     ) : isLoadingStock || !stock ? (
                       <Loader2 className="text-muted-foreground h-4 w-4 animate-spin" />
@@ -532,7 +542,9 @@ export function AddMasterInventoryDialog({
                         </div>
                         {!stock.exists && (
                           <p className="text-muted-foreground mt-2 text-xs">
-                            No stock of this product at this warehouse yet.
+                            {isWarehouse
+                              ? 'No stock of this product at this warehouse yet.'
+                              : 'No stock of this product at this dealer location yet.'}
                           </p>
                         )}
                       </>
@@ -614,6 +626,8 @@ export function AddMasterInventoryDialog({
                     </p>
                   )}
 
+                  {isWarehouse && (
+                  <>
                   <Separator />
 
                   <div className="grid grid-cols-2 items-end gap-4">
@@ -635,40 +649,9 @@ export function AddMasterInventoryDialog({
                       number or below.
                     </p>
                   </div>
+                  </>
+                  )}
                 </div>
-              ) : (
-                <div className="grid grid-cols-3 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="onHand">On Hand</Label>
-                    <Input
-                      id="onHand"
-                      type="number"
-                      min="0"
-                      step="1"
-                      value={onHand}
-                      onChange={(e) => setOnHand(e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Allocated</Label>
-                    <Input
-                      type="number"
-                      value="0"
-                      disabled
-                      className="bg-muted"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Available</Label>
-                    <Input
-                      type="number"
-                      value={parseQty(onHand) ?? 0}
-                      disabled
-                      className="bg-muted"
-                    />
-                  </div>
-                </div>
-              )}
             </div>
 
             <DialogFooter className="flex-shrink-0 border-t px-6 py-3">
@@ -682,14 +665,12 @@ export function AddMasterInventoryDialog({
               </Button>
               <Button
                 type="submit"
-                disabled={
-                  isSubmitting || (isWarehouse && (isLoadingStock || !stock))
-                }
+                disabled={isSubmitting || isLoadingStock || !stock}
               >
                 {isSubmitting && (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 )}
-                {isWarehouse ? 'Save' : 'Add Inventory'}
+                Save
               </Button>
             </DialogFooter>
           </form>

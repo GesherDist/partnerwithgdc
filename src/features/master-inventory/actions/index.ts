@@ -911,3 +911,143 @@ export async function updateWarehouseStock(
     };
   }
 }
+
+
+// ============================================
+// PLATINUM DEALER: UPDATE STOCK (same flow as warehouses)
+// ============================================
+
+/**
+ * Current stock of a product at a platinum dealer location, for the
+ * Update Stock dialog. exists = false (all zero) when there is no row yet.
+ */
+export async function getDealerStock(
+  productId: string,
+  dealerLocationId: string
+): Promise<ActionResult<WarehouseStockLevel>> {
+  const denied = await denyUnless(ADD_INVENTORY_PERMISSION);
+  if (denied) {
+    return denied;
+  }
+  try {
+    const { data, error } = await getDealerInventory({ dealerLocationId, productId });
+    if (error) {
+      return { success: false, error: 'Failed to load current dealer stock' };
+    }
+    return {
+      success: true,
+      data: data
+        ? {
+            exists: true,
+            onHand: data.onHand,
+            allocated: data.allocated,
+            available: data.onHand - data.allocated,
+            lowStockAlertAt: 0,
+          }
+        : { exists: false, onHand: 0, allocated: 0, available: 0, lowStockAlertAt: 0 },
+    };
+  } catch (error) {
+    console.error('[getDealerStock] Error:', error);
+    return { success: false, error: 'Failed to load current dealer stock' };
+  }
+}
+
+/**
+ * Add or remove stock of a product at a platinum dealer location.
+ * No row yet → creates it (Add only, same as Add Inventory). Existing row →
+ * same adjustment as Platinum Dealers → View Inventory → Adjust.
+ */
+export async function updateDealerStock(input: {
+  productId: string;
+  dealerId: string;
+  dealerLocationId: string;
+  direction: 'add' | 'remove';
+  quantity: number;
+  reason?: string;
+  note?: string;
+}): Promise<ActionResult<WarehouseStockLevel>> {
+  const denied = await denyUnless(ADD_INVENTORY_PERMISSION);
+  if (denied) {
+    return denied;
+  }
+  try {
+    if (!input.productId) {
+      return { success: false, error: 'Please select a product' };
+    }
+    if (!input.dealerId || !input.dealerLocationId) {
+      return { success: false, error: 'Please select a dealer and dealer location' };
+    }
+    if (input.direction !== 'add' && input.direction !== 'remove') {
+      return { success: false, error: 'Choose Add stock or Remove stock' };
+    }
+    if (!isNonNegativeInteger(input.quantity) || input.quantity === 0) {
+      return { success: false, error: 'Enter a quantity to add or remove' };
+    }
+
+    const { data: current, error: currentError } = await getDealerInventory({
+      dealerLocationId: input.dealerLocationId,
+      productId: input.productId,
+    });
+    if (currentError) {
+      return { success: false, error: 'Failed to load current dealer stock' };
+    }
+
+    // No stock there yet: same path as before (creates the record)
+    if (!current) {
+      if (input.direction === 'remove') {
+        return { success: false, error: 'There is no stock of this product at this dealer location to remove' };
+      }
+      const created = await createMasterInventory({
+        sourceType: 'platinum_dealer',
+        productId: input.productId,
+        dealerId: input.dealerId,
+        dealerLocationId: input.dealerLocationId,
+        onHand: input.quantity,
+      } as CreateMasterInventoryInput);
+      if (!created.success) {
+        return { success: false, error: created.error };
+      }
+      return {
+        success: true,
+        data: { exists: true, onHand: input.quantity, allocated: 0, available: input.quantity, lowStockAlertAt: 0 },
+      };
+    }
+
+    const newOnHand = current.onHand + (input.direction === 'add' ? input.quantity : -input.quantity);
+    if (newOnHand < current.allocated) {
+      return {
+        success: false,
+        error: `Only ${current.onHand - current.allocated} available to remove (${current.allocated} allocated to orders)`,
+      };
+    }
+
+    const reason = STOCK_CHANGE_REASONS.find((r) => r.value === input.reason);
+    const { updateDealerInventoryAction } = await import('@/features/platinum-dealers/actions');
+    const result = await updateDealerInventoryAction({
+      dealerId: input.dealerId,
+      dealerLocationId: input.dealerLocationId,
+      productId: input.productId,
+      onHand: newOnHand,
+      reason: reason?.value,
+      note: [reason?.label, input.note?.trim()].filter(Boolean).join(' - ') || undefined,
+    });
+    if (!result.success || !result.data) {
+      return { success: false, error: result.error || 'Failed to update dealer stock' };
+    }
+
+    revalidatePath('/master-inventory');
+    return {
+      success: true,
+      data: {
+        exists: true,
+        onHand: result.data.onHand,
+        allocated: result.data.allocated,
+        available: result.data.onHand - result.data.allocated,
+        lowStockAlertAt: 0,
+      },
+    };
+  } catch (error) {
+    console.error('[updateDealerStock] Error:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Failed to update dealer stock' };
+  }
+}

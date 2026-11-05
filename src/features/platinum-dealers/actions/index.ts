@@ -551,6 +551,9 @@ export async function updateDealerInventoryAction(params: {
   dealerLocationId: string;
   productId: string;
   onHand: number;
+  /** Optional reason / note (e.g. from Master Inventory → Update Stock) */
+  reason?: string;
+  note?: string;
 }): Promise<ActionResult<PlatinumDealerInventory>> {
   const denied = await denyUnless(DEALER_PERMISSIONS.update);
   if (denied) {
@@ -622,10 +625,13 @@ export async function updateDealerInventoryAction(params: {
         quantity: delta,
         referenceType: 'adjustment',
         referenceId: data.id,
-        reason: isCreate ? 'opening_stock' : 'manual_adjustment',
-        notes: isCreate
-          ? `Opening stock: ${data.onHand} units added at ${where}`
-          : `Manual adjustment at ${where}: ${oldOnHand} -> ${data.onHand} (${delta > 0 ? '+' : ''}${delta})`,
+        reason: params.reason || (isCreate ? 'opening_stock' : 'manual_adjustment'),
+        notes: [
+          isCreate
+            ? `Opening stock: ${data.onHand} units added at ${where}`
+            : `Manual adjustment at ${where}: ${oldOnHand} -> ${data.onHand} (${delta > 0 ? '+' : ''}${delta})`,
+          params.note?.trim().slice(0, 500),
+        ].filter(Boolean).join(' - '),
         createdBy: user.id,
       });
       if (!movement.success) {
