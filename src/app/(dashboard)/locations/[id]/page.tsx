@@ -4,7 +4,7 @@
  * Displays details for a single location.
  */
 
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, Edit, Trash2 } from 'lucide-react';
 import { Button } from '@/shared/components/ui/button';
@@ -13,12 +13,24 @@ import { Badge } from '@/shared/components/ui/badge';
 import { Separator } from '@/shared/components/ui/separator';
 import { PageHeader } from '@/shared/components/layout/PageHeader';
 import { getLocation } from '@/features/locations/actions';
+import { LOCATION_PERMISSIONS } from '@/features/locations/lib/permissions';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth/check-permission';
 
 interface LocationPageProps {
   params: Promise<{ id: string }>;
 }
 
 export default async function LocationPage({ params }: LocationPageProps) {
+  // Server-side permission check
+  const user = await getCurrentUser();
+
+  if (!user || !hasPermission(user, LOCATION_PERMISSIONS.viewDetail)) {
+    redirect('/no-permission');
+  }
+
+  const canEdit = hasPermission(user, LOCATION_PERMISSIONS.edit);
+  const canDelete = hasPermission(user, LOCATION_PERMISSIONS.delete);
+
   const { id } = await params;
   const result = await getLocation(id);
 
@@ -47,16 +59,20 @@ export default async function LocationPage({ params }: LocationPageProps) {
                 Back
               </Button>
             </Link>
-            <Link href={`/locations/${id}/edit`}>
-              <Button variant="outline">
-                <Edit className="mr-2 h-4 w-4" />
-                Edit
+            {canEdit && (
+              <Link href={`/locations/${id}/edit`}>
+                <Button variant="outline">
+                  <Edit className="mr-2 h-4 w-4" />
+                  Edit
+                </Button>
+              </Link>
+            )}
+            {canDelete && (
+              <Button variant="destructive">
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete
               </Button>
-            </Link>
-            <Button variant="destructive">
-              <Trash2 className="mr-2 h-4 w-4" />
-              Delete
-            </Button>
+            )}
           </div>
         }
       />

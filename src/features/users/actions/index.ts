@@ -14,7 +14,7 @@ import { revalidatePath } from 'next/cache';
 
 import { userService } from '../services/user.service';
 import { resolveActor } from '../lib/require-actor';
-import { getCurrentUser, hasPermission, hasAnyPermission } from '@/shared/lib/auth';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
 import type { AppUser } from '@/shared/stores/auth.store';
 import {
   createUserSchema,
@@ -70,25 +70,6 @@ async function authorize(permission: string): Promise<AuthorizeResult> {
   return { ok: true, user };
 }
 
-/**
- * Same as `authorize`, but any one of the permissions is enough.
- */
-async function authorizeAny(permissions: string[]): Promise<AuthorizeResult> {
-  const user = await getCurrentUser();
-
-  if (!user) {
-    return { ok: false, result: { success: false, error: 'Authentication required' } };
-  }
-
-  if (!hasAnyPermission(user, permissions)) {
-    return {
-      ok: false,
-      result: { success: false, error: `Permission denied: requires one of [${permissions.join(', ')}]` },
-    };
-  }
-
-  return { ok: true, user };
-}
 
 /**
  * Legacy helper - resolves the caller to their own `users` row.
@@ -140,7 +121,7 @@ export async function getUsers(
  * Get a single user by ID
  */
 export async function getUser(id: string): Promise<ActionResult<UserWithRole>> {
-  const auth = await authorizeAny(['users.view_module', 'users.edit']);
+  const auth = await authorize('users.view_module');
   if (!auth.ok) {
     return auth.result;
   }
@@ -384,6 +365,11 @@ export async function validateUserEmail(
 export async function findUserByEmail(
   email: string
 ): Promise<ActionResult<{ id: string; name: string; email: string } | null>> {
+  const auth = await authorize('users.view_module');
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   try {
     const { db } = await import('@/shared/lib/supabase/database');
 

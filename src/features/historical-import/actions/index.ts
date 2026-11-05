@@ -13,6 +13,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { productCycleCostRepository } from '@/features/products/repositories/product-cycle-cost.repository';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
 import type {
   QuotePreview,
   SalesOrderPreview,
@@ -21,6 +22,9 @@ import type {
   ShipmentPreview,
   ImportResult,
 } from '../types';
+
+/** Same permission as the Historical Import page */
+const HISTORICAL_IMPORT_PERMISSION = 'orders.create';
 
 // ============================================================================
 // IMPORT ALL DATA (Main Entry Point)
@@ -53,6 +57,16 @@ export async function importHistoricalData(data: {
     return {
       success: false,
       errors: ['User not authenticated'],
+      stats,
+    };
+  }
+
+  // Same permission as the Historical Import page
+  const appUser = await getCurrentUser();
+  if (!hasPermission(appUser, HISTORICAL_IMPORT_PERMISSION)) {
+    return {
+      success: false,
+      errors: [`Permission denied: ${HISTORICAL_IMPORT_PERMISSION}`],
       stats,
     };
   }

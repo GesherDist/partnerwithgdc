@@ -364,6 +364,10 @@ export function EditAllocationDialog({
       const result = await updateAllocationAction(allocation.id, data, productId);
 
       if (result.success) {
+        if (result.message) {
+          // Warehouse moved after a pick ticket was made
+          toast.info('Pick tickets updated', { description: result.message, duration: 8000 });
+        }
         form.reset();
         onSuccess();
       } else {

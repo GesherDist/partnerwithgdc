@@ -27,7 +27,7 @@ export async function GET(
       .select(`
         *,
         customer:customers(id, name, customer_code, email, phone),
-        sales_order:sales_orders(id, order_number, customer_po_number),
+        sales_order:sales_orders!invoices_sales_order_id_fkey(id, order_number, customer_po_number),
         items:invoice_items(
           *,
           product:products(sku, name, description)

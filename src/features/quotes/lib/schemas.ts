@@ -120,6 +120,8 @@ export const createQuoteSchema = z.object({
 });
 
 export const updateQuoteSchema = z.object({
+  // Custom quote number (Ankur, Nov 4 2026); leave out to keep the current one
+  quoteNumber: z.string().trim().min(1, 'Quote number cannot be empty.').max(50).optional(),
   quoteDate: z.coerce.date({ invalid_type_error: 'Please enter a valid date.' }).optional(),
   validUntil: z.coerce.date({ invalid_type_error: 'Please enter a valid date.' }).nullable().optional(),
   customerId: z.string().uuid('Please select a valid customer.').optional(),

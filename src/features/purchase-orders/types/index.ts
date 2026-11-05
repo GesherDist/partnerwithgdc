@@ -361,6 +361,8 @@ export interface POListParams {
   search?: string;
   status?: POStatus;
   salesOrderId?: string;
+  /** 'sold' = linked to a customer sales order, 'available' = not linked */
+  sold?: 'sold' | 'available';
   dateFrom?: string;
   dateTo?: string;
   sortBy?: string;

@@ -70,21 +70,21 @@ const NAV_SECTIONS = [
         label: 'Operations',
         href: '/operations',
         icon: BarChart3,
-        permission: 'dashboard.view_module',
+        permission: 'operations_dashboard.view_module',
       },
       {
         id: 'inbox',
         label: 'Inbox',
         href: '/inbox',
         icon: Inbox,
-        permission: 'quotes.view_module',
+        permission: 'inbox.view_module',
       },
       {
         id: 'shipping',
         label: 'Shipping Tracking',
         href: '/shipping',
         icon: Ship,
-        permission: 'dashboard.view_module',
+        permission: 'shipments.view_module', // Same permission as the shipping actions
       },
     ],
   },
@@ -135,7 +135,7 @@ const NAV_SECTIONS = [
         label: 'Platinum Dealers',
         href: '/platinum-dealers',
         icon: Award,
-        permission: 'suppliers.view_module', // Using suppliers permission for now
+        permission: 'platinum_dealers.view_module',
       },
     ],
   },
@@ -186,7 +186,7 @@ const NAV_SECTIONS = [
         label: 'Invoices',
         href: '/invoices',
         icon: Receipt,
-        permission: 'orders.view_module', // Using orders permission since invoices are created from SO
+        permission: 'invoices.view_module',
       },
     ],
   },

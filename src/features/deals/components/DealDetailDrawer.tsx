@@ -51,6 +51,7 @@ import { ConvertDealToCustomerDialog } from './ConvertDealToCustomerDialog';
 import { LostReasonDialog } from './LostReasonDialog';
 import type { GdcLostReason } from '@/features/pipedrive/gdc/config';
 import { EditDealDialog } from './EditDealDialog';
+import { useAuthStore } from '@/shared/stores/auth.store';
 
 // ============================================
 // TYPES
@@ -110,6 +111,9 @@ export function DealDetailDrawer({
   const [notes, setNotes] = useState<DealNote[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isCreatingErpQuote, setIsCreatingErpQuote] = useState(false);
+  // Same permission as createErpQuoteForWonDeal
+  const { hasPermission } = useAuthStore();
+  const canCreateErpQuote = hasPermission('quotes.create');
   const [newNote, setNewNote] = useState('');
   const [isAddingNote, setIsAddingNote] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
@@ -621,7 +625,7 @@ export function DealDetailDrawer({
               )}
             </div>
 
-            {deal.status === 'won' && deal.pipedriveDealId && (
+            {canCreateErpQuote && deal.status === 'won' && deal.pipedriveDealId && (
               <Button
                 variant="outline"
                 onClick={handleCreateErpQuote}

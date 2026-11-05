@@ -37,7 +37,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/shared/components/ui/select';
-import { Pencil, Building2, MapPin, Send, Loader2, Calendar, X, Layers, Warehouse, PackageCheck } from 'lucide-react';
+import { Pencil, Building2, MapPin, Send, Loader2, Calendar, X, Layers, Warehouse, PackageCheck, ShoppingCart } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/shared/lib/utils';
 import { usePurchaseOrder } from '../hooks/usePurchaseOrder';
@@ -49,9 +49,11 @@ import { LOAD_STATUS_COLORS, LOAD_STATUS_LABELS } from '@/features/shipments/typ
 import { updateSalesOrderSeries } from '@/features/sales-orders/actions';
 import { useAuthStore } from '@/shared/stores';
 import { ReceivePurchaseOrderDialog } from './ReceivePurchaseOrderDialog';
+import { SellPurchaseOrderDialog } from './SellPurchaseOrderDialog';
 
 /** PO statuses from which delivered tires can be received into a warehouse */
-const RECEIVABLE_STATUSES = ['confirmed', 'in_production', 'ready_to_ship', 'in_transit', 'partial', 'received'];
+/** Receive into Warehouse works for any supplier-confirmed PO, whatever its later status (e.g. Invoiced) */
+const NOT_RECEIVABLE_STATUSES = ['draft', 'sent', 'cancelled'];
 
 // ============================================
 // HELPER FUNCTIONS
@@ -77,6 +79,7 @@ export function ViewPurchaseOrderDrawer({
   const [isPending, startTransition] = useTransition();
   const [showSendDialog, setShowSendDialog] = useState(false);
   const [showReceiveDialog, setShowReceiveDialog] = useState(false);
+  const [showSellDialog, setShowSellDialog] = useState(false);
   const { hasPermission } = useAuthStore();
 
   // Inline editing state
@@ -188,7 +191,18 @@ export function ViewPurchaseOrderDrawer({
 
   // Can edit only for draft and sent POs
   // Editable at any status except cancelled (receipts and allocations are checked on save)
-  const canInlineEdit = po && po.status !== 'cancelled';
+  const canInlineEdit = hasPermission('purchase_orders.edit') && po && po.status !== 'cancelled';
+  // Same permissions as sendPurchaseOrder / updateSalesOrderSeries
+  const canSend = hasPermission('purchase_orders.send');
+  const canEditOrderSeries = hasPermission('orders.edit');
+  // Sell the container to a customer order before it arrives: not sold yet,
+  // nothing received into stock (same rule as Sales Order → Add Allocation)
+  const canSell =
+    hasPermission('allocation.decide') &&
+    !!po &&
+    !po.salesOrderId &&
+    !['draft', 'sent', 'cancelled'].includes(po.status) &&
+    po.items.every((item) => Number(item.quantityReceived ?? 0) === 0);
 
   const handleSendToSupplier = () => {
     if (!po) {
@@ -397,7 +411,7 @@ export function ViewPurchaseOrderDrawer({
                       <p className="text-sm font-medium text-foreground">
                         {po.orderSeries || '-'}
                       </p>
-                      {po.salesOrderId && (
+                      {canEditOrderSeries && po.salesOrderId && (
                         <Button
                           variant="ghost"
                           size="icon"
@@ -555,7 +569,7 @@ export function ViewPurchaseOrderDrawer({
             <Separator />
             <div className="flex gap-2">
               {hasPermission('purchase_orders.receive') &&
-                RECEIVABLE_STATUSES.includes(po.status) &&
+                !NOT_RECEIVABLE_STATUSES.includes(po.status) &&
                 po.items.some((item) => item.quantityOrdered > item.quantityReceived) && (
                 <Button
                   variant="outline"
@@ -565,6 +579,17 @@ export function ViewPurchaseOrderDrawer({
                 >
                   <PackageCheck className="mr-2 h-4 w-4" />
                   Receive into Warehouse
+                </Button>
+              )}
+              {canSell && (
+                <Button
+                  variant="outline"
+                  onClick={() => setShowSellDialog(true)}
+                  className="flex-1"
+                  disabled={isPending}
+                >
+                  <ShoppingCart className="mr-2 h-4 w-4" />
+                  Sell to Sales Order
                 </Button>
               )}
               {onEdit && po.status !== 'cancelled' && (
@@ -578,7 +603,7 @@ export function ViewPurchaseOrderDrawer({
                   Edit PO
                 </Button>
               )}
-              {po.status === 'draft' && po.items.some((item) => item.supplierId) && (
+              {canSend && po.status === 'draft' && po.items.some((item) => item.supplierId) && (
                 <Button
                   onClick={() => setShowSendDialog(true)}
                   className="flex-1"
@@ -597,7 +622,7 @@ export function ViewPurchaseOrderDrawer({
                   )}
                 </Button>
               )}
-              {po.status === 'draft' && !po.items.some((item) => item.supplierId) && (
+              {canSend && po.status === 'draft' && !po.items.some((item) => item.supplierId) && (
                 <Button disabled className="flex-1" title="Assign suppliers to items first">
                   <Send className="mr-2 h-4 w-4" />
                   Send to Supplier
@@ -609,6 +634,16 @@ export function ViewPurchaseOrderDrawer({
           <div className="mt-6 text-center text-muted-foreground">
             Purchase order not found
           </div>
+        )}
+
+        {/* Sell to Sales Order Dialog */}
+        {po && canSell && (
+          <SellPurchaseOrderDialog
+            purchaseOrderId={po.id}
+            open={showSellDialog}
+            onOpenChange={setShowSellDialog}
+            onSold={() => refetch()}
+          />
         )}
 
         {/* Receive into Warehouse Dialog */}

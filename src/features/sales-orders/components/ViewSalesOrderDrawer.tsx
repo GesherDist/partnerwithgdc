@@ -62,6 +62,8 @@ import {
   SelectValue,
 } from '@/shared/components/ui/select';
 import { ConfirmAllocationsModal } from './ConfirmAllocationsModal';
+import { EditOrderPricesDialog } from './EditOrderPricesDialog';
+import { PRICE_EDITABLE_ORDER_STATUSES } from '../types';
 import { toast } from 'sonner';
 import { AllocationManager } from './AllocationManager';
 import { CommissionSection, CommissionBadge } from './CommissionSection';
@@ -203,6 +205,7 @@ const [isReleasingHold, setIsReleasingHold] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [showConfirmAllocationsModal, setShowConfirmAllocationsModal] = useState(false);
+  const [showEditPricesDialog, setShowEditPricesDialog] = useState(false);
   const [showCancelDialog, setShowCancelDialog] = useState(false);
   const [showInvoiceDialog, setShowInvoiceDialog] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
@@ -210,6 +213,8 @@ const [isReleasingHold, setIsReleasingHold] = useState(false);
   const [showPdfModal, setShowPdfModal] = useState(false);
   const [showInvoicePdfModal, setShowInvoicePdfModal] = useState(false);
   const [existingInvoice, setExistingInvoice] = useState<InvoiceListItem | null>(null);
+  // Set once an invoice is created here, so the button hides even if the invoice can't be re-read
+  const [invoiceCreated, setInvoiceCreated] = useState(false);
   const [isUpdatingOrderSeries, setIsUpdatingOrderSeries] = useState(false);
 
   // ----------------------------------------
@@ -223,6 +228,7 @@ const [isReleasingHold, setIsReleasingHold] = useState(false);
       setOrder(null);
       setError(null);
       setExistingInvoice(null);
+      setInvoiceCreated(false);
     }
   }, [open, orderId]);
 
@@ -237,6 +243,7 @@ const [isReleasingHold, setIsReleasingHold] = useState(false);
     setIsLoading(true);
     setError(null);
     setExistingInvoice(null);
+    setInvoiceCreated(false);
 
     try {
       const result = await getSalesOrder(orderId);
@@ -434,6 +441,12 @@ const handleReleaseHold = async () => {
         if (result.success) {
           toast.success(`Invoice created for ${order.orderNumber}`);
           setShowInvoiceDialog(false);
+          setInvoiceCreated(true);
+          // Load the new invoice so "View Invoice" replaces "Create Invoice"
+          const invoiceResult = await getInvoiceBySalesOrder(order.id);
+          if (invoiceResult.success && invoiceResult.data) {
+            setExistingInvoice(invoiceResult.data);
+          }
         } else {
           toast.error(result.error || 'Failed to create invoice');
         }
@@ -446,6 +459,8 @@ const handleReleaseHold = async () => {
 
   // Can only edit draft or pending orders (and must have permission)
   const canEdit = order && ['draft', 'pending'].includes(order.status) && canEditPermission;
+  // Confirmed / processing orders: only line prices can change
+  const canEditPrices = order && PRICE_EDITABLE_ORDER_STATUSES.includes(order.status) && canEditPermission;
   // Can confirm draft or pending orders
   const canConfirm = order && ['draft', 'pending'].includes(order.status) && canEditPermission;
   // Can cancel any order except delivered/cancelled
@@ -861,6 +876,11 @@ const handleReleaseHold = async () => {
                     Edit Order
                   </Button>
                 )}
+                {canEditPrices && (
+                  <Button variant="outline" size="sm" onClick={() => setShowEditPricesDialog(true)}>
+                    Edit Prices
+                  </Button>
+                )}
                 {canCreateInvoice && existingInvoice && (
                   <Button
                     variant="outline"
@@ -871,7 +891,7 @@ const handleReleaseHold = async () => {
                     View Invoice
                   </Button>
                 )}
-                {canCreateInvoice && !existingInvoice && !order?.isCommissionOnly && (
+                {canCreateInvoice && !existingInvoice && !invoiceCreated && !order?.isCommissionOnly && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -963,6 +983,16 @@ const handleReleaseHold = async () => {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+
+        {/* Edit Prices Dialog (confirmed / processing orders) */}
+        {order && canEditPrices && (
+          <EditOrderPricesDialog
+            order={order}
+            open={showEditPricesDialog}
+            onOpenChange={setShowEditPricesDialog}
+            onSaved={fetchOrder}
+          />
+        )}
 
         {/* Create Pick Ticket Dialog */}
         {/* Create Invoice Dialog */}

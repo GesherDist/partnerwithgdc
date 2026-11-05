@@ -98,6 +98,7 @@ class PurchaseOrderRepositoryImpl {
       search,
       status,
       salesOrderId,
+      sold,
       dateFrom,
       dateTo,
       sortBy = 'createdAt',
@@ -152,6 +153,13 @@ class PurchaseOrderRepositoryImpl {
 
     if (salesOrderId) {
       query = query.eq('sales_order_id', salesOrderId);
+    }
+
+    // Sold = the container is linked to a customer sales order
+    if (sold === 'sold') {
+      query = query.not('sales_order_id', 'is', null);
+    } else if (sold === 'available') {
+      query = query.is('sales_order_id', null);
     }
 
     if (dateFrom) {

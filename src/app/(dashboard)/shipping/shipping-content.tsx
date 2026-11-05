@@ -47,6 +47,7 @@ import {
 } from '@/shared/components/ui/select';
 import { getShippingEmails, getShippingStats, getInboundEmailContent } from '@/features/shipping/actions';
 import type { ShippingEmailWithInbound } from '@/features/shipping/types';
+import { useAuthStore } from '@/shared/stores/auth.store';
 
 // Status badge colors
 const STATUS_COLORS: Record<string, string> = {
@@ -120,10 +121,16 @@ interface EmailPreview {
 }
 
 export function ShippingContent() {
-  // Note: Permission checks are handled by server actions
-  // UI-level gating can be added here when edit/link buttons are added
-  // const { hasPermission } = useAuthStore();
-  // const canEdit = hasPermission('shipments.edit');
+  // Same permission as getInboundEmailContent (server action); checked after
+  // hydration. Add shipments.edit gating here if link/reprocess buttons are added.
+  const { hasPermission } = useAuthStore();
+  const [hasMounted, setHasMounted] = useState(false);
+
+  useEffect(() => {
+    setHasMounted(true);
+  }, []);
+
+  const canViewEmail = hasMounted && hasPermission('shipments.view_detail');
 
   const [emails, setEmails] = useState<ShippingEmailWithInbound[]>([]);
   const [stats, setStats] = useState({
@@ -370,14 +377,16 @@ export function ShippingContent() {
                       )}
                     </TableCell>
                     <TableCell className="text-center">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleViewEmail(email.inbound_email_id)}
-                        title="View original email"
-                      >
-                        <Eye className="h-4 w-4 text-muted-foreground hover:text-primary" />
-                      </Button>
+                      {canViewEmail && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleViewEmail(email.inbound_email_id)}
+                          title="View original email"
+                        >
+                          <Eye className="h-4 w-4 text-muted-foreground hover:text-primary" />
+                        </Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}

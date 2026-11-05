@@ -14,6 +14,8 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
+import { INBOX_PERMISSIONS } from '../lib/permissions';
+import { useAuthStore } from '@/shared/stores/auth.store';
 
 // ============================================
 // TYPES
@@ -76,6 +78,9 @@ export function AutoExtractedDataSection({
 }: AutoExtractedDataSectionProps) {
   const [approving, setApproving] = useState(false);
   const [rejecting, setRejecting] = useState(false);
+  const { hasPermission } = useAuthStore();
+  const canApprove = hasPermission(INBOX_PERMISSIONS.createQuote);
+  const canReject = hasPermission(INBOX_PERMISSIONS.update);
 
   const { parsed, matching } = extractedData;
 
@@ -334,33 +339,39 @@ export function AutoExtractedDataSection({
       </div>
 
       {/* Action Buttons */}
-      <div className="flex gap-3 mt-6">
-        <Button
-          onClick={handleApprove}
-          disabled={approving || rejecting}
-          className="flex-1"
-        >
-          {approving ? (
-            <>
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              Creating Quote...
-            </>
-          ) : (
-            <>✅ Approve & Create Quote</>
+      {(canApprove || canReject) && (
+        <div className="flex gap-3 mt-6">
+          {canApprove && (
+            <Button
+              onClick={handleApprove}
+              disabled={approving || rejecting}
+              className="flex-1"
+            >
+              {approving ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Creating Quote...
+                </>
+              ) : (
+                <>✅ Approve & Create Quote</>
+              )}
+            </Button>
           )}
-        </Button>
-        <Button
-          variant="outline"
-          onClick={handleReject}
-          disabled={approving || rejecting}
-        >
-          {rejecting ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <>❌ Reject</>
+          {canReject && (
+            <Button
+              variant="outline"
+              onClick={handleReject}
+              disabled={approving || rejecting}
+            >
+              {rejecting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <>❌ Reject</>
+              )}
+            </Button>
           )}
-        </Button>
-      </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -9,6 +9,8 @@
 import { sendDealerAllocationEmail, type DealerAllocationItem } from '../services/email.service';
 import { getSalesOrder } from '@/features/sales-orders/actions';
 import { generateDealerAllocationPdf, type DealerAllocationPdfData } from '../services/dealer-allocation-pdf.service';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
+import { DEALER_PERMISSIONS } from '../lib/permissions';
 
 // ============================================
 // TYPES
@@ -46,6 +48,14 @@ export async function sendDealerAllocationEmailAction(
   success: boolean;
   error?: string;
 }> {
+  const user = await getCurrentUser();
+  if (!user) {
+    return { success: false, error: 'Authentication required' };
+  }
+  if (!hasPermission(user, DEALER_PERMISSIONS.allocationWrite)) {
+    return { success: false, error: `Permission denied: ${DEALER_PERMISSIONS.allocationWrite}` };
+  }
+
   try {
     console.log('🔄 [sendDealerAllocationEmailAction] Starting email send');
 

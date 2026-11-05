@@ -26,7 +26,7 @@ import type {
   PriceMatrixFormValues,
 } from '../types';
 import type { CustomerChannel } from '@/features/customers/types';
-import { getCurrentUser, hasPermission, hasAnyPermission } from '@/shared/lib/auth';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
 import type { AppUser } from '@/shared/stores/auth.store';
 
 // ============================================
@@ -51,22 +51,6 @@ async function authorize(permission: string): Promise<AuthorizeResult> {
   return { ok: true, user };
 }
 
-async function authorizeAny(permissions: string[]): Promise<AuthorizeResult> {
-  const user = await getCurrentUser();
-
-  if (!user) {
-    return { ok: false, result: { success: false, error: 'Authentication required' } };
-  }
-
-  if (!hasAnyPermission(user, permissions)) {
-    return {
-      ok: false,
-      result: { success: false, error: `Permission denied: requires one of [${permissions.join(', ')}]` },
-    };
-  }
-
-  return { ok: true, user };
-}
 
 // Note: No revalidatePath needed - ProductPriceMatrix handles data refresh client-side
 
@@ -81,7 +65,7 @@ export async function getPriceMatrixList(
   params: PriceMatrixListParams = {}
 ): Promise<ActionResult<PaginatedResult<PriceMatrixTableRow>>> {
   // Anyone with products.view_module can view pricing
-  const auth = await authorizeAny(['pricing.view', 'products.view_module']);
+  const auth = await authorize('pricing.view');
   if (!auth.ok) { return auth.result; }
 
   try {
@@ -102,7 +86,7 @@ export async function getPriceMatrixList(
 export async function getPriceMatrixByProduct(
   productId: string
 ): Promise<ActionResult<PriceMatrixTableRow[]>> {
-  const auth = await authorizeAny(['pricing.view', 'products.view_detail']);
+  const auth = await authorize('pricing.view');
   if (!auth.ok) { return auth.result; }
 
   try {
@@ -123,7 +107,7 @@ export async function getPriceMatrixByProduct(
 export async function getPriceMatrixEntry(
   id: string
 ): Promise<ActionResult<PriceMatrixWithProduct>> {
-  const auth = await authorizeAny(['pricing.view', 'pricing.edit']);
+  const auth = await authorize('pricing.view');
   if (!auth.ok) { return auth.result; }
 
   try {
@@ -149,7 +133,7 @@ export async function lookupProductPrice(
   channel: CustomerChannel,
   quantity: number = 1
 ): Promise<ActionResult<PriceLookupResult | null>> {
-  const auth = await authorizeAny(['pricing.view', 'quotes.create', 'sales_orders.create']);
+  const auth = await authorize('pricing.view');
   if (!auth.ok) { return auth.result; }
 
   try {
@@ -301,7 +285,7 @@ export async function deletePriceMatrixEntry(id: string): Promise<ActionResult<P
 export async function getPriceMatrixCount(
   productId: string
 ): Promise<ActionResult<number>> {
-  const auth = await authorizeAny(['pricing.view', 'products.view_detail']);
+  const auth = await authorize('pricing.view');
   if (!auth.ok) { return auth.result; }
 
   try {

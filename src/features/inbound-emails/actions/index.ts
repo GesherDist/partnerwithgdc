@@ -10,6 +10,7 @@ import { createClient } from '@/shared/lib/supabase/server';
 import { createAdminClient } from '@/shared/lib/supabase/admin';
 import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
 import { isSeairEmail } from '../lib/shipping-email';
+import { INBOX_PERMISSIONS } from '../lib/permissions';
 import type {
   InboundEmail,
   InboundEmailWithAttachments,
@@ -34,6 +35,28 @@ export interface InboundEmailListParams {
 }
 
 // ============================================
+// AUTHORIZATION HELPER
+// ============================================
+
+/**
+ * Returns an error result when the caller is not signed in or lacks the
+ * permission (see INBOX_PERMISSIONS), otherwise null.
+ */
+async function denyUnless(permission: string): Promise<ActionResult<never> | null> {
+  const user = await getCurrentUser();
+
+  if (!user) {
+    return { success: false, error: 'Authentication required' };
+  }
+
+  if (!hasPermission(user, permission)) {
+    return { success: false, error: `Permission denied: ${permission}` };
+  }
+
+  return null;
+}
+
+// ============================================
 // LIST INBOUND EMAILS
 // ============================================
 
@@ -48,12 +71,11 @@ export async function getInboundEmails(
     totalPages: number;
   };
 }>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const denied = await denyUnless(INBOX_PERMISSIONS.read);
+  if (denied) {
+    return denied;
   }
+  const supabase = await createClient();
 
   const { page = 1, limit = 20, status, search } = params;
   const offset = (page - 1) * limit;
@@ -152,12 +174,11 @@ export async function getInboundEmails(
 export async function getInboundEmail(
   id: string
 ): Promise<ActionResult<InboundEmailWithAttachments>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const denied = await denyUnless(INBOX_PERMISSIONS.read);
+  if (denied) {
+    return denied;
   }
+  const supabase = await createClient();
 
   try {
     // Get email
@@ -203,12 +224,11 @@ export async function updateInboundEmailStatus(
   id: string,
   status: string
 ): Promise<ActionResult<InboundEmail>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const denied = await denyUnless(INBOX_PERMISSIONS.update);
+  if (denied) {
+    return denied;
   }
+  const supabase = await createClient();
 
   try {
     const { data, error } = await supabase
@@ -237,11 +257,9 @@ export async function updateInboundEmailStatus(
 export async function deleteInboundEmail(
   id: string
 ): Promise<ActionResult<void>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const denied = await denyUnless(INBOX_PERMISSIONS.delete);
+  if (denied) {
+    return denied;
   }
 
   try {
@@ -293,12 +311,9 @@ export interface ReprocessShippingResult {
 export async function reprocessAsShippingEmail(
   id: string
 ): Promise<ActionResult<ReprocessShippingResult>> {
-  const user = await getCurrentUser();
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
-  }
-  if (!hasPermission(user, 'shipments.edit')) {
-    return { success: false, error: 'Permission denied: shipments.edit' };
+  const denied = await denyUnless(INBOX_PERMISSIONS.processShipping);
+  if (denied) {
+    return denied;
   }
 
   try {
@@ -363,12 +378,11 @@ export async function updateAttachmentQuoteId(
   attachmentId: string,
   quoteId: string
 ): Promise<ActionResult<InboundEmailAttachment>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const denied = await denyUnless(INBOX_PERMISSIONS.update);
+  if (denied) {
+    return denied;
   }
+  const supabase = await createClient();
 
   try {
     const { data, error } = await supabase
@@ -397,12 +411,11 @@ export async function updateAttachmentQuoteId(
 export async function getAttachmentUrl(
   attachmentId: string
 ): Promise<ActionResult<{ url: string }>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const denied = await denyUnless(INBOX_PERMISSIONS.read);
+  if (denied) {
+    return denied;
   }
+  const supabase = await createClient();
 
   try {
     // Get attachment record

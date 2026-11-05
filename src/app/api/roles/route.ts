@@ -10,7 +10,6 @@ import { roleService } from '@/features/roles';
 import { ValidationError, AppError } from '@/shared/lib/errors';
 import { z } from 'zod';
 import {
-  requireAnyPermission,
   requirePermission,
   isSuperAdmin,
   isSuperAdminRoleName,
@@ -18,7 +17,8 @@ import {
 } from '@/shared/lib/auth';
 
 /** User dialogs list roles too, so viewing roles is not limited to the Roles screen */
-const ROLE_READ_PERMISSIONS = ['roles.view_module', 'users.create', 'users.edit', 'users.change_role'];
+/** Reading roles (Roles page, role pickers on the Users page) */
+const ROLE_READ_PERMISSION = 'roles.view';
 
 // ============================================
 // VALIDATION SCHEMAS
@@ -45,7 +45,7 @@ const querySchema = z.object({
 
 export async function GET(request: NextRequest) {
   try {
-    const guard = await requireAnyPermission(ROLE_READ_PERMISSIONS);
+    const guard = await requirePermission(ROLE_READ_PERMISSION);
     if (guard.response) {return guard.response;}
 
     const { searchParams } = new URL(request.url);

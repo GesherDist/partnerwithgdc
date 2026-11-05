@@ -6,9 +6,12 @@
  */
 
 import { Suspense } from 'react';
+import { redirect } from 'next/navigation';
 import { LoadingState } from '@/shared/components/feedback/LoadingState';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth/check-permission';
 import { LocationsContent } from '@/features/locations/components/LocationsContent';
 import { getLocations } from '@/features/locations/actions';
+import { LOCATION_PERMISSIONS } from '@/features/locations/lib/permissions';
 import type { LocationTableRow } from '@/features/locations/types';
 
 interface LocationsPageProps {
@@ -46,6 +49,13 @@ async function LocationsData({ searchParams }: LocationsPageProps) {
 }
 
 export default async function LocationsPage(props: LocationsPageProps) {
+  // Server-side permission check (same permission as the sidebar link)
+  const user = await getCurrentUser();
+
+  if (!user || !hasPermission(user, LOCATION_PERMISSIONS.viewModule)) {
+    redirect('/no-permission');
+  }
+
   return (
     <Suspense fallback={<LoadingState message="Loading locations..." />}>
       <LocationsData searchParams={props.searchParams} />

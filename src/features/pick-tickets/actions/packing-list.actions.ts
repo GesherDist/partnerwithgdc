@@ -8,9 +8,9 @@
 
 import { revalidatePath } from 'next/cache';
 import { PackingListService } from '../services';
-import { createClient } from '@/shared/lib/supabase/server';
 import { db } from '@/shared/lib/supabase/database';
-import { getCurrentUser, hasAnyPermission } from '@/shared/lib/auth';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
+import { PICK_TICKET_PERMISSIONS } from '../lib/permissions';
 import type {
   PackingListListParams,
   CreatePackingListDTO,
@@ -20,30 +20,29 @@ import type {
 } from '../types';
 
 // ============================================
-// HELPER: Get current user ID
+// AUTHORIZATION HELPER
 // ============================================
 
-async function getCurrentUserId(): Promise<string | undefined> {
-  try {
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+type AuthorizeResult =
+  | { ok: true; userId: string }
+  | { ok: false; result: { success: false; error: string } };
 
-    if (!user) {
-      return undefined;
-    }
+/**
+ * Resolve the current application user and verify the permission
+ * (see PICK_TICKET_PERMISSIONS).
+ */
+async function authorize(permission: string): Promise<AuthorizeResult> {
+  const user = await getCurrentUser();
 
-    const { data } = await supabase
-      .from('users')
-      .select('id')
-      .eq('auth_user_id', user.id)
-      .single();
-
-    return data?.id;
-  } catch {
-    return undefined;
+  if (!user) {
+    return { ok: false, result: { success: false, error: 'Authentication required' } };
   }
+
+  if (!hasPermission(user, permission)) {
+    return { ok: false, result: { success: false, error: `Permission denied: ${permission}` } };
+  }
+
+  return { ok: true, userId: user.id };
 }
 
 // ============================================
@@ -51,6 +50,11 @@ async function getCurrentUserId(): Promise<string | undefined> {
 // ============================================
 
 export async function listPackingLists(params: PackingListListParams = {}) {
+  const auth = await authorize(PICK_TICKET_PERMISSIONS.view);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   const result = await PackingListService.getPackingLists(params);
   return result;
 }
@@ -60,6 +64,11 @@ export async function listPackingLists(params: PackingListListParams = {}) {
 // ============================================
 
 export async function getPackingList(id: string) {
+  const auth = await authorize(PICK_TICKET_PERMISSIONS.view);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   const result = await PackingListService.getPackingListById(id);
   return result;
 }
@@ -83,14 +92,9 @@ export async function getPackingListPdfData(id: string): Promise<{
   };
   error?: string;
 }> {
-  const user = await getCurrentUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
-  }
-
-  if (!hasAnyPermission(user, ['pick_tickets.view', 'pick_tickets.edit'])) {
-    return { success: false, error: 'Permission denied: pick_tickets.view' };
+  const auth = await authorize(PICK_TICKET_PERMISSIONS.view);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   const result = await PackingListService.getPackingListById(id);
@@ -134,6 +138,11 @@ export async function getPackingListPdfData(id: string): Promise<{
 // ============================================
 
 export async function getPackingListByPickTicket(pickTicketId: string) {
+  const auth = await authorize(PICK_TICKET_PERMISSIONS.view);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   const result = await PackingListService.getPackingListByPickTicketId(pickTicketId);
   return result;
 }
@@ -143,7 +152,11 @@ export async function getPackingListByPickTicket(pickTicketId: string) {
 // ============================================
 
 export async function createPackingList(data: CreatePackingListDTO) {
-  const userId = await getCurrentUserId();
+  const auth = await authorize(PICK_TICKET_PERMISSIONS.pack);
+  if (!auth.ok) {
+    return auth.result;
+  }
+  const userId = auth.userId;
   const result = await PackingListService.createPackingList(data, userId);
 
   if (result.success) {
@@ -159,7 +172,11 @@ export async function createPackingList(data: CreatePackingListDTO) {
 // ============================================
 
 export async function createPackingListFromPickTicket(pickTicketId: string) {
-  const userId = await getCurrentUserId();
+  const auth = await authorize(PICK_TICKET_PERMISSIONS.pack);
+  if (!auth.ok) {
+    return auth.result;
+  }
+  const userId = auth.userId;
   const result = await PackingListService.createFromPickTicket(pickTicketId, userId);
 
   if (result.success) {
@@ -176,7 +193,11 @@ export async function createPackingListFromPickTicket(pickTicketId: string) {
 // ============================================
 
 export async function markPackingListAsPacked(id: string) {
-  const userId = await getCurrentUserId();
+  const auth = await authorize(PICK_TICKET_PERMISSIONS.pack);
+  if (!auth.ok) {
+    return auth.result;
+  }
+  const userId = auth.userId;
   const result = await PackingListService.markAsPacked(id, userId);
 
   if (result.success) {
@@ -193,7 +214,11 @@ export async function markPackingListAsPacked(id: string) {
 // ============================================
 
 export async function transitionPackingListStatus(id: string, status: PackingListStatus) {
-  const userId = await getCurrentUserId();
+  const auth = await authorize(PICK_TICKET_PERMISSIONS.pack);
+  if (!auth.ok) {
+    return auth.result;
+  }
+  const userId = auth.userId;
   const result = await PackingListService.transitionStatus(id, status, userId);
 
   if (result.success && result.data) {
@@ -255,7 +280,11 @@ export async function transitionPackingListStatus(id: string, status: PackingLis
 // ============================================
 
 export async function deletePackingList(id: string) {
-  const userId = await getCurrentUserId();
+  const auth = await authorize(PICK_TICKET_PERMISSIONS.delete);
+  if (!auth.ok) {
+    return auth.result;
+  }
+  const userId = auth.userId;
   const result = await PackingListService.deletePackingList(id, userId);
 
   if (result.success) {

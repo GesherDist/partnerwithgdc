@@ -12,7 +12,7 @@
 import { revalidatePath } from 'next/cache';
 import { purchaseOrderService } from '../services/purchase-order.service';
 import { createClient } from '@/shared/lib/supabase/server';
-import { getCurrentUser, hasPermission, hasAnyPermission } from '@/shared/lib/auth';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
 import type { AppUser } from '@/shared/stores/auth.store';
 import type { POListParams, SupplierSummary } from '../types';
 import { productCycleCostRepository } from '@/features/products/repositories/product-cycle-cost.repository';
@@ -57,25 +57,6 @@ async function authorize(permission: string): Promise<AuthorizeResult> {
   return { ok: true, user };
 }
 
-/**
- * Same as `authorize`, but any one of the permissions is enough.
- */
-async function authorizeAny(permissions: string[]): Promise<AuthorizeResult> {
-  const user = await getCurrentUser();
-
-  if (!user) {
-    return { ok: false, result: { success: false, error: 'Authentication required' } };
-  }
-
-  if (!hasAnyPermission(user, permissions)) {
-    return {
-      ok: false,
-      result: { success: false, error: `Permission denied: requires one of [${permissions.join(', ')}]` },
-    };
-  }
-
-  return { ok: true, user };
-}
 
 // ============================================
 // LIST PURCHASE ORDERS
@@ -96,7 +77,7 @@ export async function listPurchaseOrders(params: POListParams = {}) {
 // ============================================
 
 export async function getPurchaseOrder(id: string) {
-  const auth = await authorizeAny(['purchase_orders.view_detail', 'purchase_orders.edit']);
+  const auth = await authorize('purchase_orders.view_detail');
   if (!auth.ok) {
     return auth.result;
   }
@@ -1005,7 +986,7 @@ export async function getNextPONumber(): Promise<ActionResult<string>> {
 
 /** Product cost (cents) by product id for one order series; products without one use their base cost */
 export async function getCycleCostsForOrderSeries(orderSeries: string): Promise<ActionResult<Record<string, number>>> {
-  const auth = await authorizeAny(['purchase_orders.create', 'purchase_orders.edit']);
+  const auth = await authorize('purchase_orders.view_detail');
   if (!auth.ok) {
     return auth.result;
   }
@@ -1081,17 +1062,18 @@ export async function getUnallocatedPurchaseOrders(): Promise<ActionResult<any[]
   }
 
   try {
-    const supabase = await createClient();
+    // Permission checked above; read with the server client so the list does not
+    // depend on row-level policies (same as the other PO lookups in this file)
+    const { db: supabase } = await import('@/shared/lib/supabase/database');
 
-    // First, get the GDC-INV location ID (virtual location for GDC Inventory)
-    const { data: gdcInvLocation } = await supabase
+    // Containers can be sold before they arrive (Ankur, Nov 4 2026): POs headed to
+    // GDC Inventory, Kansas or Nebraska are all offered, as long as no tires have
+    // been received into stock yet (received tires are sold from GDC Inventory)
+    const { data: warehouseLocations } = await supabase
       .from('locations')
       .select('id')
-      .eq('location_code', 'GDC-INV')
-      .maybeSingle();
-
-    const gdcInvLocationId = gdcInvLocation?.id || null;
-    console.log(`📊 [getUnallocatedPurchaseOrders] GDC-INV location ID: ${gdcInvLocationId || 'NOT FOUND'}`);
+      .eq('location_type', 'warehouse');
+    const warehouseIds = (warehouseLocations || []).map((l) => l.id);
 
     // Get PO IDs that have shipments created
     const { data: posWithShipments, error: shipmentError } = await supabase
@@ -1121,11 +1103,12 @@ export async function getUnallocatedPurchaseOrders(): Promise<ActionResult<any[]
       };
     }
 
-    // Get PO IDs that are already used in fulfillment_allocations
+    // Get PO IDs that are already used by an active allocation (cancelled ones free the PO)
     const { data: allocatedPOs, error: allocError } = await supabase
       .from('fulfillment_allocations')
       .select('purchase_order_id')
-      .not('purchase_order_id', 'is', null);
+      .not('purchase_order_id', 'is', null)
+      .neq('status', 'cancelled');
 
     if (allocError) {
       console.warn('[getUnallocatedPurchaseOrders] Error fetching allocated POs:', allocError);
@@ -1152,21 +1135,27 @@ export async function getUnallocatedPurchaseOrders(): Promise<ActionResult<any[]
       };
     }
 
-    // Build query for unallocated POs that have shipments AND GDC Inventory location
-    // Only show POs with GDC-INV warehouse (not Kansas/Nebraska)
-    let query = supabase
-      .from('purchase_orders')
-      .select('id, po_number, po_date, expected_delivery_date, status, grand_total, order_series, warehouse_id, warehouse:locations!warehouse_id(name, location_code)')
-      .in('id', eligiblePOIds)           // Only POs with shipments and not allocated
-      .is('sales_order_id', null)        // Not linked to any SO directly
-      .is('deleted_at', null);           // Not deleted
-
-    // Filter by GDC-INV location only
-    if (gdcInvLocationId) {
-      query = query.eq('warehouse_id', gdcInvLocationId);
+    // Nothing received yet: received tires are already in warehouse stock
+    const { data: receivedItems } = await supabase
+      .from('purchase_order_items')
+      .select('purchase_order_id')
+      .in('purchase_order_id', eligiblePOIds)
+      .gt('quantity_received', 0);
+    const receivedPOIds = new Set((receivedItems || []).map((r) => r.purchase_order_id));
+    const notReceivedPOIds = eligiblePOIds.filter((id) => !receivedPOIds.has(id));
+    if (notReceivedPOIds.length === 0) {
+      return { success: true, data: [] };
     }
 
-    const { data, error } = await query
+    // Unallocated POs with a shipment, headed to a warehouse (GDC Inventory, Kansas, Nebraska)
+    const { data, error } = await supabase
+      .from('purchase_orders')
+      .select('id, po_number, po_date, expected_delivery_date, status, grand_total, order_series, warehouse_id, warehouse:locations!warehouse_id(name, location_code)')
+      .in('id', notReceivedPOIds)        // Shipment, not allocated, nothing received
+      .is('sales_order_id', null)        // Not linked to any SO directly
+      .is('deleted_at', null)            // Not deleted
+      .neq('status', 'cancelled')
+      .in('warehouse_id', warehouseIds.length > 0 ? warehouseIds : ['00000000-0000-0000-0000-000000000000'])
       .order('created_at', { ascending: false })
       .limit(100);
 
@@ -1184,7 +1173,7 @@ export async function getUnallocatedPurchaseOrders(): Promise<ActionResult<any[]
       location_name: (po as any).warehouse?.name || null,
     }));
 
-    console.log(`✅ [getUnallocatedPurchaseOrders] Found ${result.length} POs (GDC Inventory, with shipments, unallocated)`);
+    console.log(`✅ [getUnallocatedPurchaseOrders] Found ${result.length} POs (with shipments, unallocated, not received)`);
     if (result.length > 0) {
       console.log('  POs:', result.map(po => `${po.po_number} (${po.status})`).join(', '));
     }

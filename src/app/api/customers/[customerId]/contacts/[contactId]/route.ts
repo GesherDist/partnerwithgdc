@@ -19,6 +19,8 @@ import {
   noContentResponse,
 } from '@/shared/lib/api/response';
 import { createClient } from '@/shared/lib/supabase/server';
+import { requirePermission } from '@/shared/lib/auth/check-permission';
+import { CUSTOMER_PERMISSIONS } from '@/features/customers/lib/permissions';
 
 interface RouteParams {
   params: Promise<{ customerId: string; contactId: string }>;
@@ -40,6 +42,11 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
 
     if (!user) {
       return unauthorizedResponse('Authentication required');
+    }
+
+    const guard = await requirePermission(CUSTOMER_PERMISSIONS.viewContacts);
+    if (guard.response) {
+      return guard.response;
     }
 
     // Validate ID formats
@@ -86,6 +93,11 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
 
     if (!user) {
       return unauthorizedResponse('Authentication required');
+    }
+
+    const guard = await requirePermission(CUSTOMER_PERMISSIONS.editContact);
+    if (guard.response) {
+      return guard.response;
     }
 
     // Validate ID formats
@@ -156,6 +168,11 @@ export async function DELETE(_request: NextRequest, { params }: RouteParams) {
 
     if (!user) {
       return unauthorizedResponse('Authentication required');
+    }
+
+    const guard = await requirePermission(CUSTOMER_PERMISSIONS.deleteContact);
+    if (guard.response) {
+      return guard.response;
     }
 
     // Validate ID formats

@@ -14,6 +14,29 @@ import type {
   CreateCostComponentDTO,
   UpdateCostComponentDTO,
 } from '../types';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
+
+// ============================================
+// AUTHORIZATION
+// ============================================
+
+/** One permission per action; roles get them on the Roles page */
+const COST_COMPONENT_PERMISSIONS: Record<'read' | 'write', string> = {
+  read: 'cost_components.view',
+  write: 'cost_components.edit',
+};
+
+/** Error result when the caller does not hold the permission, otherwise null */
+async function denyUnless(permission: string): Promise<{ success: false; error: string; data?: undefined } | null> {
+  const user = await getCurrentUser();
+  if (!user) {
+    return { success: false, error: 'Authentication required' };
+  }
+  if (!hasPermission(user, permission)) {
+    return { success: false, error: `Permission denied: ${permission}` };
+  }
+  return null;
+}
 
 // ============================================
 // HELPER: Get current user ID
@@ -45,6 +68,10 @@ async function getCurrentUserId(): Promise<string | undefined> {
 // ============================================
 
 export async function listCostComponents(params: CostComponentListParams = {}) {
+  const denied = await denyUnless(COST_COMPONENT_PERMISSIONS.read);
+  if (denied) {
+    return denied;
+  }
   const result = await costComponentService.list(params);
   return result;
 }
@@ -54,6 +81,10 @@ export async function listCostComponents(params: CostComponentListParams = {}) {
 // ============================================
 
 export async function getCostComponent(id: string) {
+  const denied = await denyUnless(COST_COMPONENT_PERMISSIONS.read);
+  if (denied) {
+    return denied;
+  }
   const result = await costComponentService.getById(id);
   return result;
 }
@@ -63,6 +94,10 @@ export async function getCostComponent(id: string) {
 // ============================================
 
 export async function createCostComponent(data: CreateCostComponentDTO) {
+  const denied = await denyUnless(COST_COMPONENT_PERMISSIONS.write);
+  if (denied) {
+    return denied;
+  }
   const userId = await getCurrentUserId();
   const result = await costComponentService.create(data, userId);
 
@@ -79,6 +114,10 @@ export async function createCostComponent(data: CreateCostComponentDTO) {
 // ============================================
 
 export async function updateCostComponent(id: string, data: UpdateCostComponentDTO) {
+  const denied = await denyUnless(COST_COMPONENT_PERMISSIONS.write);
+  if (denied) {
+    return denied;
+  }
   const userId = await getCurrentUserId();
   const result = await costComponentService.update(id, data, userId);
 
@@ -94,6 +133,10 @@ export async function updateCostComponent(id: string, data: UpdateCostComponentD
 // ============================================
 
 export async function deleteCostComponent(id: string) {
+  const denied = await denyUnless(COST_COMPONENT_PERMISSIONS.write);
+  if (denied) {
+    return denied;
+  }
   const result = await costComponentService.delete(id);
 
   if (result.success) {
@@ -108,6 +151,10 @@ export async function deleteCostComponent(id: string) {
 // ============================================
 
 export async function getLandedCostSummary(purchaseOrderId: string) {
+  const denied = await denyUnless(COST_COMPONENT_PERMISSIONS.read);
+  if (denied) {
+    return denied;
+  }
   const result = await costComponentService.getLandedCostSummary(purchaseOrderId);
   return result;
 }

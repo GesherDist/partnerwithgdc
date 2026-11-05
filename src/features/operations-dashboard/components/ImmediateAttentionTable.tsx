@@ -497,15 +497,17 @@ export function ImmediateAttentionTable({
                           >
                             <Eye className="h-3.5 w-3.5" />
                           </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
-                            onClick={() => onEdit?.(item)}
-                            title="Edit Status"
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
+                          {onEdit && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7"
+                              onClick={() => onEdit(item)}
+                              title="Edit Status"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>

@@ -11,7 +11,6 @@ import { roleService } from '@/features/roles';
 import { ValidationError, AppError, NotFoundError } from '@/shared/lib/errors';
 import { z } from 'zod';
 import {
-  requireAnyPermission,
   requirePermission,
   hasPermission,
   isSuperAdmin,
@@ -20,7 +19,8 @@ import {
 } from '@/shared/lib/auth';
 
 /** User dialogs read roles too, so viewing is not limited to the Roles screen */
-const ROLE_READ_PERMISSIONS = ['roles.view_module', 'users.create', 'users.edit', 'users.change_role'];
+/** Reading roles (Roles page, role pickers on the Users page) */
+const ROLE_READ_PERMISSION = 'roles.view';
 
 // ============================================
 // VALIDATION SCHEMAS
@@ -42,7 +42,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const guard = await requireAnyPermission(ROLE_READ_PERMISSIONS);
+    const guard = await requirePermission(ROLE_READ_PERMISSION);
     if (guard.response) {return guard.response;}
 
     const { id } = await params;

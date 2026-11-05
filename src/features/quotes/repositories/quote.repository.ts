@@ -528,6 +528,7 @@ class QuoteRepositoryImpl {
       updated_at: new Date().toISOString(),
     };
 
+    if (data.quoteNumber !== undefined) {updateData.quote_number = data.quoteNumber;}
     if (data.quoteDate !== undefined) {
       updateData.quote_date = data.quoteDate.toISOString().split('T')[0];
     }

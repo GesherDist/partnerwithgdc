@@ -41,6 +41,8 @@ import { PdfViewerModal } from '@/shared/components/pdf-viewer';
 import { usePickTicket } from '../hooks/usePickTicket';
 import { createPackingListFromPickTicket } from '../actions/packing-list.actions';
 import { completePicking, startPicking, pickItem, transitionPickTicketStatus } from '../actions';
+import { PICK_TICKET_PERMISSIONS } from '../lib/permissions';
+import { useAuthStore } from '@/shared/stores/auth.store';
 import {
   PICK_TICKET_STATUS_COLORS,
   PICK_TICKET_STATUS_LABELS,
@@ -59,6 +61,9 @@ export function ViewPickTicketDrawer({
   onPackingListCreated,
 }: ViewPickTicketDrawerProps) {
   const { data: pickTicket, isLoading, refetch } = usePickTicket(open ? pickTicketId : null);
+  const { hasPermission } = useAuthStore();
+  const mayPick = hasPermission(PICK_TICKET_PERMISSIONS.pick);
+  const mayPack = hasPermission(PICK_TICKET_PERMISSIONS.pack);
   const [isCreatingPackingList, setIsCreatingPackingList] = useState(false);
   const [isStartingPicking, setIsStartingPicking] = useState(false);
   const [isCompletingPicking, setIsCompletingPicking] = useState(false);
@@ -70,15 +75,15 @@ export function ViewPickTicketDrawer({
   // Allow editing for all statuses except cancelled (per Ankur/Jenny feedback Aug 26)
   const canEdit = pickTicket && pickTicket.status !== 'cancelled';
   const isShipped = pickTicket?.status === 'shipped';
-  const canStartPicking = pickTicket && pickTicket.status === 'assigned';
+  const canStartPicking = mayPick && pickTicket && pickTicket.status === 'assigned';
 
   // Show "Complete Picking" button when status is 'picking' or 'picked' AND no packing list exists
-  const canCompletePicking = pickTicket &&
+  const canCompletePicking = mayPick && pickTicket &&
     ['picking', 'picked'].includes(pickTicket.status) &&
     !pickTicket.packingList;
 
   // Show "Create Packing List" button ONLY when status is exactly 'picked' AND no packing list exists
-  const canCreatePackingList = pickTicket &&
+  const canCreatePackingList = mayPack && pickTicket &&
     pickTicket.status === 'picked' &&
     !pickTicket.packingList;
 
@@ -209,7 +214,7 @@ export function ViewPickTicketDrawer({
   };
 
   // Check if picking is active (can pick items)
-  const canPickItems = pickTicket && pickTicket.status === 'picking';
+  const canPickItems = mayPick && pickTicket && pickTicket.status === 'picking';
 
   // Calculate progress
   const totalQuantity = pickTicket?.items.reduce((sum, item) => sum + item.quantityToPick, 0) || 0;

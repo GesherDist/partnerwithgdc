@@ -27,9 +27,21 @@ import { ViewInventoryDrawer } from './ViewInventoryDrawer';
 import { AddMasterInventoryDialog } from '@/features/master-inventory/components/AddMasterInventoryDialog';
 import { useInventory } from '../hooks/useInventory';
 import { getInventoryStats, type InventoryStats } from '../actions';
+import { INVENTORY_PERMISSIONS } from '../lib/permissions';
 import type { InventoryListItem, InventoryListParams } from '../types';
+import { useAuthStore } from '@/shared/stores/auth.store';
 
 export function InventoryPageContent() {
+  // Permissions (only checked after hydration)
+  const { hasPermission } = useAuthStore();
+  const [hasMounted, setHasMounted] = useState(false);
+
+  useEffect(() => {
+    setHasMounted(true);
+  }, []);
+
+  const canUpdateStock = hasMounted && hasPermission(INVENTORY_PERMISSIONS.updateStock);
+
   // State
   const [params, setParams] = useState<InventoryListParams>({
     page: 1,
@@ -250,10 +262,12 @@ export function InventoryPageContent() {
             <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
-          <Button size="sm" onClick={() => setIsAddDrawerOpen(true)}>
-            <Plus className="h-4 w-4 mr-2" />
-            Update Stock
-          </Button>
+          {canUpdateStock && (
+            <Button size="sm" onClick={() => setIsAddDrawerOpen(true)}>
+              <Plus className="h-4 w-4 mr-2" />
+              Update Stock
+            </Button>
+          )}
         </div>
       </div>
 
@@ -275,7 +289,7 @@ export function InventoryPageContent() {
           data={data}
           isLoading={isLoading}
           onView={handleView}
-          onAdjust={handleAdjust}
+          onAdjust={canUpdateStock ? handleAdjust : undefined}
           onRowClick={handleView}
         />
       )}

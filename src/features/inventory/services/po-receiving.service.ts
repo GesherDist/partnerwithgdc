@@ -24,8 +24,18 @@ import { inventoryService } from './inventory.service';
 /** Virtual location used to track GDC inventory POs; never holds physical stock. */
 const GDC_INV_LOCATION_CODE = 'GDC-INV';
 
-/** PO statuses from which goods can be received. */
+/** PO statuses from which goods are received automatically (shipment delivered). */
 const RECEIVABLE_PO_STATUSES = ['confirmed', 'in_production', 'ready_to_ship', 'in_transit', 'partial', 'received'];
+
+/**
+ * Manual "Receive into Warehouse": any PO the supplier has confirmed, whatever
+ * its later status (e.g. Invoiced, Sold, Available). Ankur, Nov 4 2026: stock
+ * must be right regardless of the status. Only the pending qty can be received.
+ */
+const NOT_RECEIVABLE_PO_STATUSES = ['draft', 'sent', 'cancelled'];
+export function isManuallyReceivablePoStatus(status: string): boolean {
+  return !NOT_RECEIVABLE_PO_STATUSES.includes(status);
+}
 
 export type ReceivingMode = 'stock' | 'allocated' | 'dropship';
 
@@ -282,7 +292,7 @@ export const poReceivingService = {
       const defaultLocationId = preferred && locationIds.has(preferred) ? preferred : null;
 
       let blockedReason: string | undefined;
-      if (!RECEIVABLE_PO_STATUSES.includes(po.status)) {
+      if (!isManuallyReceivablePoStatus(po.status)) {
         blockedReason = `Purchase order is ${po.status}; it must be confirmed before goods can be received`;
       } else if (!receivingItems.some((i) => i.isStockItem && i.pending > 0)) {
         blockedReason = 'All tires on this purchase order have already been received';
@@ -319,7 +329,7 @@ export const poReceivingService = {
       if (!po || po.deleted_at) {
         return { success: false, error: 'Purchase order not found' };
       }
-      if (!RECEIVABLE_PO_STATUSES.includes(po.status)) {
+      if (!isManuallyReceivablePoStatus(po.status)) {
         return { success: false, error: `Purchase order is ${po.status}; it must be confirmed before goods can be received` };
       }
 

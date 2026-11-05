@@ -99,21 +99,17 @@ interface WarehouseMove {
 /**
  * Where this PO's received tires are in stock now, from its inventory movements
  * (receive + transfers referencing the PO), and what has to move to the new warehouse.
+ *
+ * Only tires sitting in the PO's OLD warehouse move (the container was re-routed).
+ * Tires received into another warehouse stay where they physically are, e.g. a
+ * GDC Inventory PO received into Kansas keeps those tires in Kansas when the PO
+ * warehouse is later set to Nebraska.
  */
-async function planWarehouseMove(poId: string, toLocationId: string | null): Promise<WarehouseMove | { error: string }> {
-  if (!toLocationId) {
-    return { error: 'Tires of this PO are already received into stock, so it needs a warehouse. Select the warehouse they are in now.' };
-  }
-
-  const { data: location } = await db
-    .from('locations')
-    .select('id, location_code, location_type')
-    .eq('id', toLocationId)
-    .maybeSingle();
-  if (!location || location.location_type !== 'warehouse' || location.location_code === 'GDC-INV') {
-    return { error: 'Received tires can only move to a physical warehouse (not GDC Inventory).' };
-  }
-
+async function planWarehouseMove(
+  poId: string,
+  fromLocationId: string | null,
+  toLocationId: string | null
+): Promise<WarehouseMove | { error: string }> {
   const [{ data: movements, error }, { data: items }] = await Promise.all([
     db
       .from('inventory_movements')
@@ -143,9 +139,31 @@ async function planWarehouseMove(poId: string, toLocationId: string | null): Pro
   const trackedQty = inStock.reduce((t, r) => t + r.quantity, 0);
   const receivedQty = (items || []).reduce((t, i) => t + Number(i.quantity_received ?? 0), 0);
 
-  const moves: StockMove[] = inStock
-    .filter((r) => r.locationId !== toLocationId)
-    .map((r) => ({ productId: r.productId, fromLocationId: r.locationId, toLocationId, quantity: r.quantity }));
+  const toMove = inStock.filter((r) => !!fromLocationId && r.locationId === fromLocationId && r.locationId !== toLocationId);
+  const untrackedQty = Math.max(0, receivedQty - trackedQty);
+  if (toMove.length === 0) {
+    return { toLocationId: toLocationId ?? '', moves: [], untrackedQty };
+  }
+
+  // Tires in the old warehouse need a real warehouse to go to
+  if (!toLocationId) {
+    return { error: 'Tires of this PO are already received into its warehouse, so it needs a warehouse. Select the warehouse they are in now.' };
+  }
+  const { data: location } = await db
+    .from('locations')
+    .select('id, location_code, location_type')
+    .eq('id', toLocationId)
+    .maybeSingle();
+  if (!location || location.location_type !== 'warehouse' || location.location_code === 'GDC-INV') {
+    return { error: 'Received tires can only move to a physical warehouse (not GDC Inventory).' };
+  }
+
+  const moves: StockMove[] = toMove.map((r) => ({
+    productId: r.productId,
+    fromLocationId: r.locationId,
+    toLocationId,
+    quantity: r.quantity,
+  }));
 
   // Every source must have the tires free (not allocated to orders) before any move
   for (const move of moves) {
@@ -165,7 +183,7 @@ async function planWarehouseMove(poId: string, toLocationId: string | null): Pro
     }
   }
 
-  return { toLocationId, moves, untrackedQty: Math.max(0, receivedQty - trackedQty) };
+  return { toLocationId, moves, untrackedQty };
 }
 
 function reverseStockMoves(moves: StockMove[]): StockMove[] {
@@ -498,14 +516,15 @@ export const purchaseOrderService = {
         }
       }
 
-      // Warehouse: tires already received from this PO move with it to the new
-      // warehouse (stock transfer). Checked here, applied after the PO saves.
+      // Warehouse: tires already received into the PO's old warehouse move with it
+      // to the new warehouse (stock transfer); tires received elsewhere stay put.
+      // Checked here, applied before the PO saves (and undone if the save fails).
       const newWarehouseId = validation.data.warehouseId;
       let warehouseMove: WarehouseMove | null = null;
       if (newWarehouseId !== undefined && (newWarehouseId || null) !== (existing.warehouseId || null)) {
         const receivedQty = (existing.items ?? []).reduce((t, i) => t + Number(i.quantityReceived ?? 0), 0);
         if (receivedQty > 0) {
-          const plan = await planWarehouseMove(id, newWarehouseId || null);
+          const plan = await planWarehouseMove(id, existing.warehouseId || null, newWarehouseId || null);
           if ('error' in plan) {
             return { success: false, error: plan.error };
           }
@@ -536,8 +555,12 @@ export const purchaseOrderService = {
         throw error;
       }
 
-      if (warehouseMove) {
-        await moveContainerAllocations(id, existing.warehouseId || null, warehouseMove.toLocationId);
+      // Leftover container tires follow the PO to its new warehouse, also when
+      // nothing has been received yet (container re-routed while in transit)
+      const warehouseChanged =
+        newWarehouseId !== undefined && (newWarehouseId || null) !== (existing.warehouseId || null);
+      if (warehouseChanged && newWarehouseId) {
+        await moveContainerAllocations(id, existing.warehouseId || null, newWarehouseId);
       }
 
       if (newItems && newItems.length > 0) {

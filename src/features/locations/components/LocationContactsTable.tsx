@@ -52,6 +52,8 @@ import {
 import type { LocationContactsTableProps } from '../types';
 import type { LocationContact } from '../repositories/location-contacts.repository';
 import { getLocationContacts, deleteLocationContact } from '../actions/location-contacts';
+import { LOCATION_PERMISSIONS } from '../lib/permissions';
+import { useAuthStore } from '@/shared/stores/auth.store';
 import { AddLocationContactDialog } from './AddLocationContactDialog';
 import { EditLocationContactDialog } from './EditLocationContactDialog';
 
@@ -63,6 +65,8 @@ export function LocationContactsTable({ locationId }: LocationContactsTableProps
   const [contacts, setContacts] = useState<LocationContact[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { hasPermission } = useAuthStore();
+  const canManage = hasPermission(LOCATION_PERMISSIONS.manageContacts);
 
   // Dialog states
   const [addDialogOpen, setAddDialogOpen] = useState(false);
@@ -172,10 +176,12 @@ export function LocationContactsTable({ locationId }: LocationContactsTableProps
             {contacts.length} {contacts.length === 1 ? 'contact' : 'contacts'}
           </span>
         </div>
-        <Button size="sm" onClick={() => setAddDialogOpen(true)}>
-          <UserPlus className="mr-2 h-4 w-4" />
-          Add Contact
-        </Button>
+        {canManage && (
+          <Button size="sm" onClick={() => setAddDialogOpen(true)}>
+            <UserPlus className="mr-2 h-4 w-4" />
+            Add Contact
+          </Button>
+        )}
       </div>
 
       {/* Empty State */}
@@ -186,10 +192,12 @@ export function LocationContactsTable({ locationId }: LocationContactsTableProps
           <p className="text-sm text-muted-foreground mb-4">
             Add contacts who will receive pick ticket emails.
           </p>
-          <Button size="sm" onClick={() => setAddDialogOpen(true)}>
-            <UserPlus className="mr-2 h-4 w-4" />
-            Add Contact
-          </Button>
+          {canManage && (
+            <Button size="sm" onClick={() => setAddDialogOpen(true)}>
+              <UserPlus className="mr-2 h-4 w-4" />
+              Add Contact
+            </Button>
+          )}
         </div>
       ) : (
         /* Contacts Table */
@@ -238,27 +246,29 @@ export function LocationContactsTable({ locationId }: LocationContactsTableProps
                     )}
                   </TableCell>
                   <TableCell>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon" className="h-8 w-8">
-                          <MoreHorizontal className="h-4 w-4" />
-                          <span className="sr-only">Open menu</span>
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => handleEdit(contact)}>
-                          <Pencil className="mr-2 h-4 w-4" />
-                          Edit
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => handleDeleteClick(contact)}
-                          className="text-destructive"
-                        >
-                          <Trash2 className="mr-2 h-4 w-4" />
-                          Delete
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                    {canManage && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon" className="h-8 w-8">
+                            <MoreHorizontal className="h-4 w-4" />
+                            <span className="sr-only">Open menu</span>
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => handleEdit(contact)}>
+                            <Pencil className="mr-2 h-4 w-4" />
+                            Edit
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => handleDeleteClick(contact)}
+                            className="text-destructive"
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}

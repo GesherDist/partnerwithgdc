@@ -231,6 +231,8 @@ export interface CreateQuoteDTO {
 }
 
 export interface UpdateQuoteDTO {
+  /** Custom quote number; must stay unique */
+  quoteNumber?: string;
   quoteDate?: Date;
   validUntil?: Date | null;
   customerId?: string;

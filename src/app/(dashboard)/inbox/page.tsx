@@ -2,10 +2,13 @@
  * Inbox Page
  *
  * Displays list of inbound emails received via Postmark.
+ * Server component wrapper for permission check, then renders client component.
  */
 
 import { Suspense } from 'react';
 import { Metadata } from 'next';
+import { redirect } from 'next/navigation';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth/check-permission';
 import { InboxContent } from './inbox-content';
 
 export const metadata: Metadata = {
@@ -13,7 +16,18 @@ export const metadata: Metadata = {
   description: 'View and manage inbound emails',
 };
 
-export default function InboxPage() {
+// ============================================
+// SERVER COMPONENT - Permission Check
+// ============================================
+
+export default async function InboxPage() {
+  // Server-side permission check
+  const user = await getCurrentUser();
+
+  if (!user || !hasPermission(user, 'inbox.view_module')) {
+    redirect('/no-permission');
+  }
+
   return (
     <Suspense fallback={<InboxSkeleton />}>
       <InboxContent />

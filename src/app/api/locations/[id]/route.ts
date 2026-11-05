@@ -19,6 +19,8 @@ import {
   noContentResponse,
 } from '@/shared/lib/api/response';
 import { createClient } from '@/shared/lib/supabase/server';
+import { requirePermission } from '@/shared/lib/auth/check-permission';
+import { LOCATION_PERMISSIONS } from '@/features/locations/lib/permissions';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -73,7 +75,10 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
       return unauthorizedResponse('Authentication required');
     }
 
-    // TODO: Check permission (locations.edit)
+    const guard = await requirePermission(LOCATION_PERMISSIONS.edit);
+    if (guard.response) {
+      return guard.response;
+    }
 
     // Parse request body
     const body = await request.json();
@@ -120,7 +125,10 @@ export async function DELETE(_request: NextRequest, { params }: RouteParams) {
       return unauthorizedResponse('Authentication required');
     }
 
-    // TODO: Check permission (locations.delete)
+    const guard = await requirePermission(LOCATION_PERMISSIONS.delete);
+    if (guard.response) {
+      return guard.response;
+    }
 
     // Delete location
     const result = await locationService.delete(id, user.id);

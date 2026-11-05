@@ -8,7 +8,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { db } from '@/shared/lib/supabase/database';
-import { getCurrentUser } from '@/shared/lib/auth';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
 import { auditService } from '@/shared/lib/audit';
 import { logDealerInventoryMovement } from '@/features/inventory/services/inventory-movement.service';
 import {
@@ -40,6 +40,7 @@ import type {
   UpdatePlatinumDealerLocationDTO,
   PlatinumDealerInventoryFilters,
 } from '@/features/platinum-dealers/types';
+import { DEALER_PERMISSIONS } from '../lib/permissions';
 
 // ============================================
 // TYPES
@@ -49,6 +50,28 @@ interface ActionResult<T = void> {
   success: boolean;
   data?: T;
   error?: string;
+}
+
+// ============================================
+// AUTHORIZATION HELPER
+// ============================================
+
+/**
+ * Returns an error result when the caller is not signed in or lacks the
+ * permission (see DEALER_PERMISSIONS), otherwise null.
+ */
+async function denyUnless(permission: string): Promise<ActionResult<never> | null> {
+  const user = await getCurrentUser();
+
+  if (!user) {
+    return { success: false, error: 'Authentication required' };
+  }
+
+  if (!hasPermission(user, permission)) {
+    return { success: false, error: `Permission denied: ${permission}` };
+  }
+
+  return null;
 }
 
 // ============================================
@@ -70,6 +93,10 @@ interface ActionResult<T = void> {
 export async function createDealerAction(
   params: CreatePlatinumDealerDTO
 ): Promise<ActionResult<PlatinumDealer>> {
+  const denied = await denyUnless(DEALER_PERMISSIONS.create);
+  if (denied) {
+    return denied;
+  }
   try {
     const { data, error } = await createDealer(params);
 
@@ -107,6 +134,10 @@ export async function getAllDealersAction(filters?: {
   status?: DealerStatus;
   search?: string;
 }): Promise<ActionResult<PlatinumDealer[]>> {
+  const denied = await denyUnless(DEALER_PERMISSIONS.read);
+  if (denied) {
+    return denied;
+  }
   try {
     const { data, error } = await getAllDealers(filters);
 
@@ -137,6 +168,10 @@ export async function getAllDealersAction(filters?: {
 export async function getDealerByIdAction(
   dealerId: string
 ): Promise<ActionResult<PlatinumDealer>> {
+  const denied = await denyUnless(DEALER_PERMISSIONS.read);
+  if (denied) {
+    return denied;
+  }
   try {
     const { data, error } = await getDealerById(dealerId);
 
@@ -174,6 +209,10 @@ export async function updateDealerAction(
   dealerId: string,
   params: UpdatePlatinumDealerDTO
 ): Promise<ActionResult<PlatinumDealer>> {
+  const denied = await denyUnless(DEALER_PERMISSIONS.update);
+  if (denied) {
+    return denied;
+  }
   try {
     const { data, error } = await updateDealer(dealerId, params);
 
@@ -204,6 +243,10 @@ export async function updateDealerAction(
 export async function deleteDealerAction(
   dealerId: string
 ): Promise<ActionResult> {
+  const denied = await denyUnless(DEALER_PERMISSIONS.delete);
+  if (denied) {
+    return denied;
+  }
   try {
     const { error } = await deleteDealer(dealerId);
 
@@ -245,6 +288,10 @@ export async function deleteDealerAction(
 export async function createDealerLocationAction(
   params: CreatePlatinumDealerLocationDTO
 ): Promise<ActionResult<PlatinumDealerLocation>> {
+  const denied = await denyUnless(DEALER_PERMISSIONS.create);
+  if (denied) {
+    return denied;
+  }
   try {
     const { data, error } = await createDealerLocation(params);
 
@@ -275,6 +322,10 @@ export async function createDealerLocationAction(
 export async function getLocationsByDealerIdAction(
   dealerId: string
 ): Promise<ActionResult<PlatinumDealerLocation[]>> {
+  const denied = await denyUnless(DEALER_PERMISSIONS.read);
+  if (denied) {
+    return denied;
+  }
   try {
     const { data, error } = await getLocationsByDealerId(dealerId);
 
@@ -305,6 +356,10 @@ export async function getLocationsByDealerIdAction(
 export async function getDealerLocationByIdAction(
   locationId: string
 ): Promise<ActionResult<PlatinumDealerLocation>> {
+  const denied = await denyUnless(DEALER_PERMISSIONS.read);
+  if (denied) {
+    return denied;
+  }
   try {
     const { data, error } = await getDealerLocationById(locationId);
 
@@ -336,6 +391,10 @@ export async function updateDealerLocationAction(
   locationId: string,
   params: UpdatePlatinumDealerLocationDTO
 ): Promise<ActionResult<PlatinumDealerLocation>> {
+  const denied = await denyUnless(DEALER_PERMISSIONS.update);
+  if (denied) {
+    return denied;
+  }
   try {
     const { data, error } = await updateDealerLocation(locationId, params);
 
@@ -366,6 +425,10 @@ export async function updateDealerLocationAction(
 export async function deleteDealerLocationAction(
   locationId: string
 ): Promise<ActionResult> {
+  const denied = await denyUnless(DEALER_PERMISSIONS.update);
+  if (denied) {
+    return denied;
+  }
   try {
     const { error } = await deleteDealerLocation(locationId);
 
@@ -408,6 +471,10 @@ export async function getDealerInventoryAction(params: {
   dealerLocationId: string;
   productId: string;
 }): Promise<ActionResult<PlatinumDealerInventory>> {
+  const denied = await denyUnless(DEALER_PERMISSIONS.read);
+  if (denied) {
+    return denied;
+  }
   try {
     const { data, error } = await getDealerInventory(params);
 
@@ -439,6 +506,10 @@ export async function getAllInventoryForDealerAction(
   dealerId: string,
   filters?: PlatinumDealerInventoryFilters
 ): Promise<ActionResult<PlatinumDealerInventoryWithDetails[]>> {
+  const denied = await denyUnless(DEALER_PERMISSIONS.read);
+  if (denied) {
+    return denied;
+  }
   try {
     const { data, error } = await getAllInventoryForDealer(dealerId, filters);
 
@@ -481,6 +552,10 @@ export async function updateDealerInventoryAction(params: {
   productId: string;
   onHand: number;
 }): Promise<ActionResult<PlatinumDealerInventory>> {
+  const denied = await denyUnless(DEALER_PERMISSIONS.update);
+  if (denied) {
+    return denied;
+  }
   try {
     const user = await getCurrentUser();
     if (!user) {
@@ -630,6 +705,10 @@ export async function deleteDealerInventoryAction(params: {
   dealerLocationId: string;
   productId: string;
 }): Promise<ActionResult> {
+  const denied = await denyUnless(DEALER_PERMISSIONS.update);
+  if (denied) {
+    return denied;
+  }
   try {
     const { success, error } = await deleteDealerInventory(params);
 
@@ -679,6 +758,10 @@ export async function checkDealerInventoryAvailableAction(params: {
     availableQty: number;
   }>
 > {
+  const denied = await denyUnless(DEALER_PERMISSIONS.read);
+  if (denied) {
+    return denied;
+  }
   try {
     const result = await checkDealerInventoryAvailable(params);
 
@@ -713,6 +796,10 @@ export async function checkDealerInventoryAvailableAction(params: {
 export async function getDealerAllocationsAction(
   dealerId: string
 ): Promise<ActionResult<any[]>> {
+  const denied = await denyUnless(DEALER_PERMISSIONS.read);
+  if (denied) {
+    return denied;
+  }
   try {
     const { getAllocationsByDealer } = await import(
       '@/features/sales-orders/repositories/fulfillment-allocations.repository'
@@ -754,6 +841,10 @@ export async function updateAllocationStatusAction(params: {
   allocationId: string;
   status: 'pending' | 'allocated' | 'partially_fulfilled' | 'fulfilled' | 'cancelled';
 }): Promise<ActionResult<any>> {
+  const denied = await denyUnless(DEALER_PERMISSIONS.allocationWrite);
+  if (denied) {
+    return denied;
+  }
   try {
     const { updateAllocation } = await import(
       '@/features/sales-orders/repositories/fulfillment-allocations.repository'

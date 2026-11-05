@@ -977,7 +977,7 @@ function createGDC1InventorySheet(workbook: ExcelJS.Workbook, data: OperationsDa
 
 export async function GET(request: NextRequest) {
   try {
-    const guard = await requirePermission('dashboard.view_module');
+    const guard = await requirePermission('operations_dashboard.view_module');
     if (guard.response) {return guard.response;}
 
     const searchParams = request.nextUrl.searchParams;

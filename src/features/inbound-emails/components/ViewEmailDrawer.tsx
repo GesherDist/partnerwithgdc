@@ -35,6 +35,8 @@ import {
   reprocessAsShippingEmail,
 } from '@/features/inbound-emails/actions';
 import { isSeairEmail, describeShippingResult } from '@/features/inbound-emails/lib/shipping-email';
+import { INBOX_PERMISSIONS } from '@/features/inbound-emails/lib/permissions';
+import { useAuthStore } from '@/shared/stores/auth.store';
 import type {
   InboundEmail,
   InboundEmailWithAttachments,
@@ -66,9 +68,11 @@ interface ViewEmailDrawerProps {
 function AttachmentItem({
   attachment,
   onExtract,
+  canCreateQuote,
 }: {
   attachment: InboundEmailAttachment;
   onExtract: (attachment: InboundEmailAttachment) => void;
+  canCreateQuote: boolean;
 }) {
   const [downloading, setDownloading] = useState(false);
 
@@ -134,7 +138,7 @@ function AttachmentItem({
             <Download className="h-4 w-4" />
           )}
         </Button>
-        {attachment.is_pdf && !attachment.quote_id && (
+        {canCreateQuote && attachment.is_pdf && !attachment.quote_id && (
           <Button
             size="sm"
             onClick={() => onExtract(attachment)}
@@ -173,6 +177,9 @@ export function ViewEmailDrawer({
   const [selectedAttachment, setSelectedAttachment] = useState<InboundEmailAttachment | null>(null);
   const [attachmentUrl, setAttachmentUrl] = useState<string | null>(null);
   const [processingShipping, setProcessingShipping] = useState(false);
+  const { hasPermission } = useAuthStore();
+  const canCreateQuote = hasPermission(INBOX_PERMISSIONS.createQuote);
+  const canProcessShipping = hasPermission(INBOX_PERMISSIONS.processShipping);
 
   // Fetch email details when opened
   useEffect(() => {
@@ -314,7 +321,7 @@ export function ViewEmailDrawer({
                 </div>
 
                 {/* SEAIR emails that reached the Inbox can be run as shipping updates */}
-                {isSeairEmail(emailDetails.from_email) && emailDetails.to_local_part !== 'shipping' && (
+                {canProcessShipping && isSeairEmail(emailDetails.from_email) && emailDetails.to_local_part !== 'shipping' && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -346,6 +353,7 @@ export function ViewEmailDrawer({
                         key={attachment.id}
                         attachment={attachment}
                         onExtract={handleExtractPO}
+                        canCreateQuote={canCreateQuote}
                       />
                     ))}
                   </div>

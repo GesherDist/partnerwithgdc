@@ -59,6 +59,8 @@ import type { PlatinumDealerInventoryWithDetails } from '@/features/platinum-dea
 import type { PlatinumDealerLocation } from '@/features/platinum-dealers/types';
 import { AdjustDealerInventoryDialog } from './adjust-dealer-inventory-dialog';
 import { AddDealerInventoryDialog } from './add-dealer-inventory-dialog';
+import { DEALER_PERMISSIONS } from '@/features/platinum-dealers/lib/permissions';
+import { useAuthStore } from '@/shared/stores/auth.store';
 
 // ============================================
 // TYPES
@@ -81,6 +83,8 @@ export function ViewLocationInventoryDrawer({
 }: ViewLocationInventoryDrawerProps) {
   const [inventory, setInventory] = useState<PlatinumDealerInventoryWithDetails[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const { hasPermission } = useAuthStore();
+  const canEditInventory = hasPermission(DEALER_PERMISSIONS.update);
   const [error, setError] = useState<string | null>(null);
 
   // Dialog states
@@ -229,10 +233,12 @@ export function ViewLocationInventoryDrawer({
                   <p className="text-sm text-muted-foreground mb-4">
                     This location doesn't have any inventory yet.
                   </p>
-                  <Button onClick={handleAdd}>
-                    <Plus className="mr-2 h-4 w-4" />
-                    Add Inventory
-                  </Button>
+                  {canEditInventory && (
+                    <Button onClick={handleAdd}>
+                      <Plus className="mr-2 h-4 w-4" />
+                      Add Inventory
+                    </Button>
+                  )}
                 </div>
               ) : (
                 /* Inventory Table */
@@ -245,10 +251,12 @@ export function ViewLocationInventoryDrawer({
                         {inventory.length} {inventory.length === 1 ? 'product' : 'products'}
                       </span>
                     </div>
-                    <Button size="sm" onClick={handleAdd}>
-                      <Plus className="mr-2 h-4 w-4" />
-                      Add Inventory
-                    </Button>
+                    {canEditInventory && (
+                      <Button size="sm" onClick={handleAdd}>
+                        <Plus className="mr-2 h-4 w-4" />
+                        Add Inventory
+                      </Button>
+                    )}
                   </div>
 
                   {/* Table */}
@@ -300,6 +308,7 @@ export function ViewLocationInventoryDrawer({
                               </Badge>
                             </TableCell>
                             <TableCell>
+                              {canEditInventory && (
                               <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
                                   <Button variant="ghost" size="icon" className="h-8 w-8">
@@ -321,6 +330,7 @@ export function ViewLocationInventoryDrawer({
                                   </DropdownMenuItem>
                                 </DropdownMenuContent>
                               </DropdownMenu>
+                              )}
                             </TableCell>
                           </TableRow>
                         ))}

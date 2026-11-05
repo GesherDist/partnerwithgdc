@@ -10,8 +10,8 @@
  */
 
 import { revalidatePath } from 'next/cache';
-import { getCurrentUser, hasAnyPermission, hasPermission } from '@/shared/lib/auth';
-import { DASHBOARD_TAB_PERMISSIONS, EXECUTIVE_TAB_PERMISSIONS } from '@/features/dashboard/lib/dashboard-tabs';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
+import { DASHBOARD_TAB_PERMISSIONS } from '@/features/dashboard/lib/dashboard-tabs';
 import { getConnectionByProvider } from '@/modules/integrations/core';
 import {
   getLatestSnapshot,
@@ -67,8 +67,8 @@ export async function ensureFreshQuickBooksFinancials(): Promise<Result<{ financ
   if (!user) {
     return { success: false, error: 'Authentication required' };
   }
-  if (!hasAnyPermission(user, EXECUTIVE_TAB_PERMISSIONS)) {
-    return { success: false, error: 'Permission denied: dashboard tabs' };
+  if (!hasPermission(user, 'dashboard.view_financials')) {
+    return { success: false, error: 'Permission denied: dashboard.view_financials' };
   }
   // The figures go back only to users who may see the Financial Metrics tab
   const canSeeFigures = hasPermission(user, DASHBOARD_TAB_PERMISSIONS.financial);
@@ -107,7 +107,7 @@ export async function syncQuickBooksFinancialsNow(): Promise<Result<{ financials
   if (!user) {
     return { success: false, error: 'Authentication required' };
   }
-  if (!hasAnyPermission(user, ['settings.edit', 'integrations.manage'])) {
+  if (!hasPermission(user, 'integrations.manage')) {
     return { success: false, error: 'Permission denied: settings.edit' };
   }
 

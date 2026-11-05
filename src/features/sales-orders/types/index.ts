@@ -137,6 +137,10 @@ export const PRODUCT_SOURCE_DESCRIPTIONS: Record<ProductSource, string> = {
 // Statuses that allow editing
 export const EDITABLE_ORDER_STATUSES: OrderStatus[] = ['draft', 'pending'];
 
+// Statuses where only line prices (unit price, discount, tax) can be changed;
+// product and quantity are locked once the order is confirmed
+export const PRICE_EDITABLE_ORDER_STATUSES: OrderStatus[] = ['confirmed', 'processing'];
+
 /**
  * Check if an order can be edited based on its status
  */

@@ -661,6 +661,42 @@ class SalesOrderRepositoryImpl {
   }
 
   /**
+   * Change only the price, discount and tax of existing lines (quantity and
+   * product stay as they are), then recalculate the order totals.
+   */
+  async updateItemPrices(
+    orderId: string,
+    prices: Array<{ itemId: string; unitPrice: number; discountPercent: number; taxRate: number }>,
+    userId?: string
+  ): Promise<void> {
+    const items = await this.findItemsByOrderId(orderId);
+    const byId = new Map(items.map((item) => [item.id, item]));
+
+    for (const price of prices) {
+      const item = byId.get(price.itemId);
+      if (!item) {
+        throw new Error('Item does not belong to this order');
+      }
+      const { error } = await db
+        .from('sales_order_items')
+        .update({
+          unit_price: price.unitPrice,
+          discount_percent: price.discountPercent,
+          tax_rate: price.taxRate,
+          line_total: calculateLineTotal(item.quantity, price.unitPrice, price.discountPercent),
+          updated_by: userId || null,
+        })
+        .eq('id', price.itemId)
+        .eq('sales_order_id', orderId);
+      if (error) {
+        throw new Error(`Failed to update item ${item.sku}: ${error.message}`);
+      }
+    }
+
+    await this.recalculateTotals(orderId, userId);
+  }
+
+  /**
    * Recalculate order totals
    */
   async recalculateTotals(id: string, userId?: string): Promise<SalesOrder> {

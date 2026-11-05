@@ -9,8 +9,10 @@
 import { revalidatePath } from 'next/cache';
 import { inventoryService } from '../services/inventory.service';
 import { createClient } from '@/shared/lib/supabase/server';
-import { getCurrentUser } from '@/shared/lib/auth';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
+import type { AppUser } from '@/shared/stores/auth.store';
 import { getPipelineQuantities } from '../services/pipeline-quantities';
+import { INVENTORY_PERMISSIONS } from '../lib/permissions';
 import type {
   InventoryListParams,
   CreateInventoryDTO,
@@ -19,28 +21,29 @@ import type {
 } from '../types';
 
 // ============================================
-// HELPER: Get current user ID
+// AUTHORIZATION HELPER
 // ============================================
 
-async function getCurrentUserId(): Promise<string | undefined> {
-  try {
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+type AuthorizeResult =
+  | { ok: true; user: AppUser }
+  | { ok: false; result: { success: false; error: string } };
 
-    if (!user) {return undefined;}
+/**
+ * Resolve the current application user and verify that they hold the
+ * permission (see INVENTORY_PERMISSIONS).
+ */
+async function authorize(permission: string): Promise<AuthorizeResult> {
+  const user = await getCurrentUser();
 
-    const { data } = await supabase
-      .from('users')
-      .select('id')
-      .eq('auth_user_id', user.id)
-      .single();
-
-    return data?.id;
-  } catch {
-    return undefined;
+  if (!user) {
+    return { ok: false, result: { success: false, error: 'Authentication required' } };
   }
+
+  if (!hasPermission(user, permission)) {
+    return { ok: false, result: { success: false, error: `Permission denied: ${permission}` } };
+  }
+
+  return { ok: true, user };
 }
 
 // ============================================
@@ -48,6 +51,11 @@ async function getCurrentUserId(): Promise<string | undefined> {
 // ============================================
 
 export async function listInventory(params: InventoryListParams = {}) {
+  const auth = await authorize(INVENTORY_PERMISSIONS.read);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   const result = await inventoryService.list(params);
   return result;
 }
@@ -57,6 +65,11 @@ export async function listInventory(params: InventoryListParams = {}) {
 // ============================================
 
 export async function getInventory(id: string) {
+  const auth = await authorize(INVENTORY_PERMISSIONS.read);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   const result = await inventoryService.getById(id);
   return result;
 }
@@ -65,11 +78,21 @@ export async function getInventoryByProductAndLocation(
   productId: string,
   locationId: string
 ) {
+  const auth = await authorize(INVENTORY_PERMISSIONS.read);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   const result = await inventoryService.getByProductAndLocation(productId, locationId);
   return result;
 }
 
 export async function getInventoryByProductIds(productIds: string[]) {
+  const auth = await authorize(INVENTORY_PERMISSIONS.read);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   const result = await inventoryService.getByProductIds(productIds);
   return result;
 }
@@ -79,10 +102,11 @@ export async function getInventoryByProductIds(productIds: string[]) {
 // ============================================
 
 export async function createInventory(data: CreateInventoryDTO) {
-  const user = await getCurrentUser();
-  if (!user) {
-    return { success: false as const, error: 'Authentication required' };
+  const auth = await authorize(INVENTORY_PERMISSIONS.adjust);
+  if (!auth.ok) {
+    return auth.result;
   }
+  const user = auth.user;
 
   const result = await inventoryService.create(data, user.id, {
     userEmail: user.email,
@@ -102,7 +126,11 @@ export async function createInventory(data: CreateInventoryDTO) {
 // ============================================
 
 export async function updateInventory(id: string, data: UpdateInventoryDTO) {
-  const userId = await getCurrentUserId();
+  const auth = await authorize(INVENTORY_PERMISSIONS.adjust);
+  if (!auth.ok) {
+    return auth.result;
+  }
+  const userId = auth.user.id;
   const result = await inventoryService.update(id, data, userId);
 
   if (result.success) {
@@ -118,7 +146,11 @@ export async function updateInventory(id: string, data: UpdateInventoryDTO) {
 // ============================================
 
 export async function adjustInventory(id: string, adjustment: number) {
-  const userId = await getCurrentUserId();
+  const auth = await authorize(INVENTORY_PERMISSIONS.adjust);
+  if (!auth.ok) {
+    return auth.result;
+  }
+  const userId = auth.user.id;
   const result = await inventoryService.adjust(id, adjustment, userId);
 
   if (result.success) {
@@ -134,7 +166,11 @@ export async function adjustInventory(id: string, adjustment: number) {
 // ============================================
 
 export async function allocateInventory(id: string, quantity: number) {
-  const userId = await getCurrentUserId();
+  const auth = await authorize(INVENTORY_PERMISSIONS.allocate);
+  if (!auth.ok) {
+    return auth.result;
+  }
+  const userId = auth.user.id;
   const result = await inventoryService.allocate(id, quantity, userId);
 
   if (result.success) {
@@ -146,7 +182,11 @@ export async function allocateInventory(id: string, quantity: number) {
 }
 
 export async function deallocateInventory(id: string, quantity: number) {
-  const userId = await getCurrentUserId();
+  const auth = await authorize(INVENTORY_PERMISSIONS.allocate);
+  if (!auth.ok) {
+    return auth.result;
+  }
+  const userId = auth.user.id;
   const result = await inventoryService.deallocate(id, quantity, userId);
 
   if (result.success) {
@@ -162,6 +202,11 @@ export async function deallocateInventory(id: string, quantity: number) {
 // ============================================
 
 export async function deleteInventory(id: string) {
+  const auth = await authorize(INVENTORY_PERMISSIONS.delete);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   const result = await inventoryService.delete(id);
 
   if (result.success) {
@@ -176,6 +221,11 @@ export async function deleteInventory(id: string) {
 // ============================================
 
 export async function getLowStockItems() {
+  const auth = await authorize(INVENTORY_PERMISSIONS.read);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   const result = await inventoryService.getLowStockItems();
   return result;
 }
@@ -196,6 +246,11 @@ export interface InventoryStats {
  *   plus POs marked in transit that have no moving shipment yet
  */
 export async function getInventoryStats(): Promise<{ success: boolean; data?: InventoryStats; error?: string }> {
+  const auth = await authorize(INVENTORY_PERMISSIONS.read);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   try {
     const supabase = await createClient();
 
@@ -232,6 +287,11 @@ export async function getInventoryAllocations(
   locationId: string,
   sourceType: 'warehouse' | 'dealer' = 'warehouse'
 ): Promise<{ success: boolean; data?: InventoryAllocationDetail[]; error?: string }> {
+  const auth = await authorize(INVENTORY_PERMISSIONS.read);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   try {
     const supabase = await createClient();
 

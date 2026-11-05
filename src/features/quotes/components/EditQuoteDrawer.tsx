@@ -145,6 +145,8 @@ export function EditQuoteDrawer({ open, onClose, quoteId, onSuccess }: EditQuote
       // Update quote header
       const dto = formToCreateDTO(data);
       const headerResult = await updateQuoteFromData(quoteId, {
+        // Empty keeps the current number
+        quoteNumber: dto.quoteNumber,
         quoteDate: dto.quoteDate,
         validUntil: dto.validUntil,
         customerId: dto.customerId,

@@ -11,8 +11,9 @@ import { revalidatePath } from 'next/cache';
 import { locationService } from '../services/location.service';
 import { createLocationSchema, updateLocationSchema, locationFormSchema, formToCreateDTO } from '../lib/schemas';
 import type { LocationListParams, Location } from '../types';
-import { createClient } from '@/shared/lib/supabase/server';
-import { getAppUserByAuthId } from '@/shared/lib/auth';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
+import type { AppUser } from '@/shared/stores/auth.store';
+import { LOCATION_PERMISSIONS } from '../lib/permissions';
 
 // ============================================
 // TYPES
@@ -26,6 +27,42 @@ export interface ActionResult<T = unknown> {
 }
 
 // ============================================
+// AUTHORIZATION HELPER
+// ============================================
+
+type AuthorizeResult =
+  | { ok: true; user: AppUser }
+  | { ok: false; result: { success: false; error: string } };
+
+/**
+ * Resolve the current application user. Locations and their contacts are
+ * reference data, so reading them needs only a signed-in user.
+ */
+async function requireLogin(): Promise<AuthorizeResult> {
+  const user = await getCurrentUser();
+
+  if (!user) {
+    return { ok: false, result: { success: false, error: 'Authentication required' } };
+  }
+
+  return { ok: true, user };
+}
+
+/**
+ * Resolve the current application user and verify that they hold the
+ * permission (see LOCATION_PERMISSIONS).
+ */
+async function authorize(permission: string): Promise<AuthorizeResult> {
+  const auth = await requireLogin();
+
+  if (auth.ok && !hasPermission(auth.user, permission)) {
+    return { ok: false, result: { success: false, error: `Permission denied: ${permission}` } };
+  }
+
+  return auth;
+}
+
+// ============================================
 // LIST ACTIONS
 // ============================================
 
@@ -33,11 +70,9 @@ export interface ActionResult<T = unknown> {
  * Get paginated list of locations
  */
 export async function getLocations(params: LocationListParams = {}): Promise<ActionResult> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await requireLogin();
+  if (!auth.ok) {
+    return auth.result;
   }
 
   return locationService.list(params);
@@ -47,11 +82,9 @@ export async function getLocations(params: LocationListParams = {}): Promise<Act
  * Get a single location by ID
  */
 export async function getLocation(id: string): Promise<ActionResult<Location>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await requireLogin();
+  if (!auth.ok) {
+    return auth.result;
   }
 
   return locationService.getById(id);
@@ -61,11 +94,9 @@ export async function getLocation(id: string): Promise<ActionResult<Location>> {
  * Get a single location by code
  */
 export async function getLocationByCode(locationCode: string): Promise<ActionResult<Location>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await requireLogin();
+  if (!auth.ok) {
+    return auth.result;
   }
 
   return locationService.getByCode(locationCode);
@@ -75,11 +106,9 @@ export async function getLocationByCode(locationCode: string): Promise<ActionRes
  * Get all active locations (for dropdowns)
  */
 export async function getActiveLocations(): Promise<ActionResult<Location[]>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await requireLogin();
+  if (!auth.ok) {
+    return auth.result;
   }
 
   return locationService.getActiveLocations();
@@ -89,11 +118,9 @@ export async function getActiveLocations(): Promise<ActionResult<Location[]>> {
  * Get all locations with optional type filter (for allocation dialogs)
  */
 export async function getAllLocationsAction(params?: { type?: 'warehouse' | 'drop_ship' | 'virtual' }): Promise<ActionResult<Location[]>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await requireLogin();
+  if (!auth.ok) {
+    return auth.result;
   }
 
   // Get all active locations
@@ -119,11 +146,9 @@ export async function getAllLocationsAction(params?: { type?: 'warehouse' | 'dro
  * Get the default location
  */
 export async function getDefaultLocation(): Promise<ActionResult<Location | null>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await requireLogin();
+  if (!auth.ok) {
+    return auth.result;
   }
 
   return locationService.getDefault();
@@ -137,18 +162,11 @@ export async function getDefaultLocation(): Promise<ActionResult<Location | null
  * Create a new location
  */
 export async function createLocation(formData: FormData): Promise<ActionResult<Location>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(LOCATION_PERMISSIONS.create);
+  if (!auth.ok) {
+    return auth.result;
   }
-
-  // Get the internal user ID from public.users table
-  const appUser = await getAppUserByAuthId(user.id);
-  if (!appUser) {
-    return { success: false, error: 'User profile not found' };
-  }
+  const appUser = auth.user;
 
   // Parse form data
   const rawData = {
@@ -203,18 +221,11 @@ export async function createLocation(formData: FormData): Promise<ActionResult<L
  * Create location from JSON data (for programmatic use)
  */
 export async function createLocationFromData(data: unknown): Promise<ActionResult<Location>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(LOCATION_PERMISSIONS.create);
+  if (!auth.ok) {
+    return auth.result;
   }
-
-  // Get the internal user ID from public.users table
-  const appUser = await getAppUserByAuthId(user.id);
-  if (!appUser) {
-    return { success: false, error: 'User profile not found' };
-  }
+  const appUser = auth.user;
 
   // Validate
   const validation = createLocationSchema.safeParse(data);
@@ -240,18 +251,11 @@ export async function createLocationFromData(data: unknown): Promise<ActionResul
  * Update an existing location
  */
 export async function updateLocation(id: string, formData: FormData): Promise<ActionResult<Location>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(LOCATION_PERMISSIONS.edit);
+  if (!auth.ok) {
+    return auth.result;
   }
-
-  // Get the internal user ID from public.users table
-  const appUser = await getAppUserByAuthId(user.id);
-  if (!appUser) {
-    return { success: false, error: 'User profile not found' };
-  }
+  const appUser = auth.user;
 
   // Parse form data (only include fields that were submitted)
   const rawData: Record<string, unknown> = {};
@@ -296,18 +300,11 @@ export async function updateLocation(id: string, formData: FormData): Promise<Ac
  * Update location from JSON data (for programmatic use)
  */
 export async function updateLocationFromData(id: string, data: unknown): Promise<ActionResult<Location>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(LOCATION_PERMISSIONS.edit);
+  if (!auth.ok) {
+    return auth.result;
   }
-
-  // Get the internal user ID from public.users table
-  const appUser = await getAppUserByAuthId(user.id);
-  if (!appUser) {
-    return { success: false, error: 'User profile not found' };
-  }
+  const appUser = auth.user;
 
   // Validate
   const validation = updateLocationSchema.safeParse(data);
@@ -334,18 +331,11 @@ export async function updateLocationFromData(id: string, data: unknown): Promise
  * Soft delete a location
  */
 export async function deleteLocation(id: string): Promise<ActionResult<Location>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(LOCATION_PERMISSIONS.delete);
+  if (!auth.ok) {
+    return auth.result;
   }
-
-  // Get the internal user ID from public.users table
-  const appUser = await getAppUserByAuthId(user.id);
-  if (!appUser) {
-    return { success: false, error: 'User profile not found' };
-  }
+  const appUser = auth.user;
 
   const result = await locationService.delete(id, appUser.id);
 
@@ -361,18 +351,11 @@ export async function deleteLocation(id: string): Promise<ActionResult<Location>
  * Restore a soft-deleted location
  */
 export async function restoreLocation(id: string): Promise<ActionResult<Location>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(LOCATION_PERMISSIONS.delete);
+  if (!auth.ok) {
+    return auth.result;
   }
-
-  // Get the internal user ID from public.users table
-  const appUser = await getAppUserByAuthId(user.id);
-  if (!appUser) {
-    return { success: false, error: 'User profile not found' };
-  }
+  const appUser = auth.user;
 
   const result = await locationService.restore(id, appUser.id);
 
@@ -392,11 +375,9 @@ export async function restoreLocation(id: string): Promise<ActionResult<Location
  * Get location counts by type
  */
 export async function getLocationTypeCounts(): Promise<ActionResult<Record<string, number>>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await requireLogin();
+  if (!auth.ok) {
+    return auth.result;
   }
 
   return locationService.getTypeCounts();
@@ -406,11 +387,9 @@ export async function getLocationTypeCounts(): Promise<ActionResult<Record<strin
  * Validate location code uniqueness
  */
 export async function validateLocationCode(locationCode: string, excludeId?: string): Promise<ActionResult<boolean>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(LOCATION_PERMISSIONS.validate);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   return locationService.validateCode(locationCode, excludeId);
@@ -420,11 +399,9 @@ export async function validateLocationCode(locationCode: string, excludeId?: str
  * Get next auto-generated location code
  */
 export async function getNextLocationCode(): Promise<ActionResult<string>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(LOCATION_PERMISSIONS.create);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   return locationService.getNextCode();
@@ -434,18 +411,11 @@ export async function getNextLocationCode(): Promise<ActionResult<string>> {
  * Create a new location with auto-generated code
  */
 export async function createLocationWithAutoCode(data: unknown): Promise<ActionResult<Location>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(LOCATION_PERMISSIONS.create);
+  if (!auth.ok) {
+    return auth.result;
   }
-
-  // Get the internal user ID from public.users table
-  const appUser = await getAppUserByAuthId(user.id);
-  if (!appUser) {
-    return { success: false, error: 'User profile not found' };
-  }
+  const appUser = auth.user;
 
   // Validate (without locationCode requirement)
   const validation = createLocationSchema.omit({ locationCode: true }).safeParse(data);

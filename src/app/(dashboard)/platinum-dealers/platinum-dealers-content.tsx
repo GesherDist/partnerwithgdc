@@ -44,6 +44,7 @@ import type {
   PlatinumDealer,
   DealerStatus,
 } from '@/features/platinum-dealers/types';
+import { DEALER_PERMISSIONS } from '@/features/platinum-dealers/lib/permissions';
 
 // ============================================
 // COMPONENT
@@ -66,10 +67,10 @@ export function PlatinumDealersContent() {
   // PERMISSIONS (only check after hydration)
   // ----------------------------------------
 
-  const canCreate = hasMounted && hasPermission('suppliers.create');
-  const canViewDetail = hasMounted && hasPermission('suppliers.view_detail');
-  const canEdit = hasMounted && hasPermission('suppliers.update');
-  const canDelete = hasMounted && hasPermission('suppliers.delete');
+  const canCreate = hasMounted && hasPermission(DEALER_PERMISSIONS.create);
+  const canViewDetail = hasMounted && hasPermission(DEALER_PERMISSIONS.read);
+  const canEdit = hasMounted && hasPermission(DEALER_PERMISSIONS.update);
+  const canDelete = hasMounted && hasPermission(DEALER_PERMISSIONS.delete);
 
   // ----------------------------------------
   // STATE

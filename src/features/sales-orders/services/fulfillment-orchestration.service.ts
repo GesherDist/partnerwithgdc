@@ -69,6 +69,8 @@ export interface AllocationResult {
   success: boolean;
   data?: FulfillmentAllocation;
   error?: string;
+  /** Pick ticket numbers this item was taken off after a warehouse change */
+  removedFromPickTickets?: string[];
 }
 
 export interface BatchAllocationResult {
@@ -670,6 +672,20 @@ export async function updateAllocationDetails(params: {
       (isGdc && next.locationId !== current.locationId) ||
       (source === 'platinum_dealer_inventory' && next.dealerLocationId !== current.dealerLocationId);
 
+    // GDC warehouse changed on an allocation that already has a pick ticket at
+    // the old warehouse: allowed only while that pick ticket has not started
+    // picking; its lines for this item are removed after the save
+    const warehouseMoved =
+      isGdc && !sourceChanged && !!current.locationId && !!next.locationId && next.locationId !== current.locationId;
+    let oldPickTickets: Array<{ id: string; number: string }> = [];
+    if (warehouseMoved) {
+      const check = await findPickTicketsForWarehouseMove(current.salesOrderItemId, current.locationId!);
+      if (!check.ok) {
+        return { success: false, error: check.error };
+      }
+      oldPickTickets = check.pickTickets;
+    }
+
     const oldReservation = {
       fulfillmentSource: current.fulfillmentSource,
       quantity: current.quantity,
@@ -705,9 +721,15 @@ export async function updateAllocationDetails(params: {
       if (!released.success) {
         return { success: false, error: released.error || 'Failed to deallocate old inventory' };
       }
+      // Roll back only what was actually released (older data may hold less)
+      if (released.released !== undefined) {
+        oldReservation.quantity = released.released;
+      }
       const reserved = await allocateInventoryForAllocation(newReservation);
       if (!reserved.success) {
-        await allocateInventoryForAllocation(oldReservation);
+        if (oldReservation.quantity > 0) {
+          await allocateInventoryForAllocation(oldReservation);
+        }
         return { success: false, error: reserved.error || 'Failed to allocate new inventory' };
       }
     }
@@ -723,13 +745,26 @@ export async function updateAllocationDetails(params: {
     if (updateError || !updated) {
       if (inventoryChanged) {
         await deallocateInventoryForAllocation(newReservation);
-        await allocateInventoryForAllocation(oldReservation);
+        if (oldReservation.quantity > 0) {
+          await allocateInventoryForAllocation(oldReservation);
+        }
       }
       return { success: false, error: updateError?.message || 'Failed to update allocation' };
     }
 
     if (sourceChanged) {
       await saveCost();
+    }
+
+    // The old warehouse's pick ticket no longer picks this item
+    let removedFromPickTickets: string[] | undefined;
+    if (oldPickTickets.length > 0) {
+      removedFromPickTickets = await removeItemFromPickTickets(oldPickTickets, current.salesOrderItemId);
+    }
+
+    // The old PO is no longer used by this allocation (PO changed or source changed)
+    if (current.purchaseOrderId && current.purchaseOrderId !== next.purchaseOrderId) {
+      await unlinkPurchaseOrderIfUnused(current.purchaseOrderId, current.salesOrderItemId);
     }
 
     // As on create: a Manufacturer allocation links its PO to the sales order
@@ -750,7 +785,7 @@ export async function updateAllocationDetails(params: {
       }
     }
 
-    return { success: true, data: updated };
+    return { success: true, data: updated, removedFromPickTickets };
   } catch (error) {
     console.error('Error updating allocation:', error);
     return {
@@ -758,6 +793,125 @@ export async function updateAllocationDetails(params: {
       error: error instanceof Error ? error.message : 'Unknown error updating allocation',
     };
   }
+}
+
+/**
+ * A Manufacturer (direct) allocation links its PO to the sales order
+ * (purchase_orders.sales_order_id). When the last active allocation of that PO
+ * for that order goes away, the PO is unsold again and shows up for allocation.
+ */
+async function unlinkPurchaseOrderIfUnused(purchaseOrderId: string, salesOrderItemId: string): Promise<void> {
+  const { data: soItem } = await db
+    .from('sales_order_items')
+    .select('sales_order_id')
+    .eq('id', salesOrderItemId)
+    .single();
+  if (!soItem?.sales_order_id) {
+    return;
+  }
+
+  const { count, error } = await db
+    .from('fulfillment_allocations')
+    .select('id', { count: 'exact', head: true })
+    .eq('purchase_order_id', purchaseOrderId)
+    .neq('status', 'cancelled');
+  if (error || (count ?? 0) > 0) {
+    return;
+  }
+
+  const { error: unlinkError } = await db
+    .from('purchase_orders')
+    .update({ sales_order_id: null, updated_at: new Date().toISOString() })
+    .eq('id', purchaseOrderId)
+    .eq('sales_order_id', soItem.sales_order_id);
+  if (unlinkError) {
+    console.error('[unlinkPurchaseOrderIfUnused] Failed to unlink PO:', unlinkError);
+  }
+}
+
+/** Pick ticket statuses where nothing has been picked yet */
+const PICK_TICKET_NOT_STARTED = ['pending', 'assigned'];
+
+/**
+ * Open pick tickets at `warehouseId` that include this sales order item.
+ * A warehouse change is refused once one of them has started picking (the
+ * tires are already being pulled from that warehouse).
+ */
+async function findPickTicketsForWarehouseMove(
+  salesOrderItemId: string,
+  warehouseId: string
+): Promise<{ ok: true; pickTickets: Array<{ id: string; number: string }> } | { ok: false; error: string }> {
+  const { data, error } = await db
+    .from('pick_ticket_items')
+    .select('pick_ticket_id, pick_tickets!inner (id, pick_ticket_number, status, warehouse_id, deleted_at)')
+    .eq('sales_order_item_id', salesOrderItemId)
+    .eq('pick_tickets.warehouse_id', warehouseId)
+    .is('pick_tickets.deleted_at', null)
+    .neq('pick_tickets.status', 'cancelled');
+
+  if (error) {
+    return { ok: false, error: `Could not check pick tickets: ${error.message}` };
+  }
+
+  const tickets = new Map<string, { id: string; number: string; status: string }>();
+  for (const row of (data ?? []) as Array<{ pick_tickets: unknown }>) {
+    const pt = (Array.isArray(row.pick_tickets) ? row.pick_tickets[0] : row.pick_tickets) as
+      | { id: string; pick_ticket_number: string; status: string }
+      | null;
+    if (pt) {
+      tickets.set(pt.id, { id: pt.id, number: pt.pick_ticket_number, status: pt.status });
+    }
+  }
+
+  const started = [...tickets.values()].filter((pt) => !PICK_TICKET_NOT_STARTED.includes(pt.status));
+  if (started.length > 0) {
+    const list = started.map((pt) => `${pt.number} (${pt.status})`).join(', ');
+    return {
+      ok: false,
+      error: `The warehouse can't be changed: pick ticket ${list} at the current warehouse has already started.`,
+    };
+  }
+
+  return { ok: true, pickTickets: [...tickets.values()].map(({ id, number }) => ({ id, number })) };
+}
+
+/**
+ * Take a sales order item off pick tickets that have not started; a pick
+ * ticket left with no items is cancelled. Returns the pick ticket numbers changed.
+ */
+async function removeItemFromPickTickets(
+  pickTickets: Array<{ id: string; number: string }>,
+  salesOrderItemId: string
+): Promise<string[]> {
+  const changed: string[] = [];
+  for (const pt of pickTickets) {
+    const { error: deleteError } = await db
+      .from('pick_ticket_items')
+      .delete()
+      .eq('pick_ticket_id', pt.id)
+      .eq('sales_order_item_id', salesOrderItemId);
+    if (deleteError) {
+      console.error(`[removeItemFromPickTickets] ${pt.number}:`, deleteError);
+      continue;
+    }
+    changed.push(pt.number);
+
+    const { count } = await db
+      .from('pick_ticket_items')
+      .select('id', { count: 'exact', head: true })
+      .eq('pick_ticket_id', pt.id);
+    if (count === 0) {
+      const { error: cancelError } = await db
+        .from('pick_tickets')
+        .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+        .eq('id', pt.id)
+        .in('status', PICK_TICKET_NOT_STARTED);
+      if (cancelError) {
+        console.error(`[removeItemFromPickTickets] cancel ${pt.number}:`, cancelError);
+      }
+    }
+  }
+  return changed;
 }
 
 // ============================================
@@ -823,6 +977,11 @@ export async function cancelAllocation(params: {
         success: false,
         error: deleteError?.message || 'Failed to delete allocation',
       };
+    }
+
+    // The PO is free again once no allocation uses it
+    if (allocation.fulfillmentSource === 'direct' && allocation.purchaseOrderId) {
+      await unlinkPurchaseOrderIfUnused(allocation.purchaseOrderId, allocation.salesOrderItemId);
     }
 
     return {
@@ -1011,7 +1170,8 @@ async function allocateInventoryForAllocation(params: {
 }
 
 /**
- * Deallocate inventory for an allocation
+ * Deallocate inventory for an allocation. `released` is how many GDC units
+ * were actually freed (can be less than `quantity` for older data).
  */
 async function deallocateInventoryForAllocation(params: {
   fulfillmentSource: FulfillmentSource;
@@ -1019,7 +1179,7 @@ async function deallocateInventoryForAllocation(params: {
   productId: string;
   locationId?: string;
   dealerLocationId?: string;
-}): Promise<{ success: boolean; error?: string }> {
+}): Promise<{ success: boolean; error?: string; released?: number }> {
   try {
     if (params.fulfillmentSource === 'gdc_inventory') {
       if (!params.locationId) {
@@ -1038,9 +1198,21 @@ async function deallocateInventoryForAllocation(params: {
         return { success: false, error: 'Inventory not found' };
       }
 
+      // Release only what is actually reserved: an allocation saved without its
+      // reservation (older data) must not push `allocated` below zero
+      const released = Math.min(params.quantity, Math.max(0, inventory.allocated));
+      if (released < params.quantity) {
+        console.warn(
+          `[deallocateInventoryForAllocation] Only ${released} of ${params.quantity} units were reserved at location ${params.locationId}`
+        );
+      }
+      if (released === 0) {
+        return { success: true, released: 0 };
+      }
+
       const { error: updateError } = await supabase
         .from('inventory')
-        .update({ allocated: inventory.allocated - params.quantity })
+        .update({ allocated: inventory.allocated - released })
         .eq('location_id', params.locationId)
         .eq('product_id', params.productId);
 
@@ -1053,12 +1225,12 @@ async function deallocateInventoryForAllocation(params: {
         productId: params.productId,
         locationId: params.locationId,
         movementType: 'deallocate',
-        quantity: +params.quantity, // Positive = incoming/released
+        quantity: +released, // Positive = incoming/released
         referenceType: 'fulfillment_allocation',
-        notes: `Released ${params.quantity} units - allocation cancelled/updated`,
+        notes: `Released ${released} units - allocation cancelled/updated`,
       });
 
-      return { success: true };
+      return { success: true, released };
     } else if (params.fulfillmentSource === 'platinum_dealer_inventory') {
       if (!params.dealerLocationId) {
         return {

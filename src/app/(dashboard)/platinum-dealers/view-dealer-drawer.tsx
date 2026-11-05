@@ -73,6 +73,8 @@ import { AddDealerLocationDialog } from './add-location-dialog';
 import { EditDealerLocationDialog } from './edit-location-dialog';
 import { DealerLocationCard } from './dealer-location-card';
 import { ViewLocationInventoryDrawer } from './view-location-inventory-drawer';
+import { DEALER_PERMISSIONS } from '@/features/platinum-dealers/lib/permissions';
+import { useAuthStore } from '@/shared/stores/auth.store';
 
 // ============================================
 // TYPES
@@ -154,6 +156,10 @@ export function ViewDealerDrawer({
   const [locations, setLocations] = useState<PlatinumDealerLocation[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingLocations, setIsLoadingLocations] = useState(false);
+  const { hasPermission } = useAuthStore();
+  const canCreateLocation = hasPermission(DEALER_PERMISSIONS.create);
+  const canEditLocation = hasPermission(DEALER_PERMISSIONS.update);
+  const canUpdateAllocation = hasPermission(DEALER_PERMISSIONS.allocationWrite);
   const [activeTab, setActiveTab] = useState('details');
   const [inventorySummaries, setInventorySummaries] = useState<
     Record<string, LocationInventorySummary>
@@ -651,10 +657,12 @@ export function ViewDealerDrawer({
                             Manage yards and warehouses for this dealer
                           </p>
                         </div>
-                        <Button onClick={handleAddLocationClick}>
-                          <Plus className="mr-2 h-4 w-4" />
-                          Add Location
-                        </Button>
+                        {canCreateLocation && (
+                          <Button onClick={handleAddLocationClick}>
+                            <Plus className="mr-2 h-4 w-4" />
+                            Add Location
+                          </Button>
+                        )}
                       </div>
 
                       <Separator />
@@ -671,8 +679,8 @@ export function ViewDealerDrawer({
                               key={location.id}
                               location={location}
                               inventorySummary={inventorySummaries[location.id] || null}
-                              onEdit={handleEditLocation}
-                              onDelete={handleDeleteLocationClick}
+                              onEdit={canEditLocation ? handleEditLocation : undefined}
+                              onDelete={canEditLocation ? handleDeleteLocationClick : undefined}
                               onViewInventory={handleViewInventory}
                             />
                           ))}
@@ -684,10 +692,12 @@ export function ViewDealerDrawer({
                           <p className="text-sm text-muted-foreground mb-4">
                             Add the first location for this dealer to start tracking inventory.
                           </p>
-                          <Button onClick={handleAddLocationClick}>
-                            <Plus className="mr-2 h-4 w-4" />
-                            Add Location
-                          </Button>
+                          {canCreateLocation && (
+                            <Button onClick={handleAddLocationClick}>
+                              <Plus className="mr-2 h-4 w-4" />
+                              Add Location
+                            </Button>
+                          )}
                         </div>
                       )}
                     </div>
@@ -832,6 +842,7 @@ export function ViewDealerDrawer({
                                         </Badge>
                                       </td>
                                       <td className="py-3 px-4 text-center">
+                                        {canUpdateAllocation && (
                                         <DropdownMenu>
                                             <DropdownMenuTrigger asChild>
                                               <Button
@@ -935,6 +946,7 @@ export function ViewDealerDrawer({
                                               </DropdownMenuItem>
                                             </DropdownMenuContent>
                                           </DropdownMenu>
+                                        )}
                                       </td>
                                     </tr>
 
@@ -997,6 +1009,7 @@ export function ViewDealerDrawer({
                                     </Badge>
                                   </td>
                                   <td className="py-3 px-4 text-center">
+                                    {canUpdateAllocation && (
                                     <DropdownMenu>
                                       <DropdownMenuTrigger asChild>
                                         <Button
@@ -1099,6 +1112,7 @@ export function ViewDealerDrawer({
                                         </DropdownMenuItem>
                                       </DropdownMenuContent>
                                     </DropdownMenu>
+                                    )}
                                   </td>
                                 </tr>
                               ))}

@@ -14,8 +14,9 @@ import type {
   CreateCustomerContactDTO,
   UpdateCustomerContactDTO,
 } from '../types';
-import { createClient } from '@/shared/lib/supabase/server';
-import { getAppUserByAuthId } from '@/shared/lib/auth';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
+import type { AppUser } from '@/shared/stores/auth.store';
+import { CUSTOMER_PERMISSIONS } from '../lib/permissions';
 
 // ============================================
 // TYPES
@@ -25,6 +26,32 @@ export interface ActionResult<T = unknown> {
   success: boolean;
   data?: T;
   error?: string;
+}
+
+// ============================================
+// AUTHORIZATION HELPER
+// ============================================
+
+type AuthorizeResult =
+  | { ok: true; user: AppUser }
+  | { ok: false; result: { success: false; error: string } };
+
+/**
+ * Resolve the current application user and verify that they hold the
+ * permission (see CUSTOMER_PERMISSIONS).
+ */
+async function authorize(permission: string): Promise<AuthorizeResult> {
+  const user = await getCurrentUser();
+
+  if (!user) {
+    return { ok: false, result: { success: false, error: 'Authentication required' } };
+  }
+
+  if (!hasPermission(user, permission)) {
+    return { ok: false, result: { success: false, error: `Permission denied: ${permission}` } };
+  }
+
+  return { ok: true, user };
 }
 
 // ============================================
@@ -38,11 +65,9 @@ export async function getCustomerContacts(
   customerId: string
 ): Promise<ActionResult<CustomerContactListItem[]>> {
   try {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-
-    if (!user) {
-      return { success: false, error: 'Authentication required' };
+    const auth = await authorize(CUSTOMER_PERMISSIONS.viewContacts);
+    if (!auth.ok) {
+      return auth.result;
     }
 
     const repository = getCustomerContactRepository();
@@ -65,11 +90,9 @@ export async function getCustomerContact(
   id: string
 ): Promise<ActionResult<CustomerContact>> {
   try {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-
-    if (!user) {
-      return { success: false, error: 'Authentication required' };
+    const auth = await authorize(CUSTOMER_PERMISSIONS.viewContacts);
+    if (!auth.ok) {
+      return auth.result;
     }
 
     const repository = getCustomerContactRepository();
@@ -100,18 +123,11 @@ export async function createCustomerContact(
   data: CreateCustomerContactDTO
 ): Promise<ActionResult<CustomerContact>> {
   try {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-
-    if (!user) {
-      return { success: false, error: 'Authentication required' };
+    const auth = await authorize(CUSTOMER_PERMISSIONS.createContact);
+    if (!auth.ok) {
+      return auth.result;
     }
-
-    // Get app user ID (public.users.id) from auth user ID
-    const appUser = await getAppUserByAuthId(user.id);
-    if (!appUser) {
-      return { success: false, error: 'User profile not found' };
-    }
+    const appUser = auth.user;
 
     // Validate required fields
     if (!data.firstName?.trim()) {
@@ -148,18 +164,11 @@ export async function updateCustomerContact(
   data: UpdateCustomerContactDTO
 ): Promise<ActionResult<CustomerContact>> {
   try {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-
-    if (!user) {
-      return { success: false, error: 'Authentication required' };
+    const auth = await authorize(CUSTOMER_PERMISSIONS.editContact);
+    if (!auth.ok) {
+      return auth.result;
     }
-
-    // Get app user ID (public.users.id) from auth user ID
-    const appUser = await getAppUserByAuthId(user.id);
-    if (!appUser) {
-      return { success: false, error: 'User profile not found' };
-    }
+    const appUser = auth.user;
 
     const repository = getCustomerContactRepository();
 
@@ -191,18 +200,11 @@ export async function deleteCustomerContact(
   id: string
 ): Promise<ActionResult<void>> {
   try {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-
-    if (!user) {
-      return { success: false, error: 'Authentication required' };
+    const auth = await authorize(CUSTOMER_PERMISSIONS.deleteContact);
+    if (!auth.ok) {
+      return auth.result;
     }
-
-    // Get app user ID (public.users.id) from auth user ID
-    const appUser = await getAppUserByAuthId(user.id);
-    if (!appUser) {
-      return { success: false, error: 'User profile not found' };
-    }
+    const appUser = auth.user;
 
     const repository = getCustomerContactRepository();
 

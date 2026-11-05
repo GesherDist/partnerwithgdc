@@ -10,7 +10,9 @@
 import { revalidatePath, unstable_noStore as noStore } from 'next/cache';
 import { db } from '@/shared/lib/supabase/database';
 import { createAdminClient } from '@/shared/lib/supabase/admin';
-import { getCurrentUser } from '@/shared/lib/auth';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
+import type { AppUser } from '@/shared/stores/auth.store';
+import { OPERATIONS_PERMISSIONS } from '../lib/permissions';
 import { poReceivingService } from '@/features/inventory/services/po-receiving.service';
 
 /**
@@ -59,6 +61,32 @@ interface ActionResult<T> {
 }
 
 // ============================================
+// AUTHORIZATION HELPER
+// ============================================
+
+type AuthorizeResult =
+  | { ok: true; user: AppUser }
+  | { ok: false; result: { success: false; error: string } };
+
+/**
+ * Resolve the current application user and verify the permission
+ * (see OPERATIONS_PERMISSIONS).
+ */
+async function authorize(permission: string): Promise<AuthorizeResult> {
+  const user = await getCurrentUser();
+
+  if (!user) {
+    return { ok: false, result: { success: false, error: 'Authentication required' } };
+  }
+
+  if (!hasPermission(user, permission)) {
+    return { ok: false, result: { success: false, error: `Permission denied: ${permission}` } };
+  }
+
+  return { ok: true, user };
+}
+
+// ============================================
 // FETCH ALL DASHBOARD DATA
 // ============================================
 
@@ -69,6 +97,11 @@ interface ActionResult<T> {
  * This ensures fresh data after updates
  */
 export async function fetchOperationsData(filters?: OperationsFilters): Promise<ActionResult<OperationsData>> {
+  const auth = await authorize(OPERATIONS_PERMISSIONS.read);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   try {
     // Disable Next.js caching to ensure fresh data after updates
     noStore();
@@ -90,6 +123,11 @@ export async function fetchOperationsData(filters?: OperationsFilters): Promise<
  * IMPORTANT: Uses noStore() to disable Next.js caching
  */
 export async function fetchFilterOptions(): Promise<ActionResult<FilterOptions>> {
+  const auth = await authorize(OPERATIONS_PERMISSIONS.read);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   try {
     // Disable Next.js caching
     noStore();
@@ -113,6 +151,11 @@ export async function fetchFilterOptions(): Promise<ActionResult<FilterOptions>>
  * Fetch just the KPI stats
  */
 export async function fetchOperationsStats(): Promise<ActionResult<OperationsStats>> {
+  const auth = await authorize(OPERATIONS_PERMISSIONS.read);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   try {
     const data = await getStats();
     return { success: true, data };
@@ -129,6 +172,11 @@ export async function fetchOperationsStats(): Promise<ActionResult<OperationsSta
  * Fetch immediate attention items
  */
 export async function fetchImmediateAttention(): Promise<ActionResult<ImmediateAttentionItem[]>> {
+  const auth = await authorize(OPERATIONS_PERMISSIONS.read);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   try {
     const data = await getAttentionItems();
     return { success: true, data };
@@ -145,6 +193,11 @@ export async function fetchImmediateAttention(): Promise<ActionResult<ImmediateA
  * Fetch supplier shipment schedule
  */
 export async function fetchSupplierSchedule(): Promise<ActionResult<{ data: ShipmentScheduleItem[]; uniqueSkus: SKUColumnInfo[] }>> {
+  const auth = await authorize(OPERATIONS_PERMISSIONS.read);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   try {
     const result = await getSupplierSchedule();
     return { success: true, data: result };
@@ -161,6 +214,11 @@ export async function fetchSupplierSchedule(): Promise<ActionResult<{ data: Ship
  * Fetch GDC1 inventory
  */
 export async function fetchGDC1Inventory(): Promise<ActionResult<{ data: GDC1InventoryItem[]; uniqueSkus: SKUColumnInfo[] }>> {
+  const auth = await authorize(OPERATIONS_PERMISSIONS.read);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   try {
     const result = await getWarehouseInventory();
     return { success: true, data: result };
@@ -177,6 +235,11 @@ export async function fetchGDC1Inventory(): Promise<ActionResult<{ data: GDC1Inv
  * Fetch rim installation items
  */
 export async function fetchRimInstallation(): Promise<ActionResult<RimInstallationItem[]>> {
+  const auth = await authorize(OPERATIONS_PERMISSIONS.read);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   try {
     const result = await getRimItems();
     return { success: true, data: result.data };
@@ -196,6 +259,11 @@ export async function fetchRimInstallation(): Promise<ActionResult<RimInstallati
 export async function fetchFulfillmentBreakdown(
   filters?: OperationsFilters
 ): Promise<ActionResult<FulfillmentSourceBreakdown[]>> {
+  const auth = await authorize(OPERATIONS_PERMISSIONS.read);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   try {
     const data = await getFulfillmentBreakdownData(filters);
     return {
@@ -232,6 +300,11 @@ export async function refreshOperationsData(filters?: OperationsFilters): Promis
 export async function fetchExportData(
   options?: ExportOptions
 ): Promise<ActionResult<Partial<OperationsData>>> {
+  const auth = await authorize(OPERATIONS_PERMISSIONS.read);
+  if (!auth.ok) {
+    return auth.result;
+  }
+
   try {
     const data = await getExportData(options);
     return { success: true, data };
@@ -266,10 +339,11 @@ export async function updateShipmentStatus(
   input: UpdateShipmentStatusInput
 ): Promise<ActionResult<{ id: string }>> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return { success: false, error: 'Authentication required' };
+    const auth = await authorize(OPERATIONS_PERMISSIONS.edit);
+    if (!auth.ok) {
+      return auth.result;
     }
+    const user = auth.user;
 
     // Map ShipmentStatus to database load_status
     const loadStatusMap: Record<ShipmentStatus, string> = {
@@ -368,9 +442,9 @@ export async function bulkUpdateShipmentStatus(
   updates: UpdateShipmentStatusInput[]
 ): Promise<ActionResult<{ updated: number }>> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return { success: false, error: 'Authentication required' };
+    const auth = await authorize(OPERATIONS_PERMISSIONS.edit);
+    if (!auth.ok) {
+      return auth.result;
     }
 
     let updatedCount = 0;
@@ -422,9 +496,9 @@ export async function getShipmentForEdit(
   shipmentId: string
 ): Promise<ActionResult<ShipmentEditData>> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return { success: false, error: 'Authentication required' };
+    const auth = await authorize(OPERATIONS_PERMISSIONS.edit);
+    if (!auth.ok) {
+      return auth.result;
     }
 
     const { data, error } = await db
@@ -509,9 +583,9 @@ export interface SalesOrderOption {
  */
 export async function getSalesOrdersForDropdown(): Promise<ActionResult<SalesOrderOption[]>> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return { success: false, error: 'Authentication required' };
+    const auth = await authorize(OPERATIONS_PERMISSIONS.edit);
+    if (!auth.ok) {
+      return auth.result;
     }
 
     const { data, error } = await db
@@ -576,10 +650,11 @@ export async function updateShipment(
   input: UpdateShipmentInput
 ): Promise<ActionResult<{ id: string }>> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return { success: false, error: 'Authentication required' };
+    const auth = await authorize(OPERATIONS_PERMISSIONS.edit);
+    if (!auth.ok) {
+      return auth.result;
     }
+    const user = auth.user;
 
     // Build update object
     const updateData: Record<string, unknown> = {
@@ -679,10 +754,11 @@ export async function updateShipmentOrOrder(
   try {
     console.log('[updateShipmentOrOrder] Starting update with input:', JSON.stringify(input, null, 2));
 
-    const user = await getCurrentUser();
-    if (!user) {
-      return { success: false, error: 'Authentication required' };
+    const auth = await authorize(OPERATIONS_PERMISSIONS.edit);
+    if (!auth.ok) {
+      return auth.result;
     }
+    const user = auth.user;
 
     // Use admin client to bypass RLS policies
     const supabase = createAdminClient();
@@ -1111,10 +1187,11 @@ export async function updateShipmentNotes(
   notes: string
 ): Promise<ActionResult<{ id: string }>> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return { success: false, error: 'Authentication required' };
+    const auth = await authorize(OPERATIONS_PERMISSIONS.edit);
+    if (!auth.ok) {
+      return auth.result;
     }
+    const user = auth.user;
 
     const { error } = await db
       .from('shipments')
@@ -1152,10 +1229,11 @@ export async function updateSalesOrderNotes(
   notes: string
 ): Promise<ActionResult<{ id: string }>> {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return { success: false, error: 'Authentication required' };
+    const auth = await authorize(OPERATIONS_PERMISSIONS.edit);
+    if (!auth.ok) {
+      return auth.result;
     }
+    const user = auth.user;
 
     const { error } = await db
       .from('sales_orders')
@@ -1249,6 +1327,11 @@ finalDestination: string | null;
 export async function getShipmentDetailById(
   itemId: string
 ): Promise<ShipmentDetailData> {
+  const auth = await authorize(OPERATIONS_PERMISSIONS.read);
+  if (!auth.ok) {
+    throw new Error(auth.result.error);
+  }
+
   console.log('[getShipmentDetailById] Looking for ID:', itemId);
 
   // First, try a simple check if shipment exists

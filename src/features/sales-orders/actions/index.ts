@@ -27,7 +27,7 @@ import type {
 } from '../types';
 import { db } from '@/shared/lib/supabase/database';
 import { auditService } from '@/shared/lib/audit';
-import { getCurrentUser, hasPermission, hasAnyPermission } from '@/shared/lib/auth';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
 import type { AppUser } from '@/shared/stores/auth.store';
 
 // ============================================
@@ -66,25 +66,6 @@ async function authorize(permission: string): Promise<AuthorizeResult> {
   return { ok: true, user };
 }
 
-/**
- * Same as `authorize`, but any one of the permissions is enough.
- */
-async function authorizeAny(permissions: string[]): Promise<AuthorizeResult> {
-  const user = await getCurrentUser();
-
-  if (!user) {
-    return { ok: false, result: { success: false, error: 'Authentication required' } };
-  }
-
-  if (!hasAnyPermission(user, permissions)) {
-    return {
-      ok: false,
-      result: { success: false, error: `Permission denied: requires one of [${permissions.join(', ')}]` },
-    };
-  }
-
-  return { ok: true, user };
-}
 
 // ============================================
 // LIST ACTIONS
@@ -119,7 +100,7 @@ export async function getSalesOrders(
  * Get a single sales order by ID
  */
 export async function getSalesOrder(id: string): Promise<ActionResult<SalesOrderWithItems>> {
-  const auth = await authorizeAny(['orders.view_detail', 'orders.edit']);
+  const auth = await authorize('orders.view_detail');
   if (!auth.ok) {
     return auth.result;
   }
@@ -133,7 +114,7 @@ export async function getSalesOrder(id: string): Promise<ActionResult<SalesOrder
 export async function getSalesOrderByNumber(
   orderNumber: string
 ): Promise<ActionResult<SalesOrderWithItems>> {
-  const auth = await authorizeAny(['orders.view_detail', 'orders.edit']);
+  const auth = await authorize('orders.view_detail');
   if (!auth.ok) {
     return auth.result;
   }
@@ -376,6 +357,29 @@ export async function updateSalesOrderProductSource(
     revalidatePath('/sales-orders');
     revalidatePath(`/sales-orders/${id}`);
     revalidatePath('/api/sales-orders');
+  }
+
+  return result;
+}
+
+/**
+ * Change line prices on a confirmed / processing order (Edit Prices dialog).
+ * Amounts are in cents. `warning` is set when the order already has an invoice.
+ */
+export async function updateSalesOrderItemPrices(
+  orderId: string,
+  prices: Array<{ itemId: string; unitPrice: number; discountPercent: number; taxRate: number }>
+): Promise<ActionResult<SalesOrderWithItems> & { warning?: string }> {
+  const auth = await authorize('orders.edit');
+  if (!auth.ok) {
+    return auth.result;
+  }
+
+  const result = await salesOrderService.updateItemPrices(orderId, prices, auth.user.id);
+
+  if (result.success) {
+    revalidatePath('/sales-orders');
+    revalidatePath(`/sales-orders/${orderId}`);
   }
 
   return result;
@@ -2081,7 +2085,7 @@ async function countDirectTires(salesOrderId: string): Promise<number> {
 export async function getSalesOrderDirectTireCount(
   salesOrderId: string
 ): Promise<ActionResult<{ directTireCount: number; commissionInvoiceNumber: string | null }>> {
-  const auth = await authorizeAny(['orders.view_detail', 'orders.edit']);
+  const auth = await authorize('orders.view_detail');
   if (!auth.ok) {
     return auth.result;
   }

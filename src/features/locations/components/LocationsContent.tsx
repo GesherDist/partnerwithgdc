@@ -6,13 +6,15 @@
  * Client-side wrapper for locations page with drawer support.
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Plus } from 'lucide-react';
 import { Button } from '@/shared/components/ui/button';
 import { PageHeader } from '@/shared/components/layout/PageHeader';
+import { useAuthStore } from '@/shared/stores/auth.store';
 import { LocationsTable } from './LocationsTable';
 import { CreateLocationDrawer } from './CreateLocationDrawer';
+import { LOCATION_PERMISSIONS } from '../lib/permissions';
 import type { LocationTableRow } from '../types';
 
 interface LocationsContentProps {
@@ -23,6 +25,15 @@ interface LocationsContentProps {
 export function LocationsContent({ data, isLoading = false }: LocationsContentProps) {
   const router = useRouter();
   const [createDrawerOpen, setCreateDrawerOpen] = useState(false);
+  const { hasPermission } = useAuthStore();
+  const [hasMounted, setHasMounted] = useState(false);
+
+  useEffect(() => {
+    setHasMounted(true);
+  }, []);
+
+  // Only check after hydration (the auth store is persisted on the client)
+  const canCreate = hasMounted && hasPermission(LOCATION_PERMISSIONS.create);
 
   const handleCreateSuccess = useCallback(() => {
     router.refresh();
@@ -38,10 +49,12 @@ export function LocationsContent({ data, isLoading = false }: LocationsContentPr
         title="Locations"
         description="Manage warehouse and shipping locations"
         actions={
-          <Button onClick={() => setCreateDrawerOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            Add Location
-          </Button>
+          canCreate ? (
+            <Button onClick={() => setCreateDrawerOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              Add Location
+            </Button>
+          ) : undefined
         }
       />
 

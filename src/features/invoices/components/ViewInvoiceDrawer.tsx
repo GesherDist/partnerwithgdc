@@ -17,6 +17,8 @@ import { PdfViewerModal } from '@/shared/components/pdf-viewer/PdfViewerModal';
 import { cn } from '@/shared/lib/utils';
 import { useInvoice } from '../hooks/useInvoice';
 import { pushInvoiceToQuickBooks, getInvoiceCommissionOrders } from '../actions';
+import { INVOICE_PERMISSIONS } from '../lib/permissions';
+import { useAuthStore } from '@/shared/stores/auth.store';
 import type { BillableCommissionOrder } from '../services/invoice.service';
 import { INVOICE_STATUS_COLORS, INVOICE_STATUS_LABELS, INVOICE_TYPE_LABELS } from '../types';
 import type { ViewInvoiceDrawerProps } from '../types';
@@ -39,6 +41,8 @@ export function ViewInvoiceDrawer({
   const { data: invoice, isLoading, refetch } = useInvoice(open ? invoiceId : null);
   const [showPdfModal, setShowPdfModal] = useState(false);
   const [isPushingToQbo, setIsPushingToQbo] = useState(false);
+  const { hasPermission } = useAuthStore();
+  const mayPushToQbo = hasPermission(INVOICE_PERMISSIONS.pushQbo);
 
   // Commission invoice: the customer orders the commission is billed for
   const isCommissionInvoice = invoice?.invoiceType === 'commission';
@@ -609,7 +613,7 @@ export function ViewInvoiceDrawer({
                 </Button>
 
                 {/* QuickBooks Push Button */}
-                {!invoice.quickbooksInvoiceId && invoice.status !== 'cancelled' ? (
+                {mayPushToQbo && !invoice.quickbooksInvoiceId && invoice.status !== 'cancelled' ? (
                   <Button
                     onClick={handlePushToQuickBooks}
                     variant="outline"

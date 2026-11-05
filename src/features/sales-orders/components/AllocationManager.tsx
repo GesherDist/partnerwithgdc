@@ -29,6 +29,8 @@ import {
 } from '@/features/sales-orders/actions/fulfillment-allocation.actions';
 import { CreateAllocationDialog } from './CreateAllocationDialog';
 import { EditAllocationDialog } from './EditAllocationDialog';
+import { ALLOCATION_PERMISSIONS } from '../lib/allocation-permissions';
+import { useAuthStore } from '@/shared/stores/auth.store';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -109,6 +111,10 @@ export function AllocationManager({
   productName,
   customerQty,
 }: AllocationManagerProps) {
+
+  // Allocation create/edit/delete need one of the allocation write permissions
+  const { hasPermission } = useAuthStore();
+  const canWrite = hasPermission(ALLOCATION_PERMISSIONS.write);
 
   // State
   const [summary, setSummary] = useState<AllocationSummary | null>(null);
@@ -236,10 +242,12 @@ export function AllocationManager({
               <CardTitle>Fulfillment Allocations</CardTitle>
               <p className="text-sm text-muted-foreground mt-1">{productName}</p>
             </div>
-            <Button onClick={() => setCreateDialogOpen(true)} disabled={fullyAllocated}>
-              <Plus className="h-4 w-4 mr-2" />
-              Add Allocation
-            </Button>
+            {canWrite && (
+              <Button onClick={() => setCreateDialogOpen(true)} disabled={fullyAllocated}>
+                <Plus className="h-4 w-4 mr-2" />
+                Add Allocation
+              </Button>
+            )}
           </div>
         </CardHeader>
 
@@ -322,16 +330,18 @@ export function AllocationManager({
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-2">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleEdit(allocation)}
-                            disabled={allocation.status === 'fulfilled'}
-                          >
-                            <Edit2 className="h-4 w-4" />
-                          </Button>
+                          {canWrite && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleEdit(allocation)}
+                              disabled={allocation.status === 'fulfilled'}
+                            >
+                              <Edit2 className="h-4 w-4" />
+                            </Button>
+                          )}
                           {/* Only show delete button when status is "pending" */}
-                          {allocation.status === 'pending' && (
+                          {canWrite && allocation.status === 'pending' && (
                             <Button
                               variant="ghost"
                               size="sm"

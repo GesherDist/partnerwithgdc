@@ -328,6 +328,18 @@ export const quoteService = {
         };
       }
 
+      // A changed quote number must not belong to another quote
+      const newNumber = validation.data.quoteNumber;
+      if (newNumber !== undefined && newNumber === existing.quoteNumber) {
+        delete validation.data.quoteNumber;
+      } else if (newNumber !== undefined && (await quoteRepository.quoteNumberExists(newNumber))) {
+        return {
+          success: false,
+          error: `Quote number "${newNumber}" already exists. Please use a different number.`,
+          errors: { quoteNumber: [`Quote number "${newNumber}" already exists.`] },
+        };
+      }
+
       // Capture old data for audit before update
       const oldAuditData = quoteToAuditData(existing);
 

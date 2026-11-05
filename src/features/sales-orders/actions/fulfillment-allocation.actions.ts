@@ -29,6 +29,8 @@ import {
   type UpdateFulfillmentAllocationInput,
 } from '@/features/sales-orders/validations/fulfillment-allocation.schema';
 import type { FulfillmentAllocation } from '@/features/sales-orders/types';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
+import { ALLOCATION_PERMISSIONS } from '../lib/allocation-permissions';
 
 // ============================================
 // TYPES
@@ -38,6 +40,30 @@ interface ActionResult<T = void> {
   success: boolean;
   data?: T;
   error?: string;
+  /** Extra note for the user after a successful save */
+  message?: string;
+}
+
+// ============================================
+// AUTHORIZATION HELPER
+// ============================================
+
+/**
+ * Returns an error result when the caller is not signed in or lacks the
+ * permission (see ALLOCATION_PERMISSIONS), otherwise null.
+ */
+async function denyUnless(permission: string): Promise<ActionResult<never> | null> {
+  const user = await getCurrentUser();
+
+  if (!user) {
+    return { success: false, error: 'Authentication required' };
+  }
+
+  if (!hasPermission(user, permission)) {
+    return { success: false, error: `Permission denied: ${permission}` };
+  }
+
+  return null;
 }
 
 // ============================================
@@ -66,6 +92,10 @@ export async function createAllocationAction(
   input: CreateFulfillmentAllocationInput,
   productId: string
 ): Promise<ActionResult<FulfillmentAllocation>> {
+  const denied = await denyUnless(ALLOCATION_PERMISSIONS.write);
+  if (denied) {
+    return denied;
+  }
   try {
     // Validate input with Zod
     const validated = createFulfillmentAllocationSchema.safeParse(input);
@@ -151,6 +181,10 @@ export async function createAllocationAction(
 export async function createMultiSourceAllocationAction(
   input: CreateBatchAllocationInput
 ): Promise<ActionResult<FulfillmentAllocation[]>> {
+  const denied = await denyUnless(ALLOCATION_PERMISSIONS.write);
+  if (denied) {
+    return denied;
+  }
   try {
     // Validate input with Zod
     const validated = createBatchAllocationSchema.safeParse(input);
@@ -239,6 +273,10 @@ export async function updateAllocationAction(
   input: UpdateFulfillmentAllocationInput,
   productId: string
 ): Promise<ActionResult<FulfillmentAllocation>> {
+  const denied = await denyUnless(ALLOCATION_PERMISSIONS.write);
+  if (denied) {
+    return denied;
+  }
   try {
     // Validate input with Zod
     const validated = updateFulfillmentAllocationSchema.safeParse(input);
@@ -278,9 +316,16 @@ export async function updateAllocationAction(
       };
     }
 
+    // Warehouse changed after a pick ticket was made: the old pick ticket no
+    // longer has this item, so make the pick ticket at the new warehouse
+    const message = result.removedFromPickTickets?.length
+      ? await createPickTicketAfterWarehouseMove(result.data, result.removedFromPickTickets)
+      : undefined;
+
     return {
       success: true,
       data: result.data,
+      message,
     };
   } catch (error) {
     console.error('Error in updateAllocationAction:', error);
@@ -289,6 +334,248 @@ export async function updateAllocationAction(
       error:
         error instanceof Error ? error.message : 'An unexpected error occurred',
     };
+  }
+}
+
+/**
+ * After an allocation moved to another warehouse, create its pick ticket there
+ * (same call the Confirm Allocations modal makes) and describe what changed.
+ */
+async function createPickTicketAfterWarehouseMove(
+  allocation: FulfillmentAllocation,
+  oldPickTickets: string[]
+): Promise<string> {
+  const removed = `Removed from pick ticket ${oldPickTickets.join(', ')}.`;
+  const { db } = await import('@/shared/lib/supabase/database');
+  const { data: item } = await db
+    .from('sales_order_items')
+    .select('sales_order_id')
+    .eq('id', allocation.salesOrderItemId)
+    .single();
+
+  if (!item?.sales_order_id || !allocation.locationId) {
+    return `${removed} Create the pick ticket for the new warehouse from Pick Tickets.`;
+  }
+
+  const { createPickTicketFromSalesOrder } = await import('@/features/pick-tickets/actions');
+  const contactId = allocation.assignedContactId || undefined;
+  const pt = await createPickTicketFromSalesOrder(
+    item.sales_order_id,
+    allocation.locationId,
+    contactId ? [contactId] : undefined,
+    allocation.notes || undefined,
+    undefined, // assignedToId - warehouse contacts live in location_contacts
+    true, // skipStatusCheck - the order is already confirmed
+    true, // useAllocatedQuantities
+    contactId,
+    [allocation.id]
+  );
+
+  if (pt.success && pt.data) {
+    return `${removed} New pick ticket ${pt.data.pickTicketNumber} created for the new warehouse.`;
+  }
+  return `${removed} The new pick ticket could not be created (${pt.error || 'unknown error'}); please create it from Pick Tickets.`;
+}
+
+// ============================================
+// SELL A PURCHASE ORDER (PO → SALES ORDER)
+// ============================================
+
+export interface SellablePurchaseOrderLine {
+  salesOrderId: string;
+  salesOrderItemId: string;
+  orderNumber: string;
+  orderStatus: string;
+  customerName: string | null;
+  customerPoNumber: string | null;
+  productId: string;
+  sku: string;
+  orderQty: number;
+  /** Customer quantity not allocated to any source yet */
+  remaining: number;
+}
+
+export interface SellablePurchaseOrder {
+  purchaseOrderId: string;
+  poNumber: string;
+  /** Tires ordered on the PO per product (the container quantity) */
+  containerQtyByProduct: Record<string, number>;
+  lines: SellablePurchaseOrderLine[];
+}
+
+/**
+ * Older POs could reach "confirmed" without the supplier shipment that PO
+ * confirmation normally creates, and a PO without a shipment cannot be sold.
+ * Creates that shipment the same way confirmation does (no-op if one exists).
+ */
+async function ensureSupplierShipment(purchaseOrderId: string): Promise<void> {
+  const { db } = await import('@/shared/lib/supabase/database');
+  const [{ data: po }, { count: shipments }] = await Promise.all([
+    db.from('purchase_orders').select('status, deleted_at').eq('id', purchaseOrderId).maybeSingle(),
+    db.from('shipments').select('id', { count: 'exact', head: true }).eq('purchase_order_id', purchaseOrderId),
+  ]);
+  if (!po || po.deleted_at || ['draft', 'sent', 'cancelled'].includes(po.status) || (shipments ?? 0) > 0) {
+    return;
+  }
+  try {
+    const user = await getCurrentUser();
+    const { purchaseOrderService } = await import('@/features/purchase-orders/services/purchase-order.service');
+    await purchaseOrderService.createSupplierShipment(purchaseOrderId, user?.id);
+  } catch (error) {
+    console.error('[ensureSupplierShipment] Could not create shipment:', error);
+  }
+}
+
+/** The specific reason a PO is not offered for sale (same rules as getUnallocatedPurchaseOrders) */
+async function whyPurchaseOrderNotSellable(purchaseOrderId: string): Promise<string> {
+  const { db } = await import('@/shared/lib/supabase/database');
+  const [{ data: po }, { count: shipments }, { data: allocations }, { count: received }] = await Promise.all([
+    db
+      .from('purchase_orders')
+      .select('status, deleted_at, sales_order_id, sales_orders:sales_order_id (order_number), locations:warehouse_id (location_type)')
+      .eq('id', purchaseOrderId)
+      .maybeSingle(),
+    db.from('shipments').select('id', { count: 'exact', head: true }).eq('purchase_order_id', purchaseOrderId),
+    db
+      .from('fulfillment_allocations')
+      .select('id, sales_order_items (sales_orders (order_number))')
+      .eq('purchase_order_id', purchaseOrderId)
+      .neq('status', 'cancelled')
+      .limit(1),
+    db
+      .from('purchase_order_items')
+      .select('id', { count: 'exact', head: true })
+      .eq('purchase_order_id', purchaseOrderId)
+      .gt('quantity_received', 0),
+  ]);
+
+  if (!po || po.deleted_at) {
+    return 'Purchase order not found.';
+  }
+  if (po.status === 'cancelled') {
+    return 'This purchase order is cancelled.';
+  }
+  const linked = (po.sales_orders as { order_number?: string } | null)?.order_number;
+  if (po.sales_order_id || (allocations && allocations.length > 0)) {
+    return `This purchase order is already sold${linked ? ` to ${linked}` : ''}.`;
+  }
+  if ((received ?? 0) > 0) {
+    return 'Tires from this purchase order are already received into stock; sell them from GDC Inventory on the sales order instead.';
+  }
+  if ((shipments ?? 0) === 0) {
+    return 'This purchase order has no shipment yet. It gets one when the supplier confirms it (status Confirmed).';
+  }
+  if ((po.locations as { location_type?: string } | null)?.location_type !== 'warehouse') {
+    return 'Set a warehouse on this purchase order (GDC Inventory, Kansas or Nebraska) first.';
+  }
+  return 'This purchase order cannot be sold right now.';
+}
+
+/**
+ * Sales order lines a purchase order (container) can be sold to before it
+ * arrives (Ankur, Nov 4 2026). The PO must be one the Add Allocation dialog
+ * offers (shipment, not sold, nothing received); the lines are open orders for
+ * the same tires that still have quantity to allocate.
+ */
+export async function getSellablePurchaseOrderLines(
+  purchaseOrderId: string
+): Promise<ActionResult<SellablePurchaseOrder>> {
+  const denied = await denyUnless(ALLOCATION_PERMISSIONS.read);
+  if (denied) {
+    return denied;
+  }
+  try {
+    await ensureSupplierShipment(purchaseOrderId);
+    const { getUnallocatedPurchaseOrders } = await import('@/features/purchase-orders/actions');
+    const available = await getUnallocatedPurchaseOrders();
+    if (!available.success) {
+      return { success: false, error: available.error || 'Could not check the purchase order' };
+    }
+    const po = (available.data || []).find((p: { id: string }) => p.id === purchaseOrderId) as
+      | { id: string; po_number: string }
+      | undefined;
+    const { db } = await import('@/shared/lib/supabase/database');
+    if (!po) {
+      return { success: false, error: await whyPurchaseOrderNotSellable(purchaseOrderId) };
+    }
+    const { data: poItems, error: poItemsError } = await db
+      .from('purchase_order_items')
+      .select('product_id, quantity_ordered')
+      .eq('purchase_order_id', purchaseOrderId);
+    if (poItemsError) {
+      return { success: false, error: poItemsError.message };
+    }
+    const containerQtyByProduct: Record<string, number> = {};
+    for (const item of poItems || []) {
+      if (item.product_id) {
+        containerQtyByProduct[item.product_id] = (containerQtyByProduct[item.product_id] || 0) + Number(item.quantity_ordered || 0);
+      }
+    }
+    const productIds = Object.keys(containerQtyByProduct);
+    if (productIds.length === 0) {
+      return { success: true, data: { purchaseOrderId, poNumber: po.po_number, containerQtyByProduct, lines: [] } };
+    }
+
+    // Open orders (not shipped / delivered / cancelled) for the same tires
+    const { data: soItems, error: soError } = await db
+      .from('sales_order_items')
+      .select('id, product_id, sku, quantity, sales_orders!inner (id, order_number, status, customer_po_number, deleted_at, customers (name))')
+      .in('product_id', productIds)
+      .in('sales_orders.status', ['draft', 'pending', 'confirmed', 'processing'])
+      // Customer orders only (C-SO...). Internal shipment orders (SO26000xx)
+      // already belong to their own container and must not be offered here.
+      .like('sales_orders.order_number', 'C-SO%')
+      .is('sales_orders.deleted_at', null);
+    if (soError) {
+      return { success: false, error: soError.message };
+    }
+
+    const itemIds = (soItems || []).map((i) => i.id);
+    const allocatedByItem = new Map<string, number>();
+    if (itemIds.length > 0) {
+      const { data: allocations } = await db
+        .from('fulfillment_allocations')
+        .select('sales_order_item_id, quantity')
+        .in('sales_order_item_id', itemIds)
+        .neq('status', 'cancelled');
+      for (const a of allocations || []) {
+        allocatedByItem.set(a.sales_order_item_id, (allocatedByItem.get(a.sales_order_item_id) || 0) + Number(a.quantity || 0));
+      }
+    }
+
+    const lines: SellablePurchaseOrderLine[] = [];
+    for (const item of (soItems || []) as Array<Record<string, unknown>>) {
+      const so = (Array.isArray(item.sales_orders) ? item.sales_orders[0] : item.sales_orders) as
+        | { id: string; order_number: string; status: string; customer_po_number: string | null; customers: { name: string } | { name: string }[] | null }
+        | null;
+      if (!so) {
+        continue;
+      }
+      const customer = Array.isArray(so.customers) ? so.customers[0] : so.customers;
+      const orderQty = Number(item.quantity || 0);
+      const remaining = orderQty - (allocatedByItem.get(String(item.id)) || 0);
+      if (remaining <= 0) {
+        continue;
+      }
+      lines.push({
+        salesOrderId: so.id,
+        salesOrderItemId: String(item.id),
+        orderNumber: so.order_number,
+        orderStatus: so.status,
+        customerName: customer?.name ?? null,
+        customerPoNumber: so.customer_po_number,
+        productId: String(item.product_id),
+        sku: String(item.sku ?? ''),
+        orderQty,
+        remaining,
+      });
+    }
+    lines.sort((a, b) => a.orderNumber.localeCompare(b.orderNumber));
+
+    return { success: true, data: { purchaseOrderId, poNumber: po.po_number, containerQtyByProduct, lines } };
+  } catch (error) {
+    console.error('Error in getSellablePurchaseOrderLines:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'An unexpected error occurred' };
   }
 }
 
@@ -305,6 +592,10 @@ export async function updateAllocationAction(
 export async function cancelAllocationAction(
   allocationId: string
 ): Promise<ActionResult> {
+  const denied = await denyUnless(ALLOCATION_PERMISSIONS.write);
+  if (denied) {
+    return denied;
+  }
   try {
     // Get allocation first to get productId
     const { getAllocationById } = await import(
@@ -376,6 +667,10 @@ export async function cancelAllocationAction(
 export async function markAllocationFulfilledAction(
   allocationId: string
 ): Promise<ActionResult<FulfillmentAllocation>> {
+  const denied = await denyUnless(ALLOCATION_PERMISSIONS.write);
+  if (denied) {
+    return denied;
+  }
   try {
     // Get allocation first to get productId
     const { getAllocationById } = await import(
@@ -458,6 +753,10 @@ export async function getAllocationsForItemAction(
     fullyAllocated: boolean;
   }>
 > {
+  const denied = await denyUnless(ALLOCATION_PERMISSIONS.read);
+  if (denied) {
+    return denied;
+  }
   try {
     const result = await getAllocationsForItem(salesOrderItemId);
 
@@ -499,6 +798,10 @@ export async function suggestAllocationsAction(params: {
   productId: string;
   customerQty: number;
 }): Promise<ActionResult<AllocationSuggestion>> {
+  const denied = await denyUnless(ALLOCATION_PERMISSIONS.read);
+  if (denied) {
+    return denied;
+  }
   try {
     const result = await suggestOptimalAllocation(params);
 
@@ -547,6 +850,10 @@ export async function validateOrderFullyAllocatedAction(
     }>;
   }>
 > {
+  const denied = await denyUnless(ALLOCATION_PERMISSIONS.read);
+  if (denied) {
+    return denied;
+  }
   try {
     // Get order with items
     const { getSalesOrder } = await import('@/features/sales-orders/actions');
@@ -629,6 +936,10 @@ export async function checkOrderSeriesRequiredAction(
     nonDirectSources: string[];
   }>
 > {
+  const denied = await denyUnless(ALLOCATION_PERMISSIONS.read);
+  if (denied) {
+    return denied;
+  }
   try {
     // Get order with items
     const { getSalesOrder } = await import('@/features/sales-orders/actions');
@@ -698,6 +1009,10 @@ export async function updateAllocationStatus(
   allocationId: string,
   status: 'pending' | 'allocated' | 'fulfilled' | 'cancelled'
 ): Promise<ActionResult<FulfillmentAllocation | null>> {
+  const denied = await denyUnless(ALLOCATION_PERMISSIONS.write);
+  if (denied) {
+    return denied;
+  }
   try {
     const { updateAllocation, getAllocationById } = await import(
       '@/features/sales-orders/repositories/fulfillment-allocations.repository'

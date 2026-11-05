@@ -7,7 +7,7 @@
  * Uses drawers for view/edit operations.
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { DataTable } from '@/shared/components/data-table/DataTable';
 import { getLocationsTableColumns } from './LocationsTableColumns';
@@ -25,7 +25,9 @@ import {
   AlertDialogTitle,
 } from '@/shared/components/ui/alert-dialog';
 import { toast } from 'sonner';
+import { useAuthStore } from '@/shared/stores/auth.store';
 import { deleteLocation } from '../actions';
+import { LOCATION_PERMISSIONS } from '../lib/permissions';
 
 interface LocationsTableProps {
   data: LocationTableRow[];
@@ -35,6 +37,16 @@ interface LocationsTableProps {
 
 export function LocationsTable({ data, isLoading = false, onRefresh }: LocationsTableProps) {
   const router = useRouter();
+  const { hasPermission } = useAuthStore();
+  const [hasMounted, setHasMounted] = useState(false);
+
+  useEffect(() => {
+    setHasMounted(true);
+  }, []);
+
+  // Only check after hydration (the auth store is persisted on the client)
+  const canEdit = hasMounted && hasPermission(LOCATION_PERMISSIONS.edit);
+  const canDelete = hasMounted && hasPermission(LOCATION_PERMISSIONS.delete);
 
   // Drawer state
   const [viewDrawerOpen, setViewDrawerOpen] = useState(false);
@@ -99,8 +111,8 @@ export function LocationsTable({ data, isLoading = false, onRefresh }: Locations
 
   const columns = getLocationsTableColumns({
     onView: handleView,
-    onEdit: handleEdit,
-    onDelete: handleDeleteClick,
+    onEdit: canEdit ? handleEdit : undefined,
+    onDelete: canDelete ? handleDeleteClick : undefined,
   });
 
   return (

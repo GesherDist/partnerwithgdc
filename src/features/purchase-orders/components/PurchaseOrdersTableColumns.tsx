@@ -106,10 +106,19 @@ export function PurchaseOrdersTableColumns(options: ColumnsOptions = {}): Column
       ),
       cell: ({ row }) => {
         const displayValue = row.original.customerName || row.original.warehouseLocationName || '-';
+        const soldTo = row.original.salesOrderNumber;
         return (
-          <span className="text-sm font-medium">
-            {displayValue}
-          </span>
+          <div className="flex flex-col gap-0.5">
+            <span className="text-sm font-medium">
+              {displayValue}
+            </span>
+            {/* Container already sold to a customer (linked sales order) */}
+            {soldTo && (
+              <span className="w-fit rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800">
+                Sold · {soldTo}
+              </span>
+            )}
+          </div>
         );
       },
     },
@@ -256,7 +265,7 @@ export function PurchaseOrdersTableColumns(options: ColumnsOptions = {}): Column
                     View
                   </DropdownMenuItem>
                 )}
-                {onEditStatus && (
+                {onEditStatus && po.status !== 'invoiced' && (
                   <DropdownMenuItem onClick={() => onEditStatus(po)}>
                     <FileEdit className="mr-2 h-4 w-4" />
                     Edit Status

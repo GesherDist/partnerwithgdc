@@ -14,7 +14,7 @@ import { revalidatePath } from 'next/cache';
 import { productService } from '../services/product.service';
 import { createProductSchema, updateProductSchema, productFormSchema, formToCreateDTO } from '../lib/schemas';
 import type { ProductListParams, Product, ProductTableRow, ProductWithFormattedPrices } from '../types';
-import { getCurrentUser, hasPermission, hasAnyPermission } from '@/shared/lib/auth';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
 import type { AppUser } from '@/shared/stores/auth.store';
 import { productCycleCostRepository, type ProductCycleCost } from '../repositories/product-cycle-cost.repository';
 import { ORDER_SERIES } from '@/shared/lib/global-data';
@@ -71,28 +71,6 @@ async function authorize(permission: string): Promise<AuthorizeResult> {
   return { ok: true, user };
 }
 
-/**
- * Same as `authorize`, but any one of the permissions is enough.
- *
- * Used for reads that more than one role shape needs — editing a product, for
- * example, requires loading it first.
- */
-async function authorizeAny(permissions: string[]): Promise<AuthorizeResult> {
-  const user = await getCurrentUser();
-
-  if (!user) {
-    return { ok: false, result: { success: false, error: 'Authentication required' } };
-  }
-
-  if (!hasAnyPermission(user, permissions)) {
-    return {
-      ok: false,
-      result: { success: false, error: `Permission denied: requires one of [${permissions.join(', ')}]` },
-    };
-  }
-
-  return { ok: true, user };
-}
 
 /**
  * Revalidate every route that renders product data
@@ -119,7 +97,7 @@ export async function getProducts(params: ProductListParams = {}): Promise<Actio
  * Get a single product by ID
  */
 export async function getProduct(id: string): Promise<ActionResult<ProductWithFormattedPrices>> {
-  const auth = await authorizeAny(['products.view_detail', 'products.edit']);
+  const auth = await authorize('products.view_detail');
   if (!auth.ok) {return auth.result;}
 
   return productService.getById(id);
@@ -129,7 +107,7 @@ export async function getProduct(id: string): Promise<ActionResult<ProductWithFo
  * Get a single product by SKU
  */
 export async function getProductBySku(sku: string): Promise<ActionResult<ProductWithFormattedPrices>> {
-  const auth = await authorizeAny(['products.view_detail', 'products.edit']);
+  const auth = await authorize('products.view_detail');
   if (!auth.ok) {return auth.result;}
 
   return productService.getBySku(sku);
@@ -548,7 +526,7 @@ const MAX_CYCLE_COST_DOLLARS = 1_000_000;
  * Get the purchase cost per order cycle for a product
  */
 export async function getProductCycleCosts(productId: string): Promise<ActionResult<ProductCycleCost[]>> {
-  const auth = await authorizeAny(['products.view_detail', 'products.edit']);
+  const auth = await authorize('products.view_detail');
   if (!auth.ok) {return auth.result;}
 
   try {

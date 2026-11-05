@@ -22,8 +22,9 @@ import type {
   OrderStatus,
   CreateSalesOrderItemDTO,
 } from '../types';
-import { ORDER_STATUS_TRANSITIONS as STATUS_TRANSITIONS } from '../types';
+import { ORDER_STATUS_TRANSITIONS as STATUS_TRANSITIONS, PRICE_EDITABLE_ORDER_STATUSES } from '../types';
 import { auditService } from '@/shared/lib/audit';
+import { db } from '@/shared/lib/supabase/database';
 
 // Helper to convert sales order to audit data (exclude large/sensitive fields)
 function salesOrderToAuditData(order: SalesOrder | SalesOrderWithItems): Record<string, unknown> {
@@ -402,6 +403,81 @@ export const salesOrderService = {
       return {
         success: false,
         error: 'Failed to update sales order',
+      };
+    }
+  },
+
+  /**
+   * Change line prices on a confirmed / processing order (Ankur, Nov 4 2026):
+   * unit price, discount and tax only. Product and quantity stay locked
+   * because allocations, pick tickets and inventory depend on them. Draft and
+   * pending orders keep the full Edit. `warning` is set when the order already
+   * has an invoice, which then needs the same change.
+   */
+  async updateItemPrices(
+    id: string,
+    prices: Array<{ itemId: string; unitPrice: number; discountPercent: number; taxRate: number }>,
+    userId?: string
+  ): Promise<ServiceResult<SalesOrderWithItems> & { warning?: string }> {
+    try {
+      const existing = await salesOrderRepository.findById(id);
+      if (!existing) {
+        return { success: false, error: 'Sales order not found' };
+      }
+      if (!PRICE_EDITABLE_ORDER_STATUSES.includes(existing.status)) {
+        return {
+          success: false,
+          error: `Prices can't be changed on an order in ${existing.status} status.`,
+        };
+      }
+      if (prices.length === 0) {
+        return { success: false, error: 'No prices to update' };
+      }
+      for (const p of prices) {
+        if (!Number.isInteger(p.unitPrice) || p.unitPrice < 0) {
+          return { success: false, error: 'Unit price must be zero or more' };
+        }
+        if (p.discountPercent < 0 || p.discountPercent > 100 || p.taxRate < 0 || p.taxRate > 100) {
+          return { success: false, error: 'Discount and tax must be between 0 and 100%' };
+        }
+      }
+
+      const oldAuditData = salesOrderToAuditData(existing);
+      await salesOrderRepository.updateItemPrices(id, prices, userId);
+      const order = await salesOrderRepository.findById(id);
+
+      auditService.logUpdate(
+        'sales_orders',
+        'SalesOrder',
+        id,
+        oldAuditData,
+        order ? salesOrderToAuditData(order) : oldAuditData,
+        { userId },
+        `Updated prices on sales order: ${existing.orderNumber}`
+      ).catch((err) => {
+        console.error('Failed to log sales order price audit:', err);
+      });
+
+      // Pipedrive purchase history shows the tire prices
+      refreshPipedrivePurchaseHistoryAfterEdit([existing.customerId], [existing.status]);
+
+      // An invoice made from this order keeps the old prices
+      const { count } = await db
+        .from('invoices')
+        .select('id', { count: 'exact', head: true })
+        .eq('sales_order_id', id)
+        .is('deleted_at', null)
+        .neq('status', 'cancelled');
+      const warning = count
+        ? 'This order already has an invoice. Update the invoice too so it matches the new prices.'
+        : undefined;
+
+      return { success: true, data: order!, warning };
+    } catch (error) {
+      console.error('SalesOrderService.updateItemPrices error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to update prices',
       };
     }
   },

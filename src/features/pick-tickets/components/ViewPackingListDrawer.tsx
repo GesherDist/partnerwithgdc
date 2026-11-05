@@ -43,7 +43,9 @@ import {
 import { PdfViewerModal } from '@/shared/components/pdf-viewer';
 import { usePackingList } from '../hooks';
 import { markPackingListAsPacked, transitionPackingListStatus } from '../actions/packing-list.actions';
+import { PICK_TICKET_PERMISSIONS } from '../lib/permissions';
 import { PACKING_LIST_STATUS_LABELS, PACKING_LIST_STATUS_COLORS } from '../types';
+import { useAuthStore } from '@/shared/stores/auth.store';
 
 interface ViewPackingListDrawerProps {
   packingListId: string | null;
@@ -95,6 +97,8 @@ export function ViewPackingListDrawer({
   onStatusChange,
 }: ViewPackingListDrawerProps) {
   const { data: packingList, isLoading, error, refetch } = usePackingList(open ? packingListId : null);
+  const { hasPermission } = useAuthStore();
+  const mayPack = hasPermission(PICK_TICKET_PERMISSIONS.pack);
   const [isUpdating, setIsUpdating] = useState(false);
   const [showPdfModal, setShowPdfModal] = useState(false);
   const [showShipDialog, setShowShipDialog] = useState(false);
@@ -188,9 +192,9 @@ export function ViewPackingListDrawer({
     }
   };
 
-  const canMarkAsPacked = packingList?.status === 'draft';
-  const canShip = packingList?.status === 'packed';
-  const canDeliver = packingList?.status === 'shipped';
+  const canMarkAsPacked = mayPack && packingList?.status === 'draft';
+  const canShip = mayPack && packingList?.status === 'packed';
+  const canDeliver = mayPack && packingList?.status === 'shipped';
 
   return (
     <Sheet open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>

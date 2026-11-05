@@ -8,7 +8,7 @@
 
 import { creditCheckService } from '../services/credit-check.service';
 import type { CreditCheckResult, CustomerCreditInfo } from '../services/credit-check.service';
-import { getCurrentUser, hasPermission, hasAnyPermission } from '@/shared/lib/auth';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
 
 // ============================================
 // TYPES
@@ -36,7 +36,7 @@ export async function getCustomerCredit(
   }
 
   // Anyone who can view customers or create orders can check credit
-  if (!hasAnyPermission(user, ['customers.view_detail', 'quotes.create', 'sales_orders.create'])) {
+  if (!hasPermission(user, 'credit.view_status')) {
     return { success: false, error: 'Permission denied' };
   }
 
@@ -68,7 +68,7 @@ export async function checkCustomerCredit(
   }
 
   // Anyone creating quotes or orders can check credit
-  if (!hasAnyPermission(user, ['quotes.create', 'sales_orders.create'])) {
+  if (!hasPermission(user, 'credit.view_status')) {
     return { success: false, error: 'Permission denied' };
   }
 
@@ -129,7 +129,7 @@ export async function subtractFromCustomerBalance(
   }
 
   // Only users who can process payments can update balance
-  if (!hasAnyPermission(user, ['payments.create', 'invoices.edit'])) {
+  if (!hasPermission(user, 'invoices.record_payment')) {
     return { success: false, error: 'Permission denied' };
   }
 
@@ -158,7 +158,7 @@ export async function canOverrideCredit(): Promise<ActionResult<boolean>> {
   }
 
   // Finance and super_admin can override credit
-  const canOverride = hasAnyPermission(user, ['credit.override', 'customers.edit']);
+  const canOverride = hasPermission(user, 'credit.override');
   return { success: true, data: canOverride };
 }
 
@@ -176,7 +176,7 @@ export async function logCreditOverride(
   }
 
   // Only users with override permission can log overrides
-  if (!hasAnyPermission(user, ['credit.override', 'customers.edit'])) {
+  if (!hasPermission(user, 'credit.override')) {
     return { success: false, error: 'Permission denied' };
   }
 

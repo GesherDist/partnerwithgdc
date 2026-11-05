@@ -13,7 +13,8 @@ import { revalidatePath } from 'next/cache';
 import { PickTicketService } from '../services';
 import { shipInventoryForPickTicket } from '../services/inventory-ship.service';
 import { db } from '@/shared/lib/supabase/database';
-import { getCurrentUser, hasPermission, hasAnyPermission } from '@/shared/lib/auth';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
+import { PICK_TICKET_PERMISSIONS } from '../lib/permissions';
 import type { AppUser } from '@/shared/stores/auth.store';
 import type {
   PickTicket,
@@ -61,32 +62,13 @@ async function authorize(permission: string): Promise<AuthorizeResult> {
   return { ok: true, user };
 }
 
-/**
- * Same as `authorize`, but any one of the permissions is enough.
- */
-async function authorizeAny(permissions: string[]): Promise<AuthorizeResult> {
-  const user = await getCurrentUser();
-
-  if (!user) {
-    return { ok: false, result: { success: false, error: 'Authentication required' } };
-  }
-
-  if (!hasAnyPermission(user, permissions)) {
-    return {
-      ok: false,
-      result: { success: false, error: `Permission denied: requires one of [${permissions.join(', ')}]` },
-    };
-  }
-
-  return { ok: true, user };
-}
 
 // ============================================
 // LIST PICK TICKETS
 // ============================================
 
 export async function listPickTickets(params: PickTicketListParams = {}) {
-  const auth = await authorize('pick_tickets.view');
+  const auth = await authorize(PICK_TICKET_PERMISSIONS.view);
   if (!auth.ok) {
     return auth.result;
   }
@@ -100,7 +82,7 @@ export async function listPickTickets(params: PickTicketListParams = {}) {
 // ============================================
 
 export async function getPickTicket(id: string) {
-  const auth = await authorizeAny(['pick_tickets.view', 'pick_tickets.edit']);
+  const auth = await authorize(PICK_TICKET_PERMISSIONS.view);
   if (!auth.ok) {
     return auth.result;
   }
@@ -123,7 +105,7 @@ export async function getPickTicket(id: string) {
 export async function getPickTicketPdfData(
   id: string
 ): Promise<ActionResult<{ pickTicket: PickTicketWithItems; salesOrder: PickTicketPdfSalesOrderFields | null }>> {
-  const auth = await authorizeAny(['pick_tickets.view', 'pick_tickets.edit']);
+  const auth = await authorize(PICK_TICKET_PERMISSIONS.view);
   if (!auth.ok) {
     return auth.result;
   }
@@ -165,7 +147,7 @@ export async function getPickTicketPdfData(
 }
 
 export async function getPickTicketsBySalesOrder(salesOrderId: string) {
-  const auth = await authorize('pick_tickets.view');
+  const auth = await authorize(PICK_TICKET_PERMISSIONS.view);
   if (!auth.ok) {
     return auth.result;
   }
@@ -362,7 +344,7 @@ export async function assignPickTicket(id: string, warehouseId: string, contactI
 // ============================================
 
 export async function startPicking(id: string) {
-  const auth = await authorize('pick_tickets.pick');
+  const auth = await authorize(PICK_TICKET_PERMISSIONS.pick);
   if (!auth.ok) {
     return auth.result;
   }
@@ -382,7 +364,7 @@ export async function startPicking(id: string) {
 // ============================================
 
 export async function pickItem(pickTicketId: string, item: PickItemDTO) {
-  const auth = await authorize('pick_tickets.pick');
+  const auth = await authorize(PICK_TICKET_PERMISSIONS.pick);
   if (!auth.ok) {
     return auth.result;
   }
@@ -402,7 +384,7 @@ export async function pickItem(pickTicketId: string, item: PickItemDTO) {
 // ============================================
 
 export async function pickItems(pickTicketId: string, items: PickItemDTO[]) {
-  const auth = await authorize('pick_tickets.pick');
+  const auth = await authorize(PICK_TICKET_PERMISSIONS.pick);
   if (!auth.ok) {
     return auth.result;
   }
@@ -431,7 +413,7 @@ export async function pickItems(pickTicketId: string, items: PickItemDTO[]) {
  * 2. Full packing: picked â†' packing â†' packed â†' shipped (via Packing List flow)
  */
 export async function completePicking(id: string) {
-  const auth = await authorize('pick_tickets.pick');
+  const auth = await authorize(PICK_TICKET_PERMISSIONS.pick);
   if (!auth.ok) {
     return auth.result;
   }

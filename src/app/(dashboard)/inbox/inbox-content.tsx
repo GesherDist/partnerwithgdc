@@ -59,7 +59,9 @@ import {
 } from '@/features/inbound-emails/actions';
 import type { InboundEmail } from '@/features/inbound-emails/types';
 import { isSeairEmail, describeShippingResult } from '@/features/inbound-emails/lib/shipping-email';
+import { INBOX_PERMISSIONS } from '@/features/inbound-emails/lib/permissions';
 import { ViewEmailDrawer } from '@/features/inbound-emails/components/ViewEmailDrawer';
+import { useAuthStore } from '@/shared/stores/auth.store';
 import { formatDistanceToNow } from 'date-fns';
 import { toast } from 'sonner';
 
@@ -180,6 +182,17 @@ function StatusBadge({
 // ============================================
 
 export function InboxContent() {
+  // Permissions (only checked after hydration)
+  const { hasPermission } = useAuthStore();
+  const [hasMounted, setHasMounted] = useState(false);
+
+  useEffect(() => {
+    setHasMounted(true);
+  }, []);
+
+  const canDelete = hasMounted && hasPermission(INBOX_PERMISSIONS.delete);
+  const canProcessShipping = hasMounted && hasPermission(INBOX_PERMISSIONS.processShipping);
+
   // State
   const [emails, setEmails] = useState<InboundEmail[]>([]);
   const [loading, setLoading] = useState(true);
@@ -505,7 +518,7 @@ export function InboxContent() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1">
-                        {isSeairEmail(email.from_email) && (
+                        {canProcessShipping && isSeairEmail(email.from_email) && (
                           <Button
                             variant="ghost"
                             size="icon"
@@ -534,16 +547,18 @@ export function InboxContent() {
                         >
                           <Eye className="h-4 w-4" />
                         </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDeleteClick(email);
-                          }}
-                        >
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
+                        {canDelete && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteClick(email);
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>

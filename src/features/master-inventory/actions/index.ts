@@ -11,6 +11,7 @@ import { masterInventoryService } from '../services/master-inventory.service';
 import { createClient } from '@/shared/lib/supabase/server';
 import { inventoryService } from '@/features/inventory/services/inventory.service';
 import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
+import { MASTER_INVENTORY_PERMISSIONS } from '../lib/permissions';
 import { auditService } from '@/shared/lib/audit';
 import { logDealerInventoryMovement } from '@/features/inventory/services/inventory-movement.service';
 import {
@@ -39,6 +40,28 @@ type ActionResult<T> =
   | { success: false; error: string };
 
 // ============================================
+// AUTHORIZATION HELPER
+// ============================================
+
+/**
+ * Returns an error result when the caller is not signed in or lacks the
+ * permission (see MASTER_INVENTORY_PERMISSIONS), otherwise null.
+ */
+async function denyUnless(permission: string): Promise<{ success: false; error: string } | null> {
+  const user = await getCurrentUser();
+
+  if (!user) {
+    return { success: false, error: 'Authentication required' };
+  }
+
+  if (!hasPermission(user, permission)) {
+    return { success: false, error: `Permission denied: ${permission}` };
+  }
+
+  return null;
+}
+
+// ============================================
 // SERVER ACTIONS
 // ============================================
 
@@ -48,6 +71,11 @@ type ActionResult<T> =
 export async function getMasterInventory(
   filters: MasterInventoryFilters = {}
 ): Promise<ActionResult<PaginatedResult<MasterInventoryItem>>> {
+  const denied = await denyUnless(MASTER_INVENTORY_PERMISSIONS.read);
+  if (denied) {
+    return denied;
+  }
+
   try {
     const result = await masterInventoryService.getInventory(filters);
     return { success: true, data: result };
@@ -64,6 +92,11 @@ export async function getMasterInventory(
  * Get master inventory stats
  */
 export async function getMasterInventoryStats(): Promise<ActionResult<MasterInventoryStats>> {
+  const denied = await denyUnless(MASTER_INVENTORY_PERMISSIONS.read);
+  if (denied) {
+    return denied;
+  }
+
   try {
     const stats = await masterInventoryService.getStats();
     return { success: true, data: stats };
@@ -82,6 +115,11 @@ export async function getMasterInventoryStats(): Promise<ActionResult<MasterInve
 export async function getProductInventorySummary(
   productId: string
 ): Promise<ActionResult<ProductInventorySummary | null>> {
+  const denied = await denyUnless(MASTER_INVENTORY_PERMISSIONS.read);
+  if (denied) {
+    return denied;
+  }
+
   try {
     if (!productId || productId.trim() === '') {
       return { success: false, error: 'Product ID is required' };
@@ -104,6 +142,11 @@ export async function getProductInventorySummary(
 export async function searchMasterInventory(
   searchTerm: string
 ): Promise<ActionResult<MasterInventoryItem[]>> {
+  const denied = await denyUnless(MASTER_INVENTORY_PERMISSIONS.read);
+  if (denied) {
+    return denied;
+  }
+
   try {
     if (!searchTerm || searchTerm.trim().length < 2) {
       return { success: true, data: [] };
@@ -124,6 +167,11 @@ export async function searchMasterInventory(
  * Get low stock items
  */
 export async function getLowStockItems(): Promise<ActionResult<MasterInventoryItem[]>> {
+  const denied = await denyUnless(MASTER_INVENTORY_PERMISSIONS.read);
+  if (denied) {
+    return denied;
+  }
+
   try {
     const items = await masterInventoryService.getLowStockItems();
     return { success: true, data: items };
@@ -142,6 +190,11 @@ export async function getLowStockItems(): Promise<ActionResult<MasterInventoryIt
 export async function getInventoryByProduct(
   productId: string
 ): Promise<ActionResult<MasterInventoryItem[]>> {
+  const denied = await denyUnless(MASTER_INVENTORY_PERMISSIONS.read);
+  if (denied) {
+    return denied;
+  }
+
   try {
     if (!productId || productId.trim() === '') {
       return { success: false, error: 'Product ID is required' };
@@ -193,6 +246,11 @@ export async function getInventoryAllocationsForMaster(
   sourceType: InventorySource,
   dealerId?: string | null
 ): Promise<ActionResult<AllocationDetail[]>> {
+  const denied = await denyUnless(MASTER_INVENTORY_PERMISSIONS.read);
+  if (denied) {
+    return denied;
+  }
+
   try {
     const supabase = await createClient();
 

@@ -10,6 +10,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/shared/lib/supabase/server';
 import { createAdminClient } from '@/shared/lib/supabase/admin';
+import { requirePermission } from '@/shared/lib/auth/check-permission';
+import { INBOX_PERMISSIONS } from '@/features/inbound-emails/lib/permissions';
 
 // ============================================
 // POST /api/quotes/from-extracted-email
@@ -28,6 +30,11 @@ export async function POST(request: NextRequest) {
 
     if (authError || !user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const guard = await requirePermission(INBOX_PERMISSIONS.createQuote);
+    if (guard.response) {
+      return guard.response;
     }
 
     // Parse request body

@@ -12,7 +12,7 @@ import {
   createUserSchema,
 } from '@/features/users/lib/schemas';
 import { resolveActor } from '@/features/users/lib/require-actor';
-import { denyWithout, denyWithoutAny, denySuperAdminRoleGrant } from '@/features/users/lib/user-guards';
+import { denyWithout, denySuperAdminRoleGrant } from '@/features/users/lib/user-guards';
 import {
   successResponse,
   createdResponse,
@@ -38,8 +38,8 @@ export async function GET(request: NextRequest) {
         : unauthorizedResponse('Authentication required');
     }
 
-    // Invoice editing also lists users (sales rep picker)
-    const denied = denyWithoutAny(actor, ['users.view_module', 'orders.view_module']);
+    // Listing users (Users page, sales rep pickers) needs users.view
+    const denied = denyWithout(actor, 'users.view');
     if (denied) {return denied;}
 
     // Parse query parameters

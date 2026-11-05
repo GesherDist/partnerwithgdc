@@ -14,8 +14,9 @@ import {
   type CreateLocationContactDTO,
   type UpdateLocationContactDTO,
 } from '../repositories/location-contacts.repository';
-import { createClient } from '@/shared/lib/supabase/server';
-import { getAppUserByAuthId } from '@/shared/lib/auth';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
+import type { AppUser } from '@/shared/stores/auth.store';
+import { LOCATION_PERMISSIONS } from '../lib/permissions';
 
 // ============================================
 // TYPES
@@ -28,6 +29,42 @@ export interface ActionResult<T = unknown> {
 }
 
 // ============================================
+// AUTHORIZATION HELPER
+// ============================================
+
+type AuthorizeResult =
+  | { ok: true; user: AppUser }
+  | { ok: false; result: { success: false; error: string } };
+
+/**
+ * Resolve the current application user. Locations and their contacts are
+ * reference data, so reading them needs only a signed-in user.
+ */
+async function requireLogin(): Promise<AuthorizeResult> {
+  const user = await getCurrentUser();
+
+  if (!user) {
+    return { ok: false, result: { success: false, error: 'Authentication required' } };
+  }
+
+  return { ok: true, user };
+}
+
+/**
+ * Resolve the current application user and verify that they hold the
+ * permission (see LOCATION_PERMISSIONS).
+ */
+async function authorize(permission: string): Promise<AuthorizeResult> {
+  const auth = await requireLogin();
+
+  if (auth.ok && !hasPermission(auth.user, permission)) {
+    return { ok: false, result: { success: false, error: `Permission denied: ${permission}` } };
+  }
+
+  return auth;
+}
+
+// ============================================
 // READ ACTIONS
 // ============================================
 
@@ -35,11 +72,9 @@ export interface ActionResult<T = unknown> {
  * Get all contacts for a specific location
  */
 export async function getLocationContacts(locationId: string): Promise<ActionResult<LocationContact[]>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await requireLogin();
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
@@ -58,11 +93,9 @@ export async function getLocationContacts(locationId: string): Promise<ActionRes
  * Get a single contact by ID
  */
 export async function getLocationContact(id: string): Promise<ActionResult<LocationContact>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await requireLogin();
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
@@ -84,11 +117,9 @@ export async function getLocationContact(id: string): Promise<ActionResult<Locat
  * Get active contacts for a location (for sending emails)
  */
 export async function getActiveLocationContacts(locationId: string): Promise<ActionResult<LocationContact[]>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await requireLogin();
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {
@@ -113,17 +144,11 @@ export async function getActiveLocationContacts(locationId: string): Promise<Act
 export async function createLocationContact(
   data: CreateLocationContactDTO
 ): Promise<ActionResult<LocationContact>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(LOCATION_PERMISSIONS.manageContacts);
+  if (!auth.ok) {
+    return auth.result;
   }
-
-  const appUser = await getAppUserByAuthId(user.id);
-  if (!appUser) {
-    return { success: false, error: 'User profile not found' };
-  }
+  const appUser = auth.user;
 
   try {
     // Check if email already exists for this location
@@ -156,17 +181,11 @@ export async function updateLocationContact(
   id: string,
   data: UpdateLocationContactDTO
 ): Promise<ActionResult<LocationContact>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(LOCATION_PERMISSIONS.manageContacts);
+  if (!auth.ok) {
+    return auth.result;
   }
-
-  const appUser = await getAppUserByAuthId(user.id);
-  if (!appUser) {
-    return { success: false, error: 'User profile not found' };
-  }
+  const appUser = auth.user;
 
   try {
     // If email is being changed, check for duplicates
@@ -202,11 +221,9 @@ export async function updateLocationContact(
  * Delete a contact
  */
 export async function deleteLocationContact(id: string): Promise<ActionResult<void>> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return { success: false, error: 'Authentication required' };
+  const auth = await authorize(LOCATION_PERMISSIONS.manageContacts);
+  if (!auth.ok) {
+    return auth.result;
   }
 
   try {

@@ -24,7 +24,7 @@ import type {
 } from '../types';
 import { createClient } from '@/shared/lib/supabase/server';
 import { db } from '@/shared/lib/supabase/database';
-import { getCurrentUser, hasPermission, hasAnyPermission } from '@/shared/lib/auth';
+import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
 import type { AppUser } from '@/shared/stores/auth.store';
 
 // ============================================
@@ -63,25 +63,6 @@ async function authorize(permission: string): Promise<AuthorizeResult> {
   return { ok: true, user };
 }
 
-/**
- * Same as `authorize`, but any one of the permissions is enough.
- */
-async function authorizeAny(permissions: string[]): Promise<AuthorizeResult> {
-  const user = await getCurrentUser();
-
-  if (!user) {
-    return { ok: false, result: { success: false, error: 'Authentication required' } };
-  }
-
-  if (!hasAnyPermission(user, permissions)) {
-    return {
-      ok: false,
-      result: { success: false, error: `Permission denied: requires one of [${permissions.join(', ')}]` },
-    };
-  }
-
-  return { ok: true, user };
-}
 
 // ============================================
 // LIST ACTIONS
@@ -116,7 +97,7 @@ export async function getQuotes(
  * Get a single quote by ID
  */
 export async function getQuote(id: string): Promise<ActionResult<QuoteWithItems>> {
-  const auth = await authorizeAny(['quotes.view_detail', 'quotes.edit']);
+  const auth = await authorize('quotes.view_detail');
   if (!auth.ok) {
     return auth.result;
   }
@@ -130,7 +111,7 @@ export async function getQuote(id: string): Promise<ActionResult<QuoteWithItems>
 export async function getQuoteByNumber(
   quoteNumber: string
 ): Promise<ActionResult<QuoteWithItems>> {
-  const auth = await authorizeAny(['quotes.view_detail', 'quotes.edit']);
+  const auth = await authorize('quotes.view_detail');
   if (!auth.ok) {
     return auth.result;
   }
@@ -264,7 +245,7 @@ export async function updateQuote(
   const rawData: Record<string, unknown> = {};
 
   const fields = [
-    'quoteDate', 'validUntil', 'customerId', 'salesRepId',
+    'quoteNumber', 'quoteDate', 'validUntil', 'customerId', 'salesRepId',
     'currencyCode', 'customerNotes', 'internalNotes', 'termsAndConditions',
     'customerPoNumber'
   ];
@@ -274,6 +255,10 @@ export async function updateQuote(
     if (value !== null) {
       rawData[field] = value;
     }
+  }
+  // An empty quote number keeps the current one
+  if (typeof rawData.quoteNumber === 'string' && rawData.quoteNumber.trim() === '') {
+    delete rawData.quoteNumber;
   }
 
   // Handle addresses

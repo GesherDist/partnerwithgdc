@@ -18,6 +18,8 @@ import {
   notFoundResponse,
 } from '@/shared/lib/api/response';
 import { createClient } from '@/shared/lib/supabase/server';
+import { requirePermission } from '@/shared/lib/auth/check-permission';
+import { CUSTOMER_PERMISSIONS } from '@/features/customers/lib/permissions';
 
 interface RouteParams {
   params: Promise<{ customerId: string }>;
@@ -37,6 +39,11 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
 
     if (!user) {
       return unauthorizedResponse('Authentication required');
+    }
+
+    const guard = await requirePermission(CUSTOMER_PERMISSIONS.viewContacts);
+    if (guard.response) {
+      return guard.response;
     }
 
     // Validate customerId format
@@ -75,6 +82,11 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
     if (!user) {
       return unauthorizedResponse('Authentication required');
+    }
+
+    const guard = await requirePermission(CUSTOMER_PERMISSIONS.createContact);
+    if (guard.response) {
+      return guard.response;
     }
 
     // Validate customerId format

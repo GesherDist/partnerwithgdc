@@ -17,6 +17,8 @@ import {
   unauthorizedResponse,
 } from '@/shared/lib/api/response';
 import { createClient } from '@/shared/lib/supabase/server';
+import { requirePermission } from '@/shared/lib/auth/check-permission';
+import { LOCATION_PERMISSIONS } from '@/features/locations/lib/permissions';
 
 /**
  * GET /api/locations
@@ -81,7 +83,10 @@ export async function POST(request: NextRequest) {
       return unauthorizedResponse('Authentication required');
     }
 
-    // TODO: Check permission (locations.create)
+    const guard = await requirePermission(LOCATION_PERMISSIONS.create);
+    if (guard.response) {
+      return guard.response;
+    }
 
     // Parse request body
     const body = await request.json();
