@@ -41,7 +41,8 @@ import { Pencil, Building2, MapPin, Send, Loader2, Calendar, X, Layers, Warehous
 import { toast } from 'sonner';
 import { cn } from '@/shared/lib/utils';
 import { usePurchaseOrder } from '../hooks/usePurchaseOrder';
-import { sendPurchaseOrder, getSuppliersForDropdown, updatePOSupplier } from '../actions';
+import { sendPurchaseOrder, getSuppliersForDropdown, updatePOSupplier, getPurchaseOrderAllocations } from '../actions';
+import type { PurchaseOrderAllocationSummary } from '../actions';
 import { PO_STATUS_COLORS, PO_STATUS_LABELS } from '../types';
 import type { ViewPurchaseOrderDrawerProps, SupplierSummary } from '../types';
 import { ORDER_SERIES } from '@/shared/lib/global-data';
@@ -91,6 +92,9 @@ export function ViewPurchaseOrderDrawer({
   const [isUpdatingOrderSeries, setIsUpdatingOrderSeries] = useState(false);
   // Warehouses state
   const [warehouses, setWarehouses] = useState<Array<{ id: string; name: string }>>([]);
+  // Customer orders this container is allocated to
+  const [allocations, setAllocations] = useState<PurchaseOrderAllocationSummary[]>([]);
+  const [fullySold, setFullySold] = useState(false);
 
   // Load suppliers when editing
   useEffect(() => {
@@ -105,6 +109,25 @@ export function ViewPurchaseOrderDrawer({
       loadWarehouses();
     }
   }, [open]);
+
+  // Load customer allocations whenever the PO (re)loads
+  useEffect(() => {
+    let cancelled = false;
+    setAllocations([]);
+    setFullySold(false);
+    if (!open || !po?.id) {
+      return;
+    }
+    getPurchaseOrderAllocations(po.id).then((result) => {
+      if (!cancelled && result.success && result.data) {
+        setAllocations(result.data.allocations);
+        setFullySold(result.data.fullySold);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, po]);
 
   const loadSuppliers = async () => {
     const data = await getSuppliersForDropdown();
@@ -453,6 +476,38 @@ export function ViewPurchaseOrderDrawer({
               </div>
             </div>
 
+            {/* Customer orders this container is allocated to */}
+            {allocations.length > 0 && (
+              <div className="space-y-2">
+                <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                  Allocated to Customers
+                </h3>
+                <div className="rounded-lg border divide-y">
+                  {allocations.map((a) => (
+                    <div key={a.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{a.customerName || 'Unknown customer'}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {a.orderNumber || '-'}
+                          {a.customerPoNumber ? ` · Customer PO ${a.customerPoNumber}` : ''}
+                          {a.sku ? ` · ${a.sku}` : ''}
+                        </p>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <p className="text-sm font-semibold">{a.quantity} tires</p>
+                        <p className="text-xs text-muted-foreground capitalize">{a.status}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {fullySold
+                    ? 'The whole container is sold. These tires go to the customer, not into warehouse stock.'
+                    : 'Only the tires not allocated above go into warehouse stock when received.'}
+                </p>
+              </div>
+            )}
+
             <Separator />
 
             {/* Items */}
@@ -570,6 +625,7 @@ export function ViewPurchaseOrderDrawer({
             <div className="flex gap-2">
               {hasPermission('purchase_orders.receive') &&
                 !NOT_RECEIVABLE_STATUSES.includes(po.status) &&
+                !fullySold &&
                 po.items.some((item) => item.quantityOrdered > item.quantityReceived) && (
                 <Button
                   variant="outline"

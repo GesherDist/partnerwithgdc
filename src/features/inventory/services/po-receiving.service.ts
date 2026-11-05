@@ -116,6 +116,7 @@ interface PoItemRow {
 
 interface AllocationRow {
   location_id: string | null;
+  quantity: number | null;
   container_remaining: number | null;
   sales_order_items: { product_id: string | null } | null;
 }
@@ -153,7 +154,7 @@ async function loadPoItems(purchaseOrderId: string): Promise<PoItemRow[]> {
 async function loadActiveAllocations(purchaseOrderId: string): Promise<AllocationRow[]> {
   const { data, error } = await db
     .from('fulfillment_allocations')
-    .select('location_id, container_remaining, sales_order_items (product_id)')
+    .select('location_id, quantity, container_remaining, sales_order_items (product_id)')
     .eq('purchase_order_id', purchaseOrderId)
     .neq('status', 'cancelled');
 
@@ -161,6 +162,32 @@ async function loadActiveAllocations(purchaseOrderId: string): Promise<Allocatio
     throw new Error(`Failed to load allocations: ${error.message}`);
   }
   return (data || []) as unknown as AllocationRow[];
+}
+
+const FULLY_SOLD_REASON =
+  'This container is sold in full to a customer order. The tires go to the customer, so they are not received into warehouse stock.';
+
+/**
+ * Every tire on the container is allocated to customer orders: for each stock
+ * line, active allocations of that product cover the ordered quantity.
+ */
+function isFullySold(allocations: AllocationRow[], items: PoItemRow[]): boolean {
+  const stockItems = items.filter(isStockItem);
+  if (allocations.length === 0 || stockItems.length === 0) {
+    return false;
+  }
+  const allocatedByProduct = new Map<string, number>();
+  for (const a of allocations) {
+    const productId = a.sales_order_items?.product_id;
+    if (productId) {
+      allocatedByProduct.set(productId, (allocatedByProduct.get(productId) || 0) + Number(a.quantity || 0));
+    }
+  }
+  const orderedByProduct = new Map<string, number>();
+  for (const item of stockItems) {
+    orderedByProduct.set(item.product_id!, (orderedByProduct.get(item.product_id!) || 0) + Number(item.quantity_ordered || 0));
+  }
+  return [...orderedByProduct].every(([productId, ordered]) => (allocatedByProduct.get(productId) || 0) >= ordered);
 }
 
 /** Physical warehouses stock can be received into (GDC-INV excluded). */
@@ -189,11 +216,53 @@ function pendingOf(item: PoItemRow): number {
   return Math.max(0, (item.quantity_ordered || 0) - (item.quantity_received || 0));
 }
 
+/**
+ * Qty per PO line that may still go into warehouse stock. Tires allocated to
+ * customer orders (pre-sold, e.g. 30 of a 72 container) go to the customer,
+ * so per product only ordered - allocated - already received is left; that
+ * allowance is spread over the product's lines in order.
+ */
+function stockPendingByItem(items: PoItemRow[], allocations: AllocationRow[]): Map<string, number> {
+  const allocatedByProduct = new Map<string, number>();
+  for (const a of allocations) {
+    const productId = a.sales_order_items?.product_id;
+    if (productId) {
+      allocatedByProduct.set(productId, (allocatedByProduct.get(productId) || 0) + Number(a.quantity || 0));
+    }
+  }
+  const allowance = new Map<string, number>();
+  for (const item of items.filter(isStockItem)) {
+    const productId = item.product_id!;
+    const ordered = Number(item.quantity_ordered || 0);
+    const received = Number(item.quantity_received || 0);
+    allowance.set(productId, (allowance.get(productId) ?? -(allocatedByProduct.get(productId) || 0)) + ordered - received);
+  }
+  const result = new Map<string, number>();
+  for (const item of items) {
+    if (!isStockItem(item)) {
+      result.set(item.id, 0);
+      continue;
+    }
+    const left = Math.max(0, allowance.get(item.product_id!) || 0);
+    const pending = Math.min(pendingOf(item), left);
+    result.set(item.id, pending);
+    allowance.set(item.product_id!, left - pending);
+  }
+  return result;
+}
+
 /** Move the PO to partial / received based on what has been received so far. */
-async function syncPoStatus(po: PoRow, items: PoItemRow[], userId?: string): Promise<string> {
+async function syncPoStatus(
+  po: PoRow,
+  items: PoItemRow[],
+  userId?: string,
+  allocations: AllocationRow[] = []
+): Promise<string> {
   const stockItems = items.filter(isStockItem);
   const anyReceived = stockItems.some((i) => (i.quantity_received || 0) > 0);
-  const allReceived = stockItems.length > 0 && stockItems.every((i) => pendingOf(i) === 0);
+  // Pre-sold tires are never received into stock, so they count as done
+  const stockPending = stockPendingByItem(items, allocations);
+  const allReceived = stockItems.length > 0 && stockItems.every((i) => (stockPending.get(i.id) || 0) === 0);
 
   let target: POStatus | null = null;
   if (allReceived) {
@@ -263,8 +332,9 @@ export const poReceivingService = {
         mode = 'dropship';
       }
 
+      const stockPending = stockPendingByItem(items, allocations);
       const receivingItems: ReceivingItem[] = items.map((item) => {
-        const pending = pendingOf(item);
+        const pending = isStockItem(item) ? stockPending.get(item.id) || 0 : pendingOf(item);
         const stock = isStockItem(item);
         let suggested = 0;
         if (stock) {
@@ -294,8 +364,12 @@ export const poReceivingService = {
       let blockedReason: string | undefined;
       if (!isManuallyReceivablePoStatus(po.status)) {
         blockedReason = `Purchase order is ${po.status}; it must be confirmed before goods can be received`;
+      } else if (isFullySold(allocations, items)) {
+        blockedReason = FULLY_SOLD_REASON;
       } else if (!receivingItems.some((i) => i.isStockItem && i.pending > 0)) {
-        blockedReason = 'All tires on this purchase order have already been received';
+        blockedReason = allocations.length > 0
+          ? 'All unsold tires on this purchase order have already been received; the rest is sold to a customer order'
+          : 'All tires on this purchase order have already been received';
       } else if (locations.length === 0) {
         blockedReason = 'No active warehouse found';
       }
@@ -320,6 +394,12 @@ export const poReceivingService = {
     }
   },
 
+  /** True when the whole container is allocated to customer orders */
+  async isPurchaseOrderFullySold(purchaseOrderId: string): Promise<boolean> {
+    const [allocations, items] = await Promise.all([loadActiveAllocations(purchaseOrderId), loadPoItems(purchaseOrderId)]);
+    return isFullySold(allocations, items);
+  },
+
   /**
    * Receive PO lines into a warehouse (on_hand += qty)
    */
@@ -331,6 +411,13 @@ export const poReceivingService = {
       }
       if (!isManuallyReceivablePoStatus(po.status)) {
         return { success: false, error: `Purchase order is ${po.status}; it must be confirmed before goods can be received` };
+      }
+
+      // Container sold in full to customer orders: the tires go to the customer,
+      // never into free warehouse stock (Ankur, Nov 4 2026)
+      const [activeAllocations, poItems] = await Promise.all([loadActiveAllocations(po.id), loadPoItems(po.id)]);
+      if (isFullySold(activeAllocations, poItems)) {
+        return { success: false, error: FULLY_SOLD_REASON };
       }
 
       const locations = await loadReceivingLocations();
@@ -347,8 +434,9 @@ export const poReceivingService = {
         return { success: false, error: 'Each item can appear only once' };
       }
 
-      const items = await loadPoItems(po.id);
+      const items = poItems;
       const itemsById = new Map(items.map((i) => [i.id, i]));
+      const stockPending = stockPendingByItem(items, activeAllocations);
 
       // Validate everything before touching stock
       for (const line of lines) {
@@ -362,9 +450,10 @@ export const poReceivingService = {
         if (!isStockItem(item)) {
           return { success: false, error: `${item.sku || 'Item'} is not a stock item and cannot be received` };
         }
-        const pending = pendingOf(item);
+        const pending = stockPending.get(item.id) || 0;
         if (line.quantity > pending) {
-          return { success: false, error: `${item.sku || 'Item'}: only ${pending} left to receive` };
+          const soldNote = pending < pendingOf(item) ? ' (the rest is sold to a customer order)' : '';
+          return { success: false, error: `${item.sku || 'Item'}: only ${pending} left to receive into stock${soldNote}` };
         }
       }
 
@@ -413,7 +502,7 @@ export const poReceivingService = {
         received.push({ sku: item.sku, quantity: line.quantity });
       }
 
-      const poStatus = received.length > 0 ? await syncPoStatus(po, items, input.userId) : po.status;
+      const poStatus = received.length > 0 ? await syncPoStatus(po, items, input.userId, activeAllocations) : po.status;
       const totalReceived = received.reduce((sum, r) => sum + r.quantity, 0);
 
       if (received.length > 0) {

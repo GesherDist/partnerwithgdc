@@ -1190,3 +1190,72 @@ export async function getUnallocatedPurchaseOrders(): Promise<ActionResult<any[]
     };
   }
 }
+
+
+// ============================================
+// CUSTOMER ALLOCATIONS ON A PO (container sold to customer orders)
+// ============================================
+
+export interface PurchaseOrderAllocationSummary {
+  id: string;
+  salesOrderId: string | null;
+  orderNumber: string | null;
+  customerName: string | null;
+  customerPoNumber: string | null;
+  sku: string | null;
+  quantity: number;
+  fulfillmentSource: string;
+  status: string;
+}
+
+/**
+ * Which customer orders this PO (container) is allocated to, and whether the
+ * whole container is sold (then it is not received into warehouse stock).
+ */
+export async function getPurchaseOrderAllocations(purchaseOrderId: string): Promise<
+  ActionResult<{ allocations: PurchaseOrderAllocationSummary[]; fullySold: boolean }>
+> {
+  const auth = await authorize('purchase_orders.view_detail');
+  if (!auth.ok) {
+    return auth.result;
+  }
+  try {
+    const { db } = await import('@/shared/lib/supabase/database');
+    const { data, error } = await db
+      .from('fulfillment_allocations')
+      .select(`
+        id, quantity, fulfillment_source, status,
+        sales_order_items (sku, sales_orders (id, order_number, customer_po_number, customers (name)))
+      `)
+      .eq('purchase_order_id', purchaseOrderId)
+      .neq('status', 'cancelled')
+      .order('created_at', { ascending: true });
+    if (error) {
+      return { success: false, error: error.message };
+    }
+    const one = <T,>(v: T | T[] | null | undefined): T | null => (Array.isArray(v) ? v[0] ?? null : v ?? null);
+    const allocations: PurchaseOrderAllocationSummary[] = (data || []).map((row) => {
+      const item = one(row.sales_order_items as unknown as { sku: string | null; sales_orders: unknown } | null);
+      const so = one(item?.sales_orders as
+        | { id: string; order_number: string; customer_po_number: string | null; customers: unknown }
+        | null);
+      const customer = one(so?.customers as { name: string } | null);
+      return {
+        id: row.id,
+        salesOrderId: so?.id ?? null,
+        orderNumber: so?.order_number ?? null,
+        customerName: customer?.name ?? null,
+        customerPoNumber: so?.customer_po_number ?? null,
+        sku: item?.sku ?? null,
+        quantity: Number(row.quantity || 0),
+        fulfillmentSource: row.fulfillment_source,
+        status: row.status,
+      };
+    });
+    const { poReceivingService } = await import('@/features/inventory/services/po-receiving.service');
+    const fullySold = await poReceivingService.isPurchaseOrderFullySold(purchaseOrderId);
+    return { success: true, data: { allocations, fullySold } };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Failed to load allocations' };
+  }
+}
