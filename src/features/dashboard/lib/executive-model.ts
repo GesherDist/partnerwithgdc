@@ -8,7 +8,7 @@
 
 import type { BacklogOrder, ErpExecutiveFigures, SupplyCycle } from '../services/executive-erp.service';
 import type { DailySnapshot } from '../services/executive-history.service';
-import type { QboBalances, QboFinancials } from '@/modules/integrations/quickbooks/services/qbo-financials.service';
+import type { QboBalances, QboFinancials, QboOpenBills, QboOpenInvoices } from '@/modules/integrations/quickbooks/services/qbo-financials.service';
 import { addYears } from './periods';
 // PeriodKey: used by the commented ERP rows -- import { type PeriodKey } from './periods';
 
@@ -42,6 +42,14 @@ export interface CashQuarter {
   opening: number;
   /** Backlog revenue expected to be invoiced (delivered) in the quarter */
   inflow: number;
+  /** QuickBooks open invoices due in the quarter (overdue / no due date → current quarter) */
+  receivables: number;
+  /** Number of those invoices */
+  invoices: number;
+  /** QuickBooks open bills due in the quarter, paid out (overdue / no due date → current quarter) */
+  payables: number;
+  /** Number of those bills */
+  bills: number;
   closing: number;
   orders: number;
   tires: number;
@@ -53,13 +61,36 @@ export interface CashProjection {
   /** Backlog orders placed in the current quarter: no expected date / date already passed */
   undatedOrders: number;
   overdueOrders: number;
+  /** QuickBooks open invoices included (null: not in this snapshot, sync QuickBooks again) */
+  openInvoices: { total: number; overdue: number; count: number; asOf: string | null } | null;
+  /** QuickBooks open bills included (null: not in this snapshot) */
+  openBills: { total: number; overdue: number; count: number } | null;
+  /**
+   * Lowest / highest projected daily cash from today to the Through Date: cash
+   * moves on each invoice / bill due date and each order's expected delivery
+   * date (overdue or no date → today). Null until the snapshot has open invoices and bills.
+   */
+  lowCash: { value: number; date: string } | null;
+  highCash: { value: number; date: string } | null;
+  /** The day-by-day cash movements behind Low / High Cash */
+  movements: CashMovement[];
+}
+
+export interface CashMovement {
+  date: string;
+  kind: 'Invoice' | 'Bill' | 'Order';
+  ref: string;
+  party: string;
+  amount: number;
+  /** Cash at the end of that day */
+  balance: number;
 }
 type EffCols = 'pm' | 't90' | 'ytd' | 'py';
 type AvgCols = 'current' | 't90Avg' | 'ytdAvg' | 'py';
 
 export interface ExecutiveDashboardModel {
   asOf: string;
-  quickBooks: { connected: boolean; asOf: string | null; environment: string | null; hasPeriods: boolean; hasPnl: boolean };
+  quickBooks: { connected: boolean; asOf: string | null; environment: string | null; hasPeriods: boolean; hasPnl: boolean; hasOpenInvoices: boolean };
   liquidity: {
     cashToday: Cell;
     cashDate: string | null;
@@ -126,21 +157,53 @@ export function cashQuarterOf(order: BacklogOrder, asOf: string): string {
   return order.expectedDate && order.expectedDate >= current ? quarterStart(order.expectedDate) : current;
 }
 
-/**
- * Projected Cash (Ankur, Oct 27 call): Cash Today + orders on the books still to
- * be invoiced, going forward, quarter by quarter. At least 4 quarters, through
- * the quarter of the last expected order.
- */
-export function buildCashProjection(cashToday: number, orders: BacklogOrder[], asOf: string): CashProjection {
+/** Quarter an open invoice is expected to be paid in: due date; no date / overdue → current quarter */
+export function invoiceQuarterOf(dueDate: string | null, asOf: string): string {
   const current = quarterStart(asOf);
-  const byQuarter = new Map<string, { inflow: number; orders: number; tires: number }>();
+  return dueDate && dueDate >= current ? quarterStart(dueDate) : current;
+}
+
+/**
+ * Projected Cash (Ankur, Oct 27 + Nov 5 calls): Cash Today + QuickBooks open
+ * invoices (by due date) + orders on the books still to be invoiced (by expected
+ * delivery date), going forward, quarter by quarter. At least 4 quarters,
+ * through the quarter of the last expected order / invoice due date.
+ * Without open invoices (older snapshot) it is Cash Today + orders, as before.
+ */
+export function buildCashProjection(
+  cashToday: number,
+  orders: BacklogOrder[],
+  asOf: string,
+  openInvoices?: QboOpenInvoices | null,
+  invoicesAsOf: string | null = null,
+  openBills?: QboOpenBills | null
+): CashProjection {
+  const current = quarterStart(asOf);
+  const byQuarter = new Map<string, { inflow: number; receivables: number; invoices: number; payables: number; bills: number; orders: number; tires: number }>();
+  const rowOf = (q: string) => byQuarter.get(q) ?? { inflow: 0, receivables: 0, invoices: 0, payables: 0, bills: 0, orders: 0, tires: 0 };
   let last = current;
   for (const o of orders) {
     const q = cashQuarterOf(o, asOf);
-    const row = byQuarter.get(q) ?? { inflow: 0, orders: 0, tires: 0 };
+    const row = rowOf(q);
     row.inflow += o.revenue;
     row.orders += 1;
     row.tires += o.tires;
+    byQuarter.set(q, row);
+    last = q > last ? q : last;
+  }
+  for (const inv of openInvoices?.invoices ?? []) {
+    const q = invoiceQuarterOf(inv.dueDate, asOf);
+    const row = rowOf(q);
+    row.receivables += inv.balance;
+    row.invoices += 1;
+    byQuarter.set(q, row);
+    last = q > last ? q : last;
+  }
+  for (const bill of openBills?.bills ?? []) {
+    const q = invoiceQuarterOf(bill.dueDate, asOf);
+    const row = rowOf(q);
+    row.payables += bill.balance;
+    row.bills += 1;
     byQuarter.set(q, row);
     last = q > last ? q : last;
   }
@@ -148,18 +211,67 @@ export function buildCashProjection(cashToday: number, orders: BacklogOrder[], a
   const quarters: CashQuarter[] = [];
   let opening = cashToday;
   for (let q = current, i = 0; i < 4 || q <= last; q = nextQuarter(q), i++) {
-    const row = byQuarter.get(q) ?? { inflow: 0, orders: 0, tires: 0 };
+    const row = rowOf(q);
     const inflow = Math.round(row.inflow * 100) / 100;
-    const closing = Math.round((opening + inflow) * 100) / 100;
-    quarters.push({ label: quarterLabel(q), start: q, end: quarterEnd(q), opening, inflow, closing, orders: row.orders, tires: row.tires });
+    const receivables = Math.round(row.receivables * 100) / 100;
+    const payables = Math.round(row.payables * 100) / 100;
+    const closing = Math.round((opening + receivables + inflow - payables) * 100) / 100;
+    quarters.push({
+      label: quarterLabel(q),
+      start: q,
+      end: quarterEnd(q),
+      opening,
+      inflow,
+      receivables,
+      invoices: row.invoices,
+      payables,
+      bills: row.bills,
+      closing,
+      orders: row.orders,
+      tires: row.tires,
+    });
     opening = closing;
   }
 
+  // Day by day (Low / High Cash): every movement on its date, overdue / undated → today
+  const throughDate = quarters[quarters.length - 1]!.end;
+  const onDate = (d: string | null | undefined) => (d && d > asOf ? d : asOf);
+  const moves: Array<Omit<CashMovement, 'balance'>> = [
+    ...(openInvoices?.invoices ?? []).map((i) => ({ date: onDate(i.dueDate), kind: 'Invoice' as const, ref: i.doc, party: i.customer, amount: i.balance })),
+    ...(openBills?.bills ?? []).map((b) => ({ date: onDate(b.dueDate), kind: 'Bill' as const, ref: b.doc, party: b.vendor, amount: -b.balance })),
+    ...orders.map((o) => ({ date: onDate(o.expectedDate), kind: 'Order' as const, ref: o.order, party: '', amount: o.revenue })),
+  ].sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind));
+  const movements: CashMovement[] = [];
+  let balance = cashToday;
+  let low = { value: cashToday, date: asOf };
+  let high = { value: cashToday, date: asOf };
+  moves.forEach((m, i) => {
+    balance = Math.round((balance + m.amount) * 100) / 100;
+    movements.push({ ...m, balance });
+    // Compare once per day, after all of that day's movements
+    if (moves[i + 1]?.date !== m.date) {
+      if (balance < low.value) {
+        low = { value: balance, date: m.date };
+      }
+      if (balance > high.value) {
+        high = { value: balance, date: m.date };
+      }
+    }
+  });
+  const daily = Boolean(openInvoices && openBills);
+
   return {
     quarters,
-    throughDate: quarters[quarters.length - 1]!.end,
+    throughDate,
     undatedOrders: orders.filter((o) => !o.expectedDate).length,
     overdueOrders: orders.filter((o) => o.expectedDate && o.expectedDate < current).length,
+    openInvoices: openInvoices
+      ? { total: openInvoices.total, overdue: openInvoices.overdue, count: openInvoices.count, asOf: invoicesAsOf }
+      : null,
+    openBills: openBills ? { total: openBills.total, overdue: openBills.overdue, count: openBills.count } : null,
+    lowCash: daily ? low : null,
+    highCash: daily ? high : null,
+    movements: daily ? movements : [],
   };
 }
 
@@ -508,19 +620,28 @@ export function buildExecutiveModel(
     },
   };
 
-  const projection = current ? buildCashProjection(current.cash, erp.backlogOrders, erp.asOf) : null;
+  // Before Nov 6 2026: buildCashProjection(current.cash, erp.backlogOrders, erp.asOf) — orders only
+  const projection = current ? buildCashProjection(current.cash, erp.backlogOrders, erp.asOf, q?.openInvoices ?? null, qbo?.asOf ?? null, q?.openBills ?? null) : null;
 
   return {
     asOf: erp.asOf,
-    quickBooks: { connected: qboConnected, asOf: qbo?.asOf ?? null, environment: qbo?.environment ?? null, hasPeriods: Boolean(q), hasPnl: Boolean(q?.pnl) },
+    quickBooks: { connected: qboConnected, asOf: qbo?.asOf ?? null, environment: qbo?.environment ?? null, hasPeriods: Boolean(q), hasPnl: Boolean(q?.pnl), hasOpenInvoices: Boolean(q?.openInvoices && q?.openBills) },
     liquidity: {
       cashToday: current ? v(current.cash) : none(qNote),
       cashDate: current?.date ?? null,
       cashPy: pyBal ? v(pyBal.cash) : none(q ? REASON.noHistory : qNote),
-      lowCash: none(REASON.noProjection),
-      highCash: none(REASON.noProjection),
+      // Before Nov 6 2026: none(REASON.noProjection) for both
+      lowCash: projection?.lowCash
+        ? v(projection.lowCash.value, `on ${projection.lowCash.date}`)
+        : none(current && q ? 'Sync QuickBooks (open invoices / bills)' : qNote),
+      highCash: projection?.highCash
+        ? v(projection.highCash.value, `on ${projection.highCash.date}`)
+        : none(current && q ? 'Sync QuickBooks (open invoices / bills)' : qNote),
       projectedCash: projection
-        ? v(projection.quarters[projection.quarters.length - 1]!.closing, `Through ${projection.throughDate} · orders on the books`)
+        ? v(
+            projection.quarters[projection.quarters.length - 1]!.closing,
+            `Through ${projection.throughDate} · ${projection.openInvoices ? 'open invoices + ' : ''}orders on the books${projection.openBills ? ' − open bills' : ''}`
+          )
         : none(qNote),
       projection,
     },

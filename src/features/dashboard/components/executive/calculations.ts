@@ -30,13 +30,13 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
     {
       kpi: 'Low Cash / High Cash',
       formula: '= lowest / highest projected daily cash balance between today and the Projected Through Date',
-      source: 'Pending: needs the cash projection inputs below',
-      status: 'pending',
+      source: 'Cash Today (QuickBooks) moved day by day: + QuickBooks open invoices on their due date, − QuickBooks open bills on their due date, + ERP orders on the books on their expected delivery date (overdue / no date → today). Payroll and other expenses without a bill are not included',
+      status: 'live',
     },
     {
       kpi: 'Projected Cash',
-      formula: '= Cash Today + orders on the books still to be invoiced (backlog revenue: firm confirmed/processing orders not delivered, tire lines net of discounts, excl. tax), quarter by quarter by expected delivery date (requested delivery, else confirmed ETA, else ETA to US port; none or past → current quarter). Through Date = end of the last quarter (at least 4 quarters)',
-      source: 'QuickBooks cash + ERP sales orders (Ankur, Oct 27 call). Open AR, AP and other outflows not included',
+      formula: '= Cash Today + QuickBooks open invoices (open balance, in the quarter of the due date; overdue or no due date → current quarter) − QuickBooks open bills (the same, by due date) + orders on the books still to be invoiced (backlog revenue: firm confirmed/processing orders not delivered, tire lines net of discounts, excl. tax), quarter by quarter by expected delivery date (requested delivery, else confirmed ETA, else ETA to US port; none or past → current quarter). Through Date = end of the last quarter (at least 4 quarters)',
+      source: 'QuickBooks cash + QuickBooks open invoices + ERP sales orders (Ankur, Oct 27 + Nov 5 calls; QuickBooks has no estimates, so open orders stay ERP). Payroll and other expenses without a bill not included',
       status: 'live',
     },
   ],

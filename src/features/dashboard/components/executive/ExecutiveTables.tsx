@@ -104,7 +104,7 @@ function useExecutiveDashboard() {
       setState(r);
       // QuickBooks figures not from today yet: trigger the daily refresh
       // (the update event below reloads the tables when it finishes)
-      if (typeof r !== 'string' && r.quickBooks.connected && (!r.quickBooks.hasPeriods || !r.quickBooks.hasPnl || (r.quickBooks.asOf ?? '') < r.asOf)) {
+      if (typeof r !== 'string' && r.quickBooks.connected && (!r.quickBooks.hasPeriods || !r.quickBooks.hasPnl || !r.quickBooks.hasOpenInvoices ||(r.quickBooks.asOf ?? '') < r.asOf)) {
         void ensureFreshOnce();
       }
     });
@@ -308,17 +308,37 @@ function ProjectedCashByQuarter({ projection }: { projection: CashProjection | n
   const money = (n: number) => formatValue(n, 'money');
   const rows: Array<{ label: string; value: (q: CashProjection['quarters'][number]) => string; bold?: boolean }> = [
     { label: 'Opening Cash', value: (q) => money(q.opening) },
+    // Nov 6 2026: QuickBooks open invoices, by due date
+    ...(projection.openInvoices
+      ? [
+          { label: '+ Open invoices (QuickBooks)', value: (q: CashProjection['quarters'][number]) => money(q.receivables) },
+          { label: 'Invoices', value: (q: CashProjection['quarters'][number]) => String(q.invoices) },
+        ]
+      : []),
+    ...(projection.openBills
+      ? [
+          { label: '− Open bills (QuickBooks)', value: (q: CashProjection['quarters'][number]) => money(-q.payables) },
+          { label: 'Bills', value: (q: CashProjection['quarters'][number]) => String(q.bills) },
+        ]
+      : []),
     { label: '+ Orders on the books', value: (q) => money(q.inflow) },
     { label: 'Orders / Tires', value: (q) => `${q.orders} / ${q.tires.toLocaleString('en-US')}` },
     { label: 'Projected Cash (quarter end)', value: (q) => money(q.closing), bold: true },
   ];
   const placed = projection.undatedOrders + projection.overdueOrders;
+  const inv = projection.openInvoices;
   return (
     <Card>
       <CardHeader className="pb-3">
         <CardTitle className="text-lg">Projected Cash by Quarter</CardTitle>
         <CardDescription>
-          Cash Today + firm orders still to be invoiced, by expected delivery date · through {projection.throughDate}
+          {/* Before Nov 6 2026: Cash Today + firm orders still to be invoiced, by expected delivery date */}
+          {inv
+            ? `Cash Today + QuickBooks open invoices (by due date) + firm orders still to be invoiced (by expected delivery date)${projection.openBills ? ' − QuickBooks open bills (by due date)' : ''}`
+            : 'Cash Today + firm orders still to be invoiced, by expected delivery date (sync QuickBooks to add open invoices)'}{' '}
+          · through {projection.throughDate}
+          {inv && inv.overdue > 0 && ` · ${money(inv.overdue)} overdue invoices are in the current quarter`}
+          {projection.openBills && projection.openBills.overdue > 0 && ` · ${money(projection.openBills.overdue)} overdue bills are in the current quarter`}
           {placed > 0 && ` · ${placed} order(s) with no or a past delivery date are in the current quarter`}
         </CardDescription>
       </CardHeader>

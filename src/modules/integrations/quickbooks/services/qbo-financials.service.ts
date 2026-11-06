@@ -154,6 +154,34 @@ export interface QboPeriodFigures {
    * before Nov 6, 2026.
    */
   units?: Record<'mtd' | 't90' | 'ytd' | 'py' | 'pm', QboUnitsSold>;
+  /**
+   * Open invoices (Balance > 0) by due date, for Projected Cash. Missing in
+   * snapshots taken before Nov 6, 2026.
+   */
+  openInvoices?: QboOpenInvoices;
+  /**
+   * Open vendor bills (Balance > 0) by due date, for Projected / Low / High
+   * Cash. Missing in snapshots taken before Nov 6, 2026.
+   */
+  openBills?: QboOpenBills;
+}
+
+/** Open vendor bills (money still to be paid), as read on the snapshot date */
+export interface QboOpenBills {
+  total: number;
+  /** Balance already past due (or with no due date) on the snapshot date */
+  overdue: number;
+  count: number;
+  bills: Array<{ doc: string; vendor: string; txnDate: string; dueDate: string | null; balance: number }>;
+}
+
+/** Open customer invoices (money still to be received), as read on the snapshot date */
+export interface QboOpenInvoices {
+  total: number;
+  /** Balance already past due (or with no due date) on the snapshot date */
+  overdue: number;
+  count: number;
+  invoices: Array<{ doc: string; customer: string; txnDate: string; dueDate: string | null; balance: number }>;
 }
 
 /** Units sold in one period, any product (new QuickBooks products are counted automatically) */
@@ -654,6 +682,50 @@ async function weightedDaysUntilDue(access: QboAccess, entity: 'Invoice' | 'Bill
   return total > 0 ? Math.round((weighted / total) * 10) / 10 : null;
 }
 
+/** Open invoices with their due dates (Projected Cash, Nov 6 2026) */
+async function fetchOpenInvoices(access: QboAccess, today: string): Promise<QboOpenInvoices> {
+  type Row = { DocNumber?: string; TxnDate?: string; DueDate?: string; Balance?: number; CustomerRef?: { name?: string } };
+  const rows = await fetchQueryAll<Row>(access, 'Invoice', 'Id, DocNumber, TxnDate, DueDate, Balance, CustomerRef', "Balance > '0'");
+  const invoices = rows
+    .map((r) => ({
+      doc: r.DocNumber ?? '',
+      customer: r.CustomerRef?.name ?? '',
+      txnDate: r.TxnDate ?? '',
+      dueDate: r.DueDate ?? null,
+      balance: round2(Number(r.Balance ?? 0)),
+    }))
+    .filter((i) => i.balance > 0)
+    .sort((a, b) => (a.dueDate ?? '').localeCompare(b.dueDate ?? ''));
+  return {
+    total: round2(invoices.reduce((n, i) => n + i.balance, 0)),
+    overdue: round2(invoices.filter((i) => !i.dueDate || i.dueDate < today).reduce((n, i) => n + i.balance, 0)),
+    count: invoices.length,
+    invoices,
+  };
+}
+
+/** Open vendor bills with their due dates (Projected / Low / High Cash, Nov 6 2026) */
+async function fetchOpenBills(access: QboAccess, today: string): Promise<QboOpenBills> {
+  type Row = { DocNumber?: string; TxnDate?: string; DueDate?: string; Balance?: number; VendorRef?: { name?: string } };
+  const rows = await fetchQueryAll<Row>(access, 'Bill', 'Id, DocNumber, TxnDate, DueDate, Balance, VendorRef', "Balance > '0'");
+  const bills = rows
+    .map((r) => ({
+      doc: r.DocNumber ?? '',
+      vendor: r.VendorRef?.name ?? '',
+      txnDate: r.TxnDate ?? '',
+      dueDate: r.DueDate ?? null,
+      balance: round2(Number(r.Balance ?? 0)),
+    }))
+    .filter((b) => b.balance > 0)
+    .sort((a, b) => (a.dueDate ?? '').localeCompare(b.dueDate ?? ''));
+  return {
+    total: round2(bills.reduce((n, b) => n + b.balance, 0)),
+    overdue: round2(bills.filter((b) => !b.dueDate || b.dueDate < today).reduce((n, b) => n + b.balance, 0)),
+    count: bills.length,
+    bills,
+  };
+}
+
 /**
  * Credit purchases per period (spec 2.8, DPO): vendor bills less vendor
  * credits, by transaction date.
@@ -759,6 +831,14 @@ async function buildPeriodFigures(
     : undefined;
   const arDays = await weightedDaysUntilDue(access, 'Invoice', today).catch(() => null);
   const apDays = await weightedDaysUntilDue(access, 'Bill', today).catch(() => null);
+  const openInvoices = await fetchOpenInvoices(access, today).catch((error) => {
+    console.error('[QboFinancials] Open invoices failed:', error);
+    return undefined;
+  });
+  const openBills = await fetchOpenBills(access, today).catch((error) => {
+    console.error('[QboFinancials] Open bills failed:', error);
+    return undefined;
+  });
   const creditPurchases = await creditPurchasesByPeriod(access, [
     ['pm', periods.pm],
     ['t90', periods.t90],
@@ -807,6 +887,8 @@ async function buildPeriodFigures(
     ...(creditPurchases ? { creditPurchases } : {}),
     pnl,
     ...(units ? { units } : {}),
+    ...(openInvoices ? { openInvoices } : {}),
+    ...(openBills ? { openBills } : {}),
   };
 }
 
