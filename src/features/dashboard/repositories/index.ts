@@ -8,7 +8,8 @@
  */
 
 import { createAdminClient } from '@/shared/lib/supabase/admin';
-import { loadRecognizedSales, loadUnbilledDeliveredCommissionOrders, summarizeRecognizedSales } from '../services/recognized-sales.service';
+// summarizeRecognizedSales: ERP cards (replaced by QuickBooks, Nov 6 2026)
+import { loadRecognizedSales, loadUnbilledDeliveredCommissionOrders /* , summarizeRecognizedSales */ } from '../services/recognized-sales.service';
 import { getPeriods } from '../lib/periods';
 // ERP / QuickBooks split of the Revenue Trend (replaced: all months from QuickBooks, Nov 6 2026)
 // import { revenueSourceOf } from '../lib/revenue-history';
@@ -403,18 +404,17 @@ export async function getDashboardStats(_dateRange?: DateRange): Promise<Dashboa
 
   // Current dates for comparison periods
   const now = new Date();
-  const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
   const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
-
-  // Year-to-date dates
-  const currentYearStart = new Date(now.getFullYear(), 0, 1); // Jan 1 of current year
-  const lastYearStart = new Date(now.getFullYear() - 1, 0, 1); // Jan 1 of last year
-  const lastYearSameDay = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate()); // Same day last year
+  // ERP card periods (replaced by the QuickBooks snapshot periods, Nov 6 2026):
+  // const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  // const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  // const currentYearStart = new Date(now.getFullYear(), 0, 1); // Jan 1 of current year
+  // const lastYearStart = new Date(now.getFullYear() - 1, 0, 1); // Jan 1 of last year
+  // const lastYearSameDay = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate()); // Same day last year
+  // const primaryStartDate = formatDateString(currentMonthStart);
+  // const primaryEndDate = formatDateString(now);
 
   // Revenue / Units cards: month to date (the YTD cards sit next to them)
-  const primaryStartDate = formatDateString(currentMonthStart);
-  const primaryEndDate = formatDateString(now);
   const periodLabel = 'MTD';
 
   // ===================================================================
@@ -424,11 +424,12 @@ export async function getDashboardStats(_dateRange?: DateRange): Promise<Dashboa
   // Revenue = tire line totals (excl. tax) − credit notes; commission-only
   // orders and service lines (commission, handling) are not tire revenue.
   // ===================================================================
-  const recognized = await loadRecognizedSales();
-  const current = summarizeRecognizedSales(recognized, primaryStartDate, primaryEndDate);
-  const lastMonth = summarizeRecognizedSales(recognized, formatDateString(lastMonthStart), formatDateString(lastMonthEnd));
-  const ytd = summarizeRecognizedSales(recognized, formatDateString(currentYearStart), formatDateString(now));
-  const lastYearYtd = summarizeRecognizedSales(recognized, formatDateString(lastYearStart), formatDateString(lastYearSameDay));
+  // ERP recognized sales (replaced: revenue, margin and units come from QuickBooks, Nov 6 2026):
+  // const recognized = await loadRecognizedSales();
+  // const current = summarizeRecognizedSales(recognized, primaryStartDate, primaryEndDate);
+  // const lastMonth = summarizeRecognizedSales(recognized, formatDateString(lastMonthStart), formatDateString(lastMonthEnd));
+  // const ytd = summarizeRecognizedSales(recognized, formatDateString(currentYearStart), formatDateString(now));
+  // const lastYearYtd = summarizeRecognizedSales(recognized, formatDateString(lastYearStart), formatDateString(lastYearSameDay));
 
   // Revenue and Blended Margin: QuickBooks P&L at the last sync (Ankur, Nov 5
   // call: financials from QuickBooks). Revenue = Total Income − commission
@@ -448,14 +449,28 @@ export async function getDashboardStats(_dateRange?: DateRange): Promise<Dashboa
     ? ((ytdNetRevenue - lastYearYtdRevenue) / lastYearYtdRevenue) * 100
     : 0;
 
-  const currentMonthUnits = current.units;
-  const currentMonthUnits38 = current.units38;
-  const currentMonthUnits24 = current.units24;
-  const lastMonthUnits = lastMonth.units;
-  const ytdUnits = ytd.units;
-  const ytdUnits38 = ytd.units38;
-  const ytdUnits24 = ytd.units24;
-  const lastYearYtdUnits = lastYearYtd.units;
+  // Units Sold: QuickBooks Sales by Product/Service Summary, tire products (Nov 6 2026)
+  const qboUnits = (await loadQboFinancials())?.periods?.units ?? null;
+  // ERP delivered tire lines (replaced by QuickBooks):
+  // const currentMonthUnits = current.units;
+  // const currentMonthUnits38 = current.units38;
+  // const currentMonthUnits24 = current.units24;
+  // const lastMonthUnits = lastMonth.units;
+  // const ytdUnits = ytd.units;
+  // const ytdUnits38 = ytd.units38;
+  // const ytdUnits24 = ytd.units24;
+  // const lastYearYtdUnits = lastYearYtd.units;
+  const currentMonthUnits = qboUnits?.mtd.total ?? 0;
+  const lastMonthUnits = qboUnits?.pm.total ?? 0;
+  const ytdUnits = qboUnits?.ytd.total ?? 0;
+  const lastYearYtdUnits = qboUnits?.py.total ?? 0;
+  // Every size found in the product names, largest first: 38": 484 | 24": 204 | Other: 3
+  const sizeLine = (bySize: Record<string, number> | undefined) =>
+    Object.entries(bySize ?? {})
+      .filter(([, qty]) => qty !== 0)
+      .sort(([a], [b]) => (a === 'other' ? 1 : b === 'other' ? -1 : Number(b) - Number(a)))
+      .map(([size, qty]) => `${size === 'other' ? 'Other' : `${size}"`}: ${qty}`)
+      .join(' | ') || 'No units';
 
   // Blended margin: QuickBooks P&L tire sales and COGS
   // ERP (replaced by the QuickBooks P&L, Nov 6 2026):
@@ -541,22 +556,22 @@ export async function getDashboardStats(_dateRange?: DateRange): Promise<Dashboa
     {
       id: 'units-sold',
       title: `Units Sold (${periodLabel})`,
-      value: currentMonthUnits.toLocaleString('en-US'),
+      value: qboUnits ? currentMonthUnits.toLocaleString('en-US') : '—',
       change: `${unitsChange >= 0 ? '+' : ''}${unitsChange.toFixed(1)}%`,
       trend: unitsChange >= 0 ? 'up' : 'down',
       icon: 'package',
       color: 'bg-blue-500',
-      subtitle: `38": ${currentMonthUnits38} | 24": ${currentMonthUnits24}`,
+      subtitle: qboUnits ? sizeLine(qboUnits.mtd.bySize) : 'Sync QuickBooks',
     },
     {
       id: 'units-sold-ytd',
       title: 'Units Sold (YTD)',
-      value: ytdUnits.toLocaleString('en-US'),
+      value: qboUnits ? ytdUnits.toLocaleString('en-US') : '—',
       change: `${ytdUnitsChange >= 0 ? '+' : ''}${ytdUnitsChange.toFixed(1)}%`,
       trend: ytdUnitsChange >= 0 ? 'up' : 'down',
       icon: 'package',
       color: 'bg-indigo-500',
-      subtitle: `38": ${ytdUnits38} | 24": ${ytdUnits24}`,
+      subtitle: qboUnits ? sizeLine(qboUnits.ytd.bySize) : 'Sync QuickBooks',
     },
     {
       id: 'blended-margin',

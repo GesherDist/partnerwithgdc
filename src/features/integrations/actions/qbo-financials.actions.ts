@@ -82,7 +82,10 @@ export async function ensureFreshQuickBooksFinancials(): Promise<Result<{ financ
   const { financials } = await getLatestSnapshot(connection.external_account_id);
   // A snapshot from older code has no P&L totals / monthly COGS (Nov 6 2026):
   // read QuickBooks again once so the dashboard gets them
-  const hasPnl = Boolean(financials?.periods?.pnl) && (financials?.revenueHistory ?? []).every((m) => m.cogs !== undefined);
+  const hasPnl =
+    Boolean(financials?.periods?.pnl) &&
+    Boolean(financials?.periods?.units?.ytd?.bySize) &&
+    (financials?.revenueHistory ?? []).every((m) => m.cogs !== undefined);
   if (financials && financials.asOf >= businessToday() && financials.periods && hasPnl) {
     return { success: true, data: null }; // already fresh today
   }

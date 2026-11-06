@@ -9,7 +9,8 @@
 import type { BacklogOrder, ErpExecutiveFigures, SupplyCycle } from '../services/executive-erp.service';
 import type { DailySnapshot } from '../services/executive-history.service';
 import type { QboBalances, QboFinancials } from '@/modules/integrations/quickbooks/services/qbo-financials.service';
-import { addYears, type PeriodKey } from './periods';
+import { addYears } from './periods';
+// PeriodKey: used by the commented ERP rows -- import { type PeriodKey } from './periods';
 
 export interface Cell {
   value: number | null;
@@ -317,8 +318,9 @@ export function buildExecutiveModel(
     operatingProfit: {},
   } as ExecutiveDashboardModel['perTire'];
   for (const c of cols4) {
-    const s = erp.sales[c as PeriodKey];
-    const opexValue = q ? q.opex[c as PeriodKey] : null;
+    // ERP inputs of the old profitability / per tire rows (replaced by QuickBooks, Nov 6 2026):
+    // const s = erp.sales[c as PeriodKey];
+    // const opexValue = q ? q.opex[c as PeriodKey] : null;
 
     // Profitability (2.1) from the QuickBooks P&L (Ankur, Nov 5 call: all
     // financials from QuickBooks). Older snapshots have no P&L totals: sync again.
@@ -339,43 +341,61 @@ export function buildExecutiveModel(
       prof.operatingProfit[c] = missing;
     }
 
-    // Client: PY "since go-live" — no prior-year sales in the ERP is not a $0 year
-    if (c === 'py' && s.units === 0 && s.revenue === 0) {
-      const since = none(REASON.sinceGoLive);
-      // ERP profitability (replaced by the QuickBooks P&L above, Nov 6 2026):
-      // prof.revenue[c] = since;
-      // prof.cogs[c] = { ...since, pct: null };
-      // prof.grossProfit[c] = { ...since, pct: null };
-      // prof.opex[c] = { ...(opexValue === null ? none(qNote) : v(opexValue)), pct: null };
-      // prof.operatingProfit[c] = { ...since, pct: null };
-      tire.tiresSold[c] = since;
-      tire.revenue[c] = since;
-      tire.cogs[c] = since;
-      tire.grossProfit[c] = since;
-      tire.opex[c] = since;
-      tire.operatingProfit[c] = since;
-      continue;
+    // Per tire (2.2) from QuickBooks (Nov 6 2026): tires = Sales by Product/Service
+    // tire quantity; revenue = P&L tire sales (commission excluded); COGS and
+    // OPEX from the P&L. Operating profit per tire = tire gross profit − OPEX.
+    const units = q?.units?.[c];
+    if (pl && units) {
+      const each = (x: number) => (units.total === 0 ? none(REASON.noSales) : v(Math.round((x / units.total) * 100) / 100));
+      tire.tiresSold[c] = v(units.total);
+      tire.revenue[c] = each(pl.salesRevenue);
+      tire.cogs[c] = each(pl.cogs);
+      tire.grossProfit[c] = each(pl.salesRevenue - pl.cogs);
+      tire.opex[c] = each(pl.opex);
+      tire.operatingProfit[c] = each(pl.salesRevenue - pl.cogs - pl.opex);
+    } else {
+      for (const key of ['tiresSold', 'revenue', 'cogs', 'grossProfit', 'opex', 'operatingProfit'] as const) {
+        tire[key][c] = none(qNote);
+      }
     }
-    // ERP-only inputs of the old profitability rows:
-    // const costNote = s.cogsComplete ? undefined : REASON.partialCost;
-    // const cogsCell = s.cogs === null ? none(REASON.noCost) : v(s.cogs, costNote);
-    const gp = s.cogs === null ? null : s.revenue - s.cogs;
-    const op = gp === null || opexValue === null ? null : gp - opexValue;
-    // ERP profitability (replaced by the QuickBooks P&L above, Nov 6 2026):
-    // const pct = (x: number | null) => (x === null || s.revenue === 0 ? null : Math.round((x / s.revenue) * 1000) / 10);
-    // prof.revenue[c] = v(s.revenue);
-    // prof.cogs[c] = { ...cogsCell, pct: pct(s.cogs) };
-    // prof.grossProfit[c] = { ...(gp === null ? none(REASON.noCost) : v(gp, costNote)), pct: pct(gp) };
-    // prof.opex[c] = { ...(opexValue === null ? none(qNote) : v(opexValue)), pct: pct(opexValue) };
-    // prof.operatingProfit[c] = { ...(op === null ? none(gp === null ? REASON.noCost : qNote) : v(op)), pct: pct(op) };
+    //// ERP per tire (replaced by QuickBooks above, Nov 6 2026):
+    //// Client: PY "since go-live" — no prior-year sales in the ERP is not a $0 year
+    // if (c === 'py' && s.units === 0 && s.revenue === 0) {
+    //   const since = none(REASON.sinceGoLive);
+    //  // ERP profitability (replaced by the QuickBooks P&L above, Nov 6 2026):
+    //  // prof.revenue[c] = since;
+    //  // prof.cogs[c] = { ...since, pct: null };
+    //  // prof.grossProfit[c] = { ...since, pct: null };
+    //  // prof.opex[c] = { ...(opexValue === null ? none(qNote) : v(opexValue)), pct: null };
+    //  // prof.operatingProfit[c] = { ...since, pct: null };
+    //   tire.tiresSold[c] = since;
+    //   tire.revenue[c] = since;
+    //   tire.cogs[c] = since;
+    //   tire.grossProfit[c] = since;
+    //   tire.opex[c] = since;
+    //   tire.operatingProfit[c] = since;
+    //   continue;
+    // }
+    //// ERP-only inputs of the old profitability rows:
+    //// const costNote = s.cogsComplete ? undefined : REASON.partialCost;
+    //// const cogsCell = s.cogs === null ? none(REASON.noCost) : v(s.cogs, costNote);
+    // const gp = s.cogs === null ? null : s.revenue - s.cogs;
+    // const op = gp === null || opexValue === null ? null : gp - opexValue;
+    //// ERP profitability (replaced by the QuickBooks P&L above, Nov 6 2026):
+    //// const pct = (x: number | null) => (x === null || s.revenue === 0 ? null : Math.round((x / s.revenue) * 1000) / 10);
+    //// prof.revenue[c] = v(s.revenue);
+    //// prof.cogs[c] = { ...cogsCell, pct: pct(s.cogs) };
+    //// prof.grossProfit[c] = { ...(gp === null ? none(REASON.noCost) : v(gp, costNote)), pct: pct(gp) };
+    //// prof.opex[c] = { ...(opexValue === null ? none(qNote) : v(opexValue)), pct: pct(opexValue) };
+    //// prof.operatingProfit[c] = { ...(op === null ? none(gp === null ? REASON.noCost : qNote) : v(op)), pct: pct(op) };
 
-    const perUnit = (x: number | null, missing: string) => (s.units === 0 ? none(REASON.noSales) : x === null ? none(missing) : v(Math.round((x / s.units) * 100) / 100));
-    tire.tiresSold[c] = v(s.units);
-    tire.revenue[c] = perUnit(s.revenue, '');
-    tire.cogs[c] = perUnit(s.cogs, REASON.noCost);
-    tire.grossProfit[c] = perUnit(gp, REASON.noCost);
-    tire.opex[c] = perUnit(opexValue, qNote);
-    tire.operatingProfit[c] = perUnit(op, gp === null ? REASON.noCost : qNote);
+    // const perUnit = (x: number | null, missing: string) => (s.units === 0 ? none(REASON.noSales) : x === null ? none(missing) : v(Math.round((x / s.units) * 100) / 100));
+    // tire.tiresSold[c] = v(s.units);
+    // tire.revenue[c] = perUnit(s.revenue, '');
+    // tire.cogs[c] = perUnit(s.cogs, REASON.noCost);
+    // tire.grossProfit[c] = perUnit(gp, REASON.noCost);
+    // tire.opex[c] = perUnit(opexValue, qNote);
+    // tire.operatingProfit[c] = perUnit(op, gp === null ? REASON.noCost : qNote);
   }
 
   // ---------- commission (separate from tire revenue and gross profit) ----------

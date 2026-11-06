@@ -27,10 +27,12 @@ import { DrillDownButton } from './DrillDownButton';
 // ============================================
 
 /** Ankur's recognition rule (recognized-sales.service), shared by the revenue, units and margin cards */
-const RECOGNITION_RULE =
-  '\n\nRecognized when the order is delivered: delivery date = sales_orders.actual_delivery_date, else the delivered shipment arrival, else the order date for status Delivered.\nExcludes: commission-only orders (Galileo invoices the customer) and service lines (commission, handling).';
-const TIRE_SIZES =
-  '\n\nBreakdown by tire size:\n• 38" tires: rim_size = "38" or name contains "38"\n• 24" tires: rim_size = "24" or name contains "24"';
+// ERP texts of the old formulas (replaced by QuickBooks, Nov 6 2026):
+// const RECOGNITION_RULE =
+//   '\n\nRecognized when the order is delivered: delivery date = sales_orders.actual_delivery_date, else the delivered shipment arrival, else the order date for status Delivered.\nExcludes: commission-only orders (Galileo invoices the customer) and service lines (commission, handling).';
+// ERP texts of the old formulas (replaced by QuickBooks, Nov 6 2026):
+// const TIRE_SIZES =
+//   '\n\nBreakdown by tire size:\n• 38" tires: rim_size = "38" or name contains "38"\n• 24" tires: rim_size = "24" or name contains "24"';
 
 const CALCULATION_FORMULAS: Record<string, { title: string; formula: string; notes?: string }> = {
   'revenue-mtd': {
@@ -49,12 +51,16 @@ const CALCULATION_FORMULAS: Record<string, { title: string; formula: string; not
   },
   'units-sold': {
     title: 'Units Sold (MTD) Calculation',
-    formula: `Units = Σ quantity of the same delivered tire lines used for Revenue (MTD: 1st of this month to today)${RECOGNITION_RULE}${TIRE_SIZES}`,
-    notes: 'Tires Sold, Ankur\'s Definition 3.4. Only delivered orders, not open orders. Always MTD: the date filter changes the charts, not this card. Compared to last month.',
+    // ERP formula (replaced by QuickBooks, Nov 6 2026):
+    // formula: `Units = Σ quantity of the same delivered tire lines used for Revenue (MTD: 1st of this month to today)${RECOGNITION_RULE}${TIRE_SIZES}`,
+    formula: `Units = Σ Quantity of tire products in QuickBooks Sales by Product/Service Summary (Accrual), 1st of this month to the last sync\n\nProducts: QuickBooks item type Inventory or Non-inventory (any product, new ones included); Service items such as commission and fees are not units\n\nSize from the product name: (38") or R38 → 38", (24") or R24 → 24", any other size the same way`,
+    notes: 'Tires Sold, Ankur\'s Definition 3.4, from QuickBooks invoices. Always MTD: the date filter changes the charts, not this card. Compared to last month.',
   },
   'units-sold-ytd': {
     title: 'Units Sold (YTD) Calculation',
-    formula: `Units = Σ quantity of the same delivered tire lines used for Revenue (Jan 1 to today)${RECOGNITION_RULE}${TIRE_SIZES}`,
+    // ERP formula (replaced by QuickBooks, Nov 6 2026):
+    // formula: `Units = Σ quantity of the same delivered tire lines used for Revenue (Jan 1 to today)${RECOGNITION_RULE}${TIRE_SIZES}`,
+    formula: `Units = Σ Quantity of tire products in QuickBooks Sales by Product/Service Summary (Accrual), Jan 1 to the last sync\n\nProducts: QuickBooks item type Inventory or Non-inventory; Service items are not units`,
     notes: 'Compared to the same period last year (YTD).',
   },
   'blended-margin': {

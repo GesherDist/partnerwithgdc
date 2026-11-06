@@ -147,6 +147,23 @@ export interface QboPeriodFigures {
    * Missing in snapshots taken before Nov 6, 2026 (sync QuickBooks again).
    */
   pnl?: Record<'mtd' | 't90' | 'ytd' | 'py' | 'pm', QboPnlFigures>;
+  /**
+   * Units sold per period: Sales by Product/Service Summary (Accrual), product
+   * items only (QuickBooks item type Inventory / Non-inventory; Service items
+   * such as commission and fees are not units). Missing in snapshots taken
+   * before Nov 6, 2026.
+   */
+  units?: Record<'mtd' | 't90' | 'ytd' | 'py' | 'pm', QboUnitsSold>;
+}
+
+/** Units sold in one period, any product (new QuickBooks products are counted automatically) */
+export interface QboUnitsSold {
+  total: number;
+  /** Units per size read from the product name, e.g. { '38': 484, '24': 204 }; 'other' = no size in the name */
+  bySize: Record<string, number>;
+  /** Sales amount of the same lines */
+  amount: number;
+  items: Array<{ name: string; type: string; quantity: number; amount: number; size: string }>;
 }
 
 /** One P&L column: QuickBooks section totals (fallback: mapped account categories) */
@@ -499,6 +516,79 @@ export function pnlFigures(
   };
 }
 
+/** QuickBooks item types that are physical units; Service items (commission, fees) are not */
+const UNIT_ITEM_TYPES = new Set(['Inventory', 'NonInventory']);
+/** Fallback when the item type is unknown (item deleted / not readable): name says tire */
+const UNIT_ITEM_NAME = /tire/i;
+
+/** Size from the product name: '(38")', 'R38' or '42"' → '38' / '42'; none → 'other' */
+export function sizeOfProduct(name: string): string {
+  return (
+    name.match(/\((\d{2})"?\)/)?.[1] ??
+    name.match(/R(\d{2})(?!\d)/i)?.[1] ??
+    name.match(/(?<!\d)(\d{2})"/)?.[1] ??
+    'other'
+  );
+}
+
+/** QuickBooks item id → item type (Inventory, NonInventory, Service, ...) */
+export async function fetchItemTypes(access: QboAccess): Promise<Map<string, string>> {
+  const types = new Map<string, string>();
+  for (let start = 1; start < 10_000; start += 1000) {
+    const page = await fetchQuery(access, `SELECT Id, Type FROM Item STARTPOSITION ${start} MAXRESULTS 1000`);
+    const items = (page.Item ?? []) as Array<{ Id?: string; Type?: string }>;
+    for (const item of items) {
+      if (item.Id) {
+        types.set(String(item.Id), item.Type ?? '');
+      }
+    }
+    if (items.length < 1000) {
+      break;
+    }
+  }
+  return types;
+}
+
+/** Units sold from a Sales by Product/Service Summary report (Quantity and Amount columns) */
+export function unitsFromItemSales(report: Report, itemTypes: Map<string, string>): QboUnitsSold {
+  const titles = (report.Columns?.Column ?? []).map((c) => (c.ColTitle ?? '').trim().toLowerCase());
+  const qtyCol = titles.indexOf('quantity');
+  const amountCol = titles.indexOf('amount');
+  const items: QboUnitsSold['items'] = [];
+  const walk = (rows: ReportRow[] | undefined) => {
+    for (const row of rows ?? []) {
+      const cols = row.ColData;
+      const first = cols?.[0] as { value?: string; id?: string } | undefined;
+      const name = first?.value ?? '';
+      const type = first?.id ? itemTypes.get(String(first.id)) : undefined;
+      const isUnit = type !== undefined ? UNIT_ITEM_TYPES.has(type) : UNIT_ITEM_NAME.test(name);
+      if (cols && name && isUnit) {
+        items.push({
+          name,
+          type: type ?? 'unknown',
+          quantity: qtyCol > 0 ? num(cols[qtyCol]?.value) : 0,
+          amount: amountCol > 0 ? round2(num(cols[amountCol]?.value)) : 0,
+          size: sizeOfProduct(name),
+        });
+      }
+      if (row.Rows?.Row) {
+        walk(row.Rows.Row);
+      }
+    }
+  };
+  walk(report.Rows?.Row);
+  const bySize: Record<string, number> = {};
+  for (const item of items) {
+    bySize[item.size] = (bySize[item.size] ?? 0) + item.quantity;
+  }
+  return {
+    total: items.reduce((s, i) => s + i.quantity, 0),
+    bySize,
+    amount: round2(items.reduce((s, i) => s + i.amount, 0)),
+    items,
+  };
+}
+
 async function fetchQuery(access: QboAccess, sql: string): Promise<Record<string, unknown>> {
   const url = `${getApiBaseUrl(access.environment as QuickBooksEnvironment)}/v3/company/${access.realmId}/query?query=${encodeURIComponent(sql)}&minorversion=${QBO_API_MINOR_VERSION}`;
   let response: Response | null = null;
@@ -632,12 +722,28 @@ async function buildPeriodFigures(
     // QuickBooks ignores end_date alone (it returns this year to date): pass both
     fetchReport(access, 'BalanceSheet', { start_date: date, end_date: date, accounting_method: 'Accrual' })
   );
+  // Tires sold per period (Sales by Product/Service Summary); optional
+  const unitRanges = pnlRanges.filter(([key]) => key !== 't90py') as Array<['mtd' | 't90' | 'ytd' | 'py' | 'pm', { from: string; to: string }]>;
+  const unitJobs = unitRanges.map(([, r]) => () =>
+    fetchReport(access, 'ItemSales', { start_date: r.from, end_date: r.to, accounting_method: 'Accrual' }).catch((error) => {
+      console.error('[QboFinancials] Sales by product failed:', error);
+      return null as unknown as Report;
+    })
+  );
 
   // One queue for every report so QuickBooks never sees more than 3 parallel calls
-  const all = await limited<Report>([...pnlJobs, ...cashJobs, ...balanceJobs], 3);
+  const all = await limited<Report>([...pnlJobs, ...cashJobs, ...balanceJobs, ...unitJobs], 3);
   const pnls = all.slice(0, pnlJobs.length);
   const cashFlows = all.slice(pnlJobs.length, pnlJobs.length + cashJobs.length);
-  const balanceSheets = all.slice(pnlJobs.length + cashJobs.length);
+  const balanceSheets = all.slice(pnlJobs.length + cashJobs.length, pnlJobs.length + cashJobs.length + balanceJobs.length);
+  const itemSales = all.slice(pnlJobs.length + cashJobs.length + balanceJobs.length);
+  const itemTypes = await fetchItemTypes(access).catch((error) => {
+    console.error('[QboFinancials] Item types failed:', error);
+    return new Map<string, string>();
+  });
+  const units = itemSales.every(Boolean)
+    ? (Object.fromEntries(unitRanges.map(([key], i) => [key, unitsFromItemSales(itemSales[i]!, itemTypes)])) as Record<'mtd' | 't90' | 'ytd' | 'py' | 'pm', QboUnitsSold>)
+    : undefined;
   const arDays = await weightedDaysUntilDue(access, 'Invoice', today).catch(() => null);
   const apDays = await weightedDaysUntilDue(access, 'Bill', today).catch(() => null);
   const creditPurchases = await creditPurchasesByPeriod(access, [
@@ -687,6 +793,7 @@ async function buildPeriodFigures(
     apWeightedDays: apDays,
     ...(creditPurchases ? { creditPurchases } : {}),
     pnl,
+    ...(units ? { units } : {}),
   };
 }
 
