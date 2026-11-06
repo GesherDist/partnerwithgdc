@@ -36,6 +36,8 @@ export function PurchaseOrdersTable({
   onEdit,
   onEditStatus,
   onSendToSupplier,
+  onViewPdf,
+  onEmailToSupplier,
   onDelete,
   toolbarContent,
   pagination,
@@ -108,9 +110,9 @@ export function PurchaseOrdersTable({
           return 0;
       }
 
-      if (aVal === null || bVal === null) return 0;
-      if (aVal < bVal) return internalSortDirection === 'asc' ? -1 : 1;
-      if (aVal > bVal) return internalSortDirection === 'asc' ? 1 : -1;
+      if (aVal === null || bVal === null) { return 0; }
+      if (aVal < bVal) { return internalSortDirection === 'asc' ? -1 : 1; }
+      if (aVal > bVal) { return internalSortDirection === 'asc' ? 1 : -1; }
       return 0;
     });
   }, [data, internalSortColumn, internalSortDirection, externalSorting]);
@@ -120,6 +122,8 @@ export function PurchaseOrdersTable({
     onEdit,
     onEditStatus,
     onSendToSupplier,
+    onViewPdf,
+    onEmailToSupplier,
     onDelete,
     sortColumn,
     sortDirection,

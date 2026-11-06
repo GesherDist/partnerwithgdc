@@ -391,8 +391,10 @@ export function FinancialMetricsTables() {
             ]}
             rows={[
               { label: 'Cash Today', format: 'money', cells: { amount: m.liquidity.cashToday, py: m.liquidity.cashPy } },
-              { label: 'Low Cash', format: 'money', cells: { amount: m.liquidity.lowCash, py: { value: null } } },
-              { label: 'High Cash', format: 'money', cells: { amount: m.liquidity.highCash, py: { value: null } } },
+              // Hidden (Ankur, Nov 4 call: "Let's remove for now the low cash and high cash").
+              // The calculation is still built in executive-model.ts; uncomment to show again.
+              // { label: 'Low Cash', format: 'money', cells: { amount: m.liquidity.lowCash, py: { value: null } } },
+              // { label: 'High Cash', format: 'money', cells: { amount: m.liquidity.highCash, py: { value: null } } },
               { label: 'Projected Cash', format: 'money', cells: { amount: m.liquidity.projectedCash, py: { value: null } } },
             ]}
           />

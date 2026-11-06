@@ -72,8 +72,11 @@ const CALCULATION_FORMULAS: Record<string, { title: string; formula: string; not
   },
   'open-orders': {
     title: 'Open Orders Calculation',
-    formula: 'Count of sales orders with status IN ("confirmed", "processing")\n\nOrder Value = Sum of sales_orders.grand_total for those orders\nChange = vs the open orders already placed by the end of last month',
-    notes: 'All open sales orders (confirmed or processing), deleted orders excluded; commission-only orders are counted too. Does not filter by date.',
+    // Before Nov 6 2026:
+    // formula: 'Count of sales orders with status IN ("confirmed", "processing")\n\nOrder Value = Sum of sales_orders.grand_total for those orders\nChange = vs the open orders already placed by the end of last month',
+    // notes: 'All open sales orders (confirmed or processing), deleted orders excluded; commission-only orders are counted too. Does not filter by date.',
+    formula: 'Open Order = a confirmed sales order that is not invoiced yet (closed once it is invoiced), including pre-sold orders on containers not received yet\n\nOpen Orders = Count of sales orders with status IN ("confirmed", "processing")\nOrder Value = Sum of sales_orders.grand_total for those orders\nChange = vs the open orders already placed by the end of last month',
+    notes: 'Definition from Ankur (Nov 4 call: "confirmed, but not paid"; Nov 5 call: open sales orders "that have not been invoiced yet", closed "when they\'re invoiced"). Source today: ERP sales orders (deleted excluded; commission-only counted; no date filter). Ankur keeps open sales orders in QuickBooks too: this moves to QuickBooks once the QuickBooks transaction type is confirmed.',
   },
   'commission-expected-ytd': {
     title: 'Commission Expected (YTD) Calculation',

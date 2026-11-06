@@ -434,6 +434,10 @@ export interface PurchaseOrdersTableProps {
   onEdit?: (po: POListItem) => void;
   onEditStatus?: (po: POListItem) => void;
   onSendToSupplier?: (po: POListItem) => void;
+  /** Row menu: open the PO PDF (view / download) */
+  onViewPdf?: (po: POListItem) => void;
+  /** Row menu: email the PO PDF again (non-draft POs) */
+  onEmailToSupplier?: (po: POListItem) => void;
   onDelete?: (po: POListItem) => void;
   toolbarContent?: React.ReactNode;
   // Server-side pagination

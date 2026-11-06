@@ -27,16 +27,25 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
       status: 'live',
     },
     { kpi: 'PY', formula: '= the same, on the date one year ago', source: 'QuickBooks Balance Sheet (past date)', status: 'live' },
-    {
-      kpi: 'Low Cash / High Cash',
-      formula: '= lowest / highest projected daily cash balance between today and the Projected Through Date',
-      source: 'Cash Today (QuickBooks) moved day by day: + QuickBooks open invoices on their due date, − QuickBooks open bills on their due date, + ERP orders on the books on their expected delivery date (overdue / no date → today). Payroll and other expenses without a bill are not included',
-      status: 'live',
-    },
+    // Hidden with the Low / High Cash rows (Ankur, Nov 4 call: "remove for now")
+    // {
+    //   kpi: 'Low Cash / High Cash',
+    //   formula: '= lowest / highest projected daily cash balance between today and the Projected Through Date',
+    //   source: 'Cash Today (QuickBooks) moved day by day: + QuickBooks open invoices on their due date, − QuickBooks open bills on their due date, + ERP orders on the books on their expected delivery date (overdue / no date → today). Payroll and other expenses without a bill are not included',
+    //   status: 'live',
+    // },
     {
       kpi: 'Projected Cash',
       formula: '= Cash Today + QuickBooks open invoices (open balance, in the quarter of the due date; overdue or no due date → current quarter) − QuickBooks open bills (the same, by due date) + orders on the books still to be invoiced (backlog revenue: firm confirmed/processing orders not delivered, tire lines net of discounts, excl. tax), quarter by quarter by expected delivery date (requested delivery, else confirmed ETA, else ETA to US port; none or past → current quarter). Through Date = end of the last quarter (at least 4 quarters)',
-      source: 'QuickBooks cash + QuickBooks open invoices + ERP sales orders (Ankur, Oct 27 + Nov 5 calls; QuickBooks has no estimates, so open orders stay ERP). Payroll and other expenses without a bill not included',
+      // Before Nov 6 2026:
+      // source: 'QuickBooks cash + QuickBooks open invoices + ERP sales orders (Ankur, Oct 27 + Nov 5 calls; QuickBooks has no estimates, so open orders stay ERP). Payroll and other expenses without a bill not included',
+      source: 'QuickBooks cash + QuickBooks open invoices − QuickBooks open bills + ERP open orders (Ankur, Oct 27 + Nov 4 + Nov 5 calls). Payroll and other expenses without a bill not included',
+      status: 'live',
+    },
+    {
+      kpi: 'Open Orders (in Projected Cash)',
+      formula: '= Σ open sales orders: confirmed, not invoiced yet (an order leaves Open Orders when it is invoiced and is then counted in open invoices, so it is never counted twice), including pre-sold orders on containers not received yet. Amount = tire lines net of discounts, excl. tax, commission excluded; tires already delivered are left out. Each order goes in the quarter of its expected delivery date (requested delivery, else confirmed ETA, else ETA to US port; none or past → current quarter)',
+      source: 'Today: ERP sales orders (status confirmed / processing). Ankur keeps open sales orders in QuickBooks too (Nov 5 call): this moves to QuickBooks once the QuickBooks transaction type is confirmed (QuickBooks estimates are 0)',
       status: 'live',
     },
   ],

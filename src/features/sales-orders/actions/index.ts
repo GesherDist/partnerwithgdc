@@ -536,6 +536,7 @@ export async function confirmSalesOrder(
     .select(`
       id,
       customer_qty,
+      products:product_id (item_type),
       allocations:fulfillment_allocations(id, status, quantity, fulfillment_source, purchase_order_id)
     `)
     .eq('sales_order_id', id);
@@ -543,6 +544,12 @@ export async function confirmSalesOrder(
   if (itemsWithAllocations && itemsWithAllocations.length > 0) {
     // Check each item has allocations
     for (const item of itemsWithAllocations) {
+      // Skip service and non-inventory items (they don't need allocation), same as the drawer and validateOrderFullyAllocatedAction
+      const product = (Array.isArray(item.products) ? item.products[0] : item.products) as { item_type: string | null } | null;
+      if (product?.item_type === 'service' || product?.item_type === 'non_inventory') {
+        continue;
+      }
+
       // Cancelled allocations released their stock and no longer count
       const allocations = ((item.allocations as any[]) ?? []).filter((a: { status: string }) => a.status !== 'cancelled');
 

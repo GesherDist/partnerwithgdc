@@ -20,16 +20,17 @@ import {
   TableHeader,
   TableRow,
 } from '@/shared/components/ui/table';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/shared/components/ui/alert-dialog';
+// Used only by the old Send Confirmation Dialog (replaced Nov 7 2026)
+// import {
+//   AlertDialog,
+//   AlertDialogAction,
+//   AlertDialogCancel,
+//   AlertDialogContent,
+//   AlertDialogDescription,
+//   AlertDialogFooter,
+//   AlertDialogHeader,
+//   AlertDialogTitle,
+// } from '@/shared/components/ui/alert-dialog';
 import {
   Select,
   SelectContent,
@@ -37,11 +38,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/shared/components/ui/select';
-import { Pencil, Building2, MapPin, Send, Loader2, Calendar, X, Layers, Warehouse, PackageCheck, ShoppingCart } from 'lucide-react';
+import { Pencil, Building2, MapPin, Send, Loader2, Calendar, X, Layers, Warehouse, PackageCheck, ShoppingCart, FileText, Mail } from 'lucide-react';
+import { PdfViewerModal } from '@/shared/components/pdf-viewer';
+import { EmailPurchaseOrderDialog } from './EmailPurchaseOrderDialog';
 import { toast } from 'sonner';
 import { cn } from '@/shared/lib/utils';
 import { usePurchaseOrder } from '../hooks/usePurchaseOrder';
-import { sendPurchaseOrder, getSuppliersForDropdown, updatePOSupplier, getPurchaseOrderAllocations } from '../actions';
+// sendPurchaseOrder: now called through emailPurchaseOrderToSupplier (EmailPurchaseOrderDialog)
+// import { sendPurchaseOrder, getSuppliersForDropdown, updatePOSupplier, getPurchaseOrderAllocations } from '../actions';
+import { getSuppliersForDropdown, updatePOSupplier, getPurchaseOrderAllocations } from '../actions';
 import type { PurchaseOrderAllocationSummary } from '../actions';
 import { PO_STATUS_COLORS, PO_STATUS_LABELS } from '../types';
 import type { ViewPurchaseOrderDrawerProps, SupplierSummary } from '../types';
@@ -77,10 +82,15 @@ export function ViewPurchaseOrderDrawer({
   onEdit,
 }: ViewPurchaseOrderDrawerProps) {
   const { data: po, isLoading, refetch } = usePurchaseOrder(open ? poId : null);
-  const [isPending, startTransition] = useTransition();
-  const [showSendDialog, setShowSendDialog] = useState(false);
+  // startTransition was only used by the old Send dialog (replaced Nov 7 2026)
+  // const [isPending, startTransition] = useTransition();
+  const [isPending] = useTransition();
+  // const [showSendDialog, setShowSendDialog] = useState(false);
+  /** Send / Email PO dialog: "send" = draft PO (email + mark Sent), "email" = re-send */
+  const [emailDialogMode, setEmailDialogMode] = useState<'send' | 'email' | null>(null);
   const [showReceiveDialog, setShowReceiveDialog] = useState(false);
   const [showSellDialog, setShowSellDialog] = useState(false);
+  const [showPdfModal, setShowPdfModal] = useState(false);
   const { hasPermission } = useAuthStore();
 
   // Inline editing state
@@ -163,7 +173,7 @@ export function ViewPurchaseOrderDrawer({
   };
 
   const handleUpdateSupplier = async (supplierId: string) => {
-    if (!po) return;
+    if (!po) { return; }
 
     const supplierIdValue = supplierId === 'none' ? null : supplierId;
     const supplier = suppliers.find((s) => s.id === supplierIdValue);
@@ -227,27 +237,28 @@ export function ViewPurchaseOrderDrawer({
     !['draft', 'sent', 'cancelled'].includes(po.status) &&
     po.items.every((item) => Number(item.quantityReceived ?? 0) === 0);
 
-  const handleSendToSupplier = () => {
-    if (!po) {
-      return;
-    }
-
-    startTransition(async () => {
-      try {
-        const result = await sendPurchaseOrder(po.id);
-        if (result.success) {
-          toast.success(`PO ${po.poNumber} sent to supplier`);
-          setShowSendDialog(false);
-          refetch();
-        } else {
-          toast.error(result.error || 'Failed to send PO');
-        }
-      } catch (error) {
-        console.error('Error sending PO:', error);
-        toast.error('Failed to send PO');
-      }
-    });
-  };
+  // Replaced Nov 7 2026 by EmailPurchaseOrderDialog (emails the PDF, then marks Sent):
+  // const handleSendToSupplier = () => {
+  //   if (!po) {
+  //     return;
+  //   }
+  //
+  //   startTransition(async () => {
+  //     try {
+  //       const result = await sendPurchaseOrder(po.id);
+  //       if (result.success) {
+  //         toast.success(`PO ${po.poNumber} sent to supplier`);
+  //         setShowSendDialog(false);
+  //         refetch();
+  //       } else {
+  //         toast.error(result.error || 'Failed to send PO');
+  //       }
+  //     } catch (error) {
+  //       console.error('Error sending PO:', error);
+  //       toast.error('Failed to send PO');
+  //     }
+  //   });
+  // };
 
   return (
     <Sheet open={open} onOpenChange={(isOpen) => {
@@ -622,7 +633,16 @@ export function ViewPurchaseOrderDrawer({
 
             {/* Actions */}
             <Separator />
-            <div className="flex gap-2">
+            {/* Grid so the action buttons wrap instead of overflowing the drawer */}
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <Button
+                variant="outline"
+                onClick={() => setShowPdfModal(true)}
+                className="flex-1"
+              >
+                <FileText className="mr-2 h-4 w-4" />
+                View PDF
+              </Button>
               {hasPermission('purchase_orders.receive') &&
                 !NOT_RECEIVABLE_STATUSES.includes(po.status) &&
                 !fullySold &&
@@ -661,7 +681,7 @@ export function ViewPurchaseOrderDrawer({
               )}
               {canSend && po.status === 'draft' && po.items.some((item) => item.supplierId) && (
                 <Button
-                  onClick={() => setShowSendDialog(true)}
+                  onClick={() => setEmailDialogMode('send')}
                   className="flex-1"
                   disabled={isPending}
                 >
@@ -684,12 +704,34 @@ export function ViewPurchaseOrderDrawer({
                   Send to Supplier
                 </Button>
               )}
+              {/* Re-send the PO PDF by email (e.g. the supplier did not get it); status unchanged */}
+              {canSend && po.status !== 'draft' && po.status !== 'cancelled' && po.items.some((item) => item.supplierId) && (
+                <Button
+                  variant="outline"
+                  onClick={() => setEmailDialogMode('email')}
+                  className="flex-1"
+                >
+                  <Mail className="mr-2 h-4 w-4" />
+                  Email PO to Supplier
+                </Button>
+              )}
             </div>
           </div>
         ) : (
           <div className="mt-6 text-center text-muted-foreground">
             Purchase order not found
           </div>
+        )}
+
+        {/* PDF Viewer Modal (view + download, like Sales Order) */}
+        {po && (
+          <PdfViewerModal
+            open={showPdfModal}
+            onClose={() => setShowPdfModal(false)}
+            pdfUrl={`/api/purchase-orders/${po.id}/pdf`}
+            title={`Purchase Order - ${po.poNumber}`}
+            fileName={`PurchaseOrder-${po.poNumber}.pdf`}
+          />
         )}
 
         {/* Sell to Sales Order Dialog */}
@@ -710,7 +752,24 @@ export function ViewPurchaseOrderDrawer({
           onSuccess={() => refetch()}
         />
 
-        {/* Send Confirmation Dialog */}
+        {/* Send / Email PO Dialog (Nov 7 2026): emails the PO PDF to the selected supplier contacts.
+            "send" (draft) also marks the PO as Sent; "email" re-sends a PO without changing its status. */}
+        {po && (
+          <EmailPurchaseOrderDialog
+            open={emailDialogMode !== null}
+            onOpenChange={(next) => {
+              if (!next) {
+                setEmailDialogMode(null);
+              }
+            }}
+            purchaseOrderId={po.id}
+            poNumber={po.poNumber}
+            mode={emailDialogMode ?? 'email'}
+            onDone={() => refetch()}
+          />
+        )}
+
+        {/* Old Send Confirmation Dialog (status change only, no email) — replaced Nov 7 2026:
         <AlertDialog open={showSendDialog} onOpenChange={setShowSendDialog}>
           <AlertDialogContent>
             <AlertDialogHeader>
@@ -739,6 +798,7 @@ export function ViewPurchaseOrderDrawer({
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+        */}
       </SheetContent>
     </Sheet>
   );

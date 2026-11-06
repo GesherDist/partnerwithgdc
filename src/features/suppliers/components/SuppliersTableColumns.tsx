@@ -110,9 +110,9 @@ export function getSuppliersTableColumns({
                 <MoreHorizontal className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
+            <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
               {onEdit && (
-                <DropdownMenuItem onClick={() => onEdit(supplier)}>
+                <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onEdit(supplier); }}>
                   <Edit className="mr-2 h-4 w-4" />
                   Edit
                 </DropdownMenuItem>
@@ -122,7 +122,7 @@ export function getSuppliersTableColumns({
                   {onEdit && <DropdownMenuSeparator />}
                   <DropdownMenuItem
                     className="text-red-600"
-                    onClick={() => onDelete(supplier)}
+                    onClick={(e) => { e.stopPropagation(); onDelete(supplier); }}
                   >
                     <Trash2 className="mr-2 h-4 w-4" />
                     Delete

@@ -239,7 +239,7 @@ async function liquidityCsv(): Promise<string> {
   const projectionSections: Section[] = projection
     ? [
         {
-          title: `Projected Cash by quarter: Cash Today + QuickBooks open invoices (by due date) + orders on the books still to be invoiced (through ${projection.throughDate})${openInvoices ? '' : ' · open invoices not in this snapshot, sync QuickBooks again'}`,
+          title: `Projected Cash by quarter: Cash Today + QuickBooks open invoices (by due date) − QuickBooks open bills (by due date) + orders on the books still to be invoiced (through ${projection.throughDate})${openInvoices ? '' : ' · open invoices not in this snapshot, sync QuickBooks again'}`,
           columns: ['Quarter', 'From', 'To', 'Opening Cash', 'Open Invoices (QuickBooks)', 'Invoices', 'Open Bills (QuickBooks, paid out)', 'Bills', 'Orders on the books', 'Orders', 'Tires', 'Projected Cash (quarter end)'],
           rows: [
             ...projection.quarters.map((q) => [q.label, q.start, q.end, q.opening, q.receivables, q.invoices, -q.payables, q.bills, q.inflow, q.orders, q.tires, q.closing]),
@@ -321,24 +321,25 @@ async function liquidityCsv(): Promise<string> {
     accountSection(`Cash Today: accounts mapped to Cash on ${qbo.asOf}`, qbo.asOf, today, 'cash', cellValue(model.liquidity.cashToday)),
     accountSection(`PY: the same on ${pyDate}`, pyDate, py, 'cash', cellValue(model.liquidity.cashPy)),
     ...projectionSections,
-    // Before Nov 6 2026: a 'not calculated yet' section with the two dashboard cells
-    projection && projection.movements.length
-      ? {
-          title: `Low Cash / High Cash: cash day by day from ${model.asOf} through ${projection.throughDate} (open invoices on due date, open bills on due date, orders on expected delivery; overdue / no date → today). Low ${cellValue(model.liquidity.lowCash)} on ${projection.lowCash?.date ?? ''} · High ${cellValue(model.liquidity.highCash)} on ${projection.highCash?.date ?? ''}`,
-          columns: ['Date', 'Type', 'Reference', 'Customer / Vendor', 'Amount', 'Cash after'],
-          rows: [
-            [model.asOf, 'Cash Today', '', '', '', cellValue(model.liquidity.cashToday)],
-            ...projection.movements.map((m) => [m.date, m.kind, m.ref, m.party, m.amount, m.balance]),
-          ],
-        }
-      : {
-          title: 'Low Cash / High Cash: needs QuickBooks open invoices and bills (sync QuickBooks again)',
-          columns: ['KPI', 'Dashboard'],
-          rows: [
-            ['Low Cash', cellValue(model.liquidity.lowCash)],
-            ['High Cash', cellValue(model.liquidity.highCash)],
-          ],
-        },
+    // Low / High Cash section hidden with the dashboard rows (Ankur, Nov 4 call: "remove for now").
+    // Uncomment to export it again.
+    // projection && projection.movements.length
+    //   ? {
+    //       title: `Low Cash / High Cash: cash day by day from ${model.asOf} through ${projection.throughDate} (open invoices on due date, open bills on due date, orders on expected delivery; overdue / no date → today). Low ${cellValue(model.liquidity.lowCash)} on ${projection.lowCash?.date ?? ''} · High ${cellValue(model.liquidity.highCash)} on ${projection.highCash?.date ?? ''}`,
+    //       columns: ['Date', 'Type', 'Reference', 'Customer / Vendor', 'Amount', 'Cash after'],
+    //       rows: [
+    //         [model.asOf, 'Cash Today', '', '', '', cellValue(model.liquidity.cashToday)],
+    //         ...projection.movements.map((m) => [m.date, m.kind, m.ref, m.party, m.amount, m.balance]),
+    //       ],
+    //     }
+    //   : {
+    //       title: 'Low Cash / High Cash: needs QuickBooks open invoices and bills (sync QuickBooks again)',
+    //       columns: ['KPI', 'Dashboard'],
+    //       rows: [
+    //         ['Low Cash', cellValue(model.liquidity.lowCash)],
+    //         ['High Cash', cellValue(model.liquidity.highCash)],
+    //       ],
+    //     },
     ...historySections,
   ]);
 }

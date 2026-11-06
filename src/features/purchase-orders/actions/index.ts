@@ -166,6 +166,115 @@ export async function sendPurchaseOrder(id: string) {
   return result;
 }
 
+// ============================================
+// EMAIL PO TO SUPPLIER (Ankur's email, Nov 6 2026)
+// ============================================
+
+export interface PurchaseOrderEmailRecipientOption {
+  email: string;
+  name: string | null;
+  supplierName: string;
+  role: string;
+}
+
+/** Supplier email addresses the PO can be sent to (primary contact + supplier contacts) */
+export async function getPurchaseOrderEmailRecipients(
+  id: string
+): Promise<ActionResult<PurchaseOrderEmailRecipientOption[]>> {
+  const auth = await authorize('purchase_orders.send');
+  if (!auth.ok) {
+    return auth.result;
+  }
+  try {
+    const po = await purchaseOrderService.getById(id);
+    if (!po.success || !po.data) {
+      return { success: false, error: po.error || 'Purchase order not found' };
+    }
+    const { getPurchaseOrderRecipients } = await import('../services/email.service');
+    return { success: true, data: await getPurchaseOrderRecipients(po.data) };
+  } catch (error) {
+    console.error('[getPurchaseOrderEmailRecipients]', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Failed to load supplier emails' };
+  }
+}
+
+/**
+ * Email the PO PDF to the selected supplier addresses. With markSent (a draft PO,
+ * "Send to Supplier"), the PO moves to Sent once at least one email went out;
+ * if no email could be sent the status is left unchanged.
+ */
+export async function emailPurchaseOrderToSupplier(
+  id: string,
+  emails: string[],
+  options: { markSent?: boolean } = {}
+): Promise<ActionResult<{ sentTo: string[]; errors: string[]; statusUpdated: boolean }>> {
+  const auth = await authorize('purchase_orders.send');
+  if (!auth.ok) {
+    return auth.result;
+  }
+  try {
+    const po = await purchaseOrderService.getById(id);
+    if (!po.success || !po.data) {
+      return { success: false, error: po.error || 'Purchase order not found' };
+    }
+    if (po.data.status === 'cancelled') {
+      return { success: false, error: 'A cancelled PO cannot be emailed' };
+    }
+
+    const { getPurchaseOrderRecipients, sendPurchaseOrderEmail } = await import('../services/email.service');
+    // Only addresses that belong to this PO's suppliers can be emailed
+    const wanted = new Set(emails.map((e) => e.trim().toLowerCase()));
+    const recipients = (await getPurchaseOrderRecipients(po.data)).filter((r) => wanted.has(r.email.toLowerCase()));
+    if (recipients.length === 0) {
+      return { success: false, error: 'Select at least one supplier email' };
+    }
+
+    const { sentTo, errors } = await sendPurchaseOrderEmail(po.data, recipients);
+
+    // Event log: who emailed the PO, to whom, and any failure (fire and forget).
+    // audit_action has no 'email' value, so 'update' is used, as for PO status changes.
+    const { auditService } = await import('@/shared/lib/audit');
+    auditService.log({
+      action: 'update',
+      module: 'purchase_orders',
+      entityType: 'PurchaseOrder',
+      entityId: po.data.id,
+      userId: auth.user.id,
+      description: sentTo.length
+        ? `Purchase order ${po.data.poNumber} emailed to supplier: ${sentTo.join(', ')}${errors.length ? ` (failed: ${errors.join('; ')})` : ''}`
+        : `Purchase order ${po.data.poNumber} email to supplier FAILED: ${errors.join('; ')}`,
+      metadata: {
+        event: options.markSent ? 'po_sent_to_supplier_email' : 'po_emailed_to_supplier',
+        sentTo,
+        failed: errors,
+        recipients: recipients.map((r) => ({ email: r.email, name: r.name, supplier: r.supplierName, role: r.role })),
+      },
+    }).catch((err) => {
+      console.error('Failed to log purchase order email audit:', err);
+    });
+
+    if (sentTo.length === 0) {
+      return { success: false, error: errors[0] || 'The email could not be sent' };
+    }
+
+    let statusUpdated = false;
+    if (options.markSent && po.data.status === 'draft') {
+      const sent = await purchaseOrderService.send(id, auth.user.id);
+      statusUpdated = sent.success;
+      if (!sent.success) {
+        errors.push(`Email sent, but the status could not be set to Sent: ${sent.error ?? 'unknown error'}`);
+      }
+    }
+
+    revalidatePath('/purchase-orders');
+    revalidatePath(`/purchase-orders/${id}`);
+    return { success: true, data: { sentTo, errors, statusUpdated } };
+  } catch (error) {
+    console.error('[emailPurchaseOrderToSupplier]', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Failed to email the PO' };
+  }
+}
+
 export async function confirmPurchaseOrder(id: string) {
   const auth = await authorize('purchase_orders.confirm');
   if (!auth.ok) {

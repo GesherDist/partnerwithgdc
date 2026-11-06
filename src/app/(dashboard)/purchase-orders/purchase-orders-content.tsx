@@ -40,9 +40,13 @@ import {
   CreatePurchaseOrderDrawer,
   EditPurchaseOrderDrawer,
   EditPOStatusDialogV2,
+  EmailPurchaseOrderDialog,
 } from '@/features/purchase-orders/components';
+import { PdfViewerModal } from '@/shared/components/pdf-viewer';
 import { usePurchaseOrders } from '@/features/purchase-orders/hooks';
-import { deletePurchaseOrder, sendPurchaseOrder } from '@/features/purchase-orders/actions';
+// sendPurchaseOrder: now called through emailPurchaseOrderToSupplier (EmailPurchaseOrderDialog, Nov 7 2026)
+// import { deletePurchaseOrder, sendPurchaseOrder } from '@/features/purchase-orders/actions';
+import { deletePurchaseOrder } from '@/features/purchase-orders/actions';
 import type { POListItem, POStatus, PurchaseOrderWithItems, POSortColumn, SortDirection } from '@/features/purchase-orders/types';
 import { PO_STATUS_LABELS } from '@/features/purchase-orders/types';
 import { useAuthStore } from '@/shared/stores/auth.store';
@@ -214,20 +218,37 @@ export function PurchaseOrdersPageContent() {
     setPOToDelete(null);
   };
 
-  const handleSendToSupplier = useCallback(async (po: POListItem) => {
-    try {
-      const result = await sendPurchaseOrder(po.id);
-      if (result.success) {
-        toast.success(`Purchase Order ${po.poNumber} sent to supplier`);
-        refetchPOs();
-      } else {
-        toast.error(result.error || 'Failed to send purchase order');
-      }
-    } catch (error) {
-      console.error('[handleSendToSupplier] Error:', error);
-      toast.error('Failed to send purchase order');
-    }
-  }, [refetchPOs]);
+  // Old: status change only, no email (replaced Nov 7 2026 by the email dialog below)
+  // const handleSendToSupplier = useCallback(async (po: POListItem) => {
+  //   try {
+  //     const result = await sendPurchaseOrder(po.id);
+  //     if (result.success) {
+  //       toast.success(`Purchase Order ${po.poNumber} sent to supplier`);
+  //       refetchPOs();
+  //     } else {
+  //       toast.error(result.error || 'Failed to send purchase order');
+  //     }
+  //   } catch (error) {
+  //     console.error('[handleSendToSupplier] Error:', error);
+  //     toast.error('Failed to send purchase order');
+  //   }
+  // }, [refetchPOs]);
+
+  // Row menu: View PDF / Send to Supplier (draft: email + mark Sent) / Email PO to Supplier (re-send)
+  const [pdfPO, setPdfPO] = useState<POListItem | null>(null);
+  const [emailPO, setEmailPO] = useState<{ po: POListItem; mode: 'send' | 'email' } | null>(null);
+
+  const handleViewPdf = useCallback((po: POListItem) => {
+    setPdfPO(po);
+  }, []);
+
+  const handleSendToSupplier = useCallback((po: POListItem) => {
+    setEmailPO({ po, mode: 'send' });
+  }, []);
+
+  const handleEmailToSupplier = useCallback((po: POListItem) => {
+    setEmailPO({ po, mode: 'email' });
+  }, []);
 
   const handleRowClick = useCallback((po: POListItem) => {
     handleView(po);
@@ -280,6 +301,8 @@ export function PurchaseOrdersPageContent() {
         onEdit={canEdit ? handleEdit : undefined}
         onEditStatus={canEdit ? handleEditStatus : undefined}
         onSendToSupplier={canSend ? handleSendToSupplier : undefined}
+        onViewPdf={handleViewPdf}
+        onEmailToSupplier={canSend ? handleEmailToSupplier : undefined}
         onDelete={canDelete ? handleDeleteClick : undefined}
         toolbarContent={
           <div className="flex items-center gap-2">
@@ -333,6 +356,33 @@ export function PurchaseOrdersPageContent() {
         onClose={handleViewDrawerClose}
         onEdit={canEdit ? handleEdit : undefined}
       />
+
+      {/* PO PDF (view + download), from the row menu */}
+      {pdfPO && (
+        <PdfViewerModal
+          open={Boolean(pdfPO)}
+          onClose={() => setPdfPO(null)}
+          pdfUrl={`/api/purchase-orders/${pdfPO.id}/pdf`}
+          title={`Purchase Order - ${pdfPO.poNumber}`}
+          fileName={`PurchaseOrder-${pdfPO.poNumber}.pdf`}
+        />
+      )}
+
+      {/* Send / Email PO to Supplier, from the row menu */}
+      {emailPO && (
+        <EmailPurchaseOrderDialog
+          open={Boolean(emailPO)}
+          onOpenChange={(next) => {
+            if (!next) {
+              setEmailPO(null);
+            }
+          }}
+          purchaseOrderId={emailPO.po.id}
+          poNumber={emailPO.po.poNumber}
+          mode={emailPO.mode}
+          onDone={() => refetchPOs()}
+        />
+      )}
 
       {/* Create Purchase Order Drawer */}
       <CreatePurchaseOrderDrawer

@@ -9,7 +9,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/shared/components/ui/dropdown-menu';
-import { MoreHorizontal, Eye, Pencil, Trash2, FileEdit, Send, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import { MoreHorizontal, Eye, Pencil, Trash2, FileEdit, Send, ArrowUpDown, ArrowUp, ArrowDown, FileText, Mail } from 'lucide-react';
 import { cn } from '@/shared/lib/utils';
 import type { POListItem, POSortColumn, SortDirection } from '../types';
 import { LOAD_STATUS_COLORS, LOAD_STATUS_LABELS } from '@/features/shipments/types';
@@ -19,6 +19,8 @@ interface ColumnsOptions {
   onEdit?: (po: POListItem) => void;
   onEditStatus?: (po: POListItem) => void;
   onSendToSupplier?: (po: POListItem) => void;
+  onViewPdf?: (po: POListItem) => void;
+  onEmailToSupplier?: (po: POListItem) => void;
   onDelete?: (po: POListItem) => void;
   // Sorting options
   sortColumn?: POSortColumn | null;
@@ -64,7 +66,7 @@ function SortableHeader({
 }
 
 export function PurchaseOrdersTableColumns(options: ColumnsOptions = {}): ColumnDef<POListItem>[] {
-  const { onView, onEdit, onEditStatus, onSendToSupplier, onDelete, sortColumn, sortDirection, onSortChange } = options;
+  const { onView, onEdit, onEditStatus, onSendToSupplier, onViewPdf, onEmailToSupplier, onDelete, sortColumn, sortDirection, onSortChange } = options;
 
   return [
     {
@@ -265,6 +267,12 @@ export function PurchaseOrdersTableColumns(options: ColumnsOptions = {}): Column
                     View
                   </DropdownMenuItem>
                 )}
+                {onViewPdf && (
+                  <DropdownMenuItem onClick={() => onViewPdf(po)}>
+                    <FileText className="mr-2 h-4 w-4" />
+                    View PDF
+                  </DropdownMenuItem>
+                )}
                 {onEditStatus && po.status !== 'invoiced' && (
                   <DropdownMenuItem onClick={() => onEditStatus(po)}>
                     <FileEdit className="mr-2 h-4 w-4" />
@@ -275,6 +283,12 @@ export function PurchaseOrdersTableColumns(options: ColumnsOptions = {}): Column
                   <DropdownMenuItem onClick={() => onSendToSupplier(po)} className="text-blue-600">
                     <Send className="mr-2 h-4 w-4" />
                     Send to Supplier
+                  </DropdownMenuItem>
+                )}
+                {onEmailToSupplier && !['draft', 'cancelled'].includes(po.status) && (
+                  <DropdownMenuItem onClick={() => onEmailToSupplier(po)}>
+                    <Mail className="mr-2 h-4 w-4" />
+                    Email PO to Supplier
                   </DropdownMenuItem>
                 )}
                 {onEdit && po.status !== 'cancelled' && (
