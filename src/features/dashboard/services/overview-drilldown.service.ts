@@ -114,7 +114,7 @@ async function revenueTrendCsv(span: { from: string; to: string }, dateRange?: D
     return months;
   });
 
-  // Months before ERP data show QuickBooks P&L revenue on the chart (lib/revenue-history)
+  // Chart months come from the QuickBooks P&L (Nov 6 2026); the ERP rows below are for reference
   const sourceLabel = (source?: string) => (source === 'quickbooks' ? 'QuickBooks P&L' : 'ERP');
   const summary: Cell[][] = chart.map((p) => {
     const mine = years.map((_, i) => Math.round((byMonth[i]!.get(p.monthKey ?? '')?.total ?? 0) * 100) / 100);
@@ -317,6 +317,16 @@ const LABELS: Record<OverviewDrillDown, string> = {
   'margin-analysis': 'margin-analysis',
 };
 
+/** Cards / charts whose value comes from the QuickBooks P&L (Nov 6 2026); their ERP rows are for reference */
+const QBO_NOTE: Partial<Record<OverviewDrillDown, string>> = {
+  'revenue-period': 'Dashboard value = QuickBooks P&L tire sales (Total Income − commission accounts), last sync. ERP delivered tire lines below are for reference.',
+  'revenue-ytd': 'Dashboard value = QuickBooks P&L tire sales (Total Income − commission accounts), last sync. ERP delivered tire lines below are for reference.',
+  'blended-margin': 'Dashboard value = (QuickBooks P&L tire sales − COGS) ÷ tire sales, last sync. ERP delivered tire lines below are for reference.',
+  'commission-actual': 'Commission Actual = QuickBooks P&L commission income accounts, last sync. ERP commission invoices below are for reference.',
+  'commission-expected': 'Commission Actual part = QuickBooks P&L commission income accounts, last sync. ERP commission invoices below are for reference.',
+  'margin-analysis': 'Chart = QuickBooks P&L tire sales and COGS per month, last sync. ERP delivered tire lines below are for reference.',
+};
+
 export async function buildOverviewDrillDown(kind: OverviewDrillDown, dateRange?: DateRange): Promise<CsvExport> {
   const r = ranges(dateRange);
   let csv: string;
@@ -364,6 +374,11 @@ export async function buildOverviewDrillDown(kind: OverviewDrillDown, dateRange?
       span = r.chart;
       csv = marginCsv(await loadRecognizedSales(), span.from, span.to);
       break;
+  }
+
+  const note = QBO_NOTE[kind];
+  if (note) {
+    csv = toCsv([note], []) + '\r\n\r\n' + csv;
   }
 
   const suffix = span ? `${span.from}-to-${span.to}` : formatDateString(new Date());

@@ -1,4 +1,7 @@
 /**
+ * Not used by the Revenue Trend since Nov 6 2026: every month now comes from
+ * the QuickBooks P&L (repositories getRevenueTrend). Kept for reference.
+ *
  * Revenue history before the ERP (Oct 27 call: "map history to COA").
  *
  * The ERP has sales data from September 2026. For months before that the

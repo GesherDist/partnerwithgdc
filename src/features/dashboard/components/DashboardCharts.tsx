@@ -44,7 +44,8 @@ import type {
   DateRange,
 } from '../types';
 import { DrillDownButton } from './DrillDownButton';
-import { ERP_REVENUE_START_LABEL } from '../lib/revenue-history';
+// ERP / QuickBooks split label (replaced: Revenue Trend is all QuickBooks, Nov 6 2026)
+// import { ERP_REVENUE_START_LABEL } from '../lib/revenue-history';
 import type { OverviewSection } from '../lib/dashboard-tabs';
 
 // ============================================
@@ -109,19 +110,10 @@ export function RevenueChart({ data, dateRange }: RevenueChartProps) {
                   <div className="space-y-1.5">
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Calculation Formula</p>
                     <div className="rounded-md bg-muted/50 px-3 py-2.5 text-xs leading-relaxed whitespace-pre-line border">
-                      {`Revenue = Σ tire line totals of firm sales orders delivered in the month − credit notes
-(Ankur's Definition 3.1, same rule as the Executive tabs)
-
-Database Sources:
-• Sales: sales_order_items.line_total (after line discount, excl. tax), tire products only
-• Returns: credit_notes.subtotal (issued/applied), by credit_note_date
-
-Recognized when delivered: actual delivery date, else delivered shipment arrival, else order date for status Delivered
-Excludes: commission-only orders and service lines
-
-Before ${ERP_REVENUE_START_LABEL} (no ERP sales data yet):
-• QuickBooks Profit & Loss (Accrual), accounts mapped to Revenue in Settings > Chart of Accounts
+                      {`Revenue = QuickBooks Profit & Loss (Accrual) of the month
+• Accounts mapped to Revenue in Settings > Chart of Accounts
 • Commission accounts excluded (tire sales only)
+• Current month: month to date at the last QuickBooks sync
 
 Target: $220,000/month (hardcoded)
 Last Year: Same period previous year`}
@@ -131,7 +123,7 @@ Last Year: Same period previous year`}
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Notes</p>
                     <div className="flex gap-2">
                       <div className="mt-0.5 h-4 w-0.5 rounded-full bg-primary/40 flex-shrink-0" />
-                      <p className="text-xs text-muted-foreground leading-relaxed">Monthly recognized tire revenue vs target. Data grouped by month of delivery.</p>
+                      <p className="text-xs text-muted-foreground leading-relaxed">Monthly tire sales from QuickBooks (last sync) vs target.</p>
                     </div>
                   </div>
                 </div>
@@ -141,9 +133,10 @@ Last Year: Same period previous year`}
           <DrillDownButton kind="revenue-trend" dateRange={dateRange} label="Revenue Trend" />
         </div>
         <CardDescription>
-          Monthly revenue vs target
+          Monthly revenue vs target · QuickBooks P&L sales (commission excluded)
+          {/* ERP / QuickBooks split (replaced by QuickBooks for every month, Nov 6 2026):
           {data.some((p) => p.source === 'quickbooks' || p.lastYearSource === 'quickbooks') &&
-            ` · Before ${ERP_REVENUE_START_LABEL}: QuickBooks P&L sales (commission excluded)`}
+            ` · Before ${ERP_REVENUE_START_LABEL}: QuickBooks P&L sales (commission excluded)`} */}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -490,16 +483,11 @@ export function MarginChart({ data, dateRange }: MarginChartProps) {
                       {`Gross Margin % = (Revenue - COGS) / Revenue × 100
 (Ankur's Definition 3.2: Gross Profit)
 
-Where:
-• Revenue = sales_order_items.line_total of tire lines delivered in the month
-• COGS = line cost saved by the first fulfillment allocation (sales_order_items.unit_cost), else the order cycle cost (product_cycle_costs), else products.base_cost × quantity
+Where (QuickBooks Profit & Loss, Accrual, per month):
+• Revenue = accounts mapped to Revenue, commission accounts excluded
+• COGS = accounts mapped to COGS
+• Current month: month to date at the last QuickBooks sync
 
-Database Sources:
-• Sales: sales_order_items (line_total, quantity), tire products only
-• Cost: sales_order_items.unit_cost, else product_cycle_costs (by order cycle), else products.base_cost
-
-Recognized when delivered: actual delivery date, else delivered shipment arrival, else order date for status Delivered
-Excludes: service lines (commission, handling) and commission-only orders
 Target: 30% (hardcoded benchmark)`}
                     </div>
                   </div>
@@ -507,7 +495,7 @@ Target: 30% (hardcoded benchmark)`}
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Notes</p>
                     <div className="flex gap-2">
                       <div className="mt-0.5 h-4 w-0.5 rounded-full bg-primary/40 flex-shrink-0" />
-                      <p className="text-xs text-muted-foreground leading-relaxed">Gross profit margin on the tire lines delivered each month (same rule as the Executive tabs). Target is 30% margin.</p>
+                      <p className="text-xs text-muted-foreground leading-relaxed">Gross profit margin per month from QuickBooks (last sync). Target is 30% margin.</p>
                     </div>
                   </div>
                 </div>
@@ -525,7 +513,7 @@ Target: 30% (hardcoded benchmark)`}
             <XAxis dataKey="month" className="text-xs" />
             <YAxis
               tickFormatter={(value) => `${value}%`}
-              domain={[20, 40]}
+              domain={[(min: number) => Math.min(20, Math.floor(min)), (max: number) => Math.max(40, Math.ceil(max))]}
               className="text-xs"
             />
             <Tooltip

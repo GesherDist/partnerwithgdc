@@ -148,6 +148,8 @@ export interface CommissionRevenueStats {
   lastYearActualYTD: number; // Last year same period for comparison
   change: number; // Percentage change vs last year
   trend: 'up' | 'down';
+  /** False when the QuickBooks snapshot has no P&L yet (Commission Actual comes from QuickBooks) */
+  fromQuickBooks?: boolean;
 }
 
 // ============================================

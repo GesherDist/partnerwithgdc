@@ -58,7 +58,7 @@ type AvgCols = 'current' | 't90Avg' | 'ytdAvg' | 'py';
 
 export interface ExecutiveDashboardModel {
   asOf: string;
-  quickBooks: { connected: boolean; asOf: string | null; environment: string | null; hasPeriods: boolean };
+  quickBooks: { connected: boolean; asOf: string | null; environment: string | null; hasPeriods: boolean; hasPnl: boolean };
   liquidity: {
     cashToday: Cell;
     cashDate: string | null;
@@ -77,7 +77,7 @@ export interface ExecutiveDashboardModel {
     {
       days: number;
       avgAr: number | null;
-      creditSales: number;
+      creditSales: number | null;
       avgAp: number | null;
       creditPurchases: number | null;
       avgInventory: number | null;
@@ -221,7 +221,11 @@ export function buildExecutiveModel(
   const efficiencyInputs = {} as ExecutiveDashboardModel['efficiencyInputs'];
   for (const c of effCols) {
     const ar = avgFor('accountsReceivable', c);
-    const sales = erp.creditSales[c];
+    // QuickBooks P&L (Nov 6 2026): credit sales = Total Income, COGS = P&L COGS
+    const pl = q?.pnl?.[c];
+    // ERP credit sales (replaced by QuickBooks): const sales = erp.creditSales[c];
+    const sales = pl ? pl.income : null;
+    const plCogs = pl ? pl.cogs : null;
     efficiencyInputs[c] = {
       days: p[c].days,
       avgAr: ar,
@@ -229,14 +233,15 @@ export function buildExecutiveModel(
       avgAp: avgFor('accountsPayable', c),
       creditPurchases: q?.creditPurchases?.[c] ?? null,
       avgInventory: avgFor('inventory', c),
-      cogs: erp.sales[c].cogs,
+      // ERP COGS (replaced by QuickBooks): cogs: erp.sales[c].cogs,
+      cogs: plCogs,
     };
-    dso[c] = !q
+    dso[c] = !q || sales === null
       ? none(qNote)
       : ar === null
         ? none(REASON.noHistory)
         : sales === 0
-          ? none(c === 'py' ? REASON.sinceGoLive : REASON.noSales)
+          ? none(REASON.noSales)
           : v(Math.round(((ar / sales) * p[c].days) * 10) / 10);
     // DPO = average trade AP ÷ credit purchases (QuickBooks bills less vendor credits) × days (2.8)
     const ap = avgFor('accountsPayable', c);
@@ -248,18 +253,26 @@ export function buildExecutiveModel(
         : purchases === 0
           ? none(REASON.noPurchases)
           : v(Math.round(((ap / purchases) * p[c].days) * 10) / 10);
-    // DIO = average inventory at cost (QuickBooks) ÷ COGS (ERP cost of tires sold) × days (2.9)
+    // DIO = average inventory at cost ÷ COGS × days (2.9), both from QuickBooks
     const inv = avgFor('inventory', c);
-    const sold = erp.sales[c];
-    dio[c] = !q
+    // ERP DIO (replaced by the QuickBooks P&L COGS, Nov 6 2026):
+    // const sold = erp.sales[c];
+    // dio[c] = !q
+    //   ? none(qNote)
+    //   : sold.cogs === null
+    //     ? none(REASON.noCost)
+    //     : sold.cogs === 0
+    //       ? none(c === 'py' ? REASON.sinceGoLive : REASON.noSales)
+    //       : inv === null
+    //         ? none(REASON.noHistory)
+    //         : v(Math.round(((inv / sold.cogs) * p[c].days) * 10) / 10, sold.cogsComplete ? undefined : REASON.partialCost);
+    dio[c] = !q || plCogs === null
       ? none(qNote)
-      : sold.cogs === null
-        ? none(REASON.noCost)
-        : sold.cogs === 0
-          ? none(c === 'py' ? REASON.sinceGoLive : REASON.noSales)
-          : inv === null
-            ? none(REASON.noHistory)
-            : v(Math.round(((inv / sold.cogs) * p[c].days) * 10) / 10, sold.cogsComplete ? undefined : REASON.partialCost);
+      : plCogs === 0
+        ? none(REASON.noSales)
+        : inv === null
+          ? none(REASON.noHistory)
+          : v(Math.round(((inv / plCogs) * p[c].days) * 10) / 10);
     // CCC = DIO + DSO − DPO (2.10)
     const parts = [dio[c], dso[c], dpo[c]];
     const missing = parts.find((x) => x.value === null);
@@ -306,14 +319,35 @@ export function buildExecutiveModel(
   for (const c of cols4) {
     const s = erp.sales[c as PeriodKey];
     const opexValue = q ? q.opex[c as PeriodKey] : null;
+
+    // Profitability (2.1) from the QuickBooks P&L (Ankur, Nov 5 call: all
+    // financials from QuickBooks). Older snapshots have no P&L totals: sync again.
+    const pl = q?.pnl?.[c];
+    if (pl) {
+      const plPct = (x: number) => (pl.income === 0 ? null : Math.round((x / pl.income) * 1000) / 10);
+      prof.revenue[c] = v(pl.income);
+      prof.cogs[c] = { ...v(pl.cogs), pct: plPct(pl.cogs) };
+      prof.grossProfit[c] = { ...v(pl.grossProfit), pct: plPct(pl.grossProfit) };
+      prof.opex[c] = { ...v(pl.opex), pct: plPct(pl.opex) };
+      prof.operatingProfit[c] = { ...v(pl.netOperatingIncome), pct: plPct(pl.netOperatingIncome) };
+    } else {
+      const missing = { ...none(qNote), pct: null };
+      prof.revenue[c] = none(qNote);
+      prof.cogs[c] = missing;
+      prof.grossProfit[c] = missing;
+      prof.opex[c] = missing;
+      prof.operatingProfit[c] = missing;
+    }
+
     // Client: PY "since go-live" — no prior-year sales in the ERP is not a $0 year
     if (c === 'py' && s.units === 0 && s.revenue === 0) {
       const since = none(REASON.sinceGoLive);
-      prof.revenue[c] = since;
-      prof.cogs[c] = { ...since, pct: null };
-      prof.grossProfit[c] = { ...since, pct: null };
-      prof.opex[c] = { ...(opexValue === null ? none(qNote) : v(opexValue)), pct: null };
-      prof.operatingProfit[c] = { ...since, pct: null };
+      // ERP profitability (replaced by the QuickBooks P&L above, Nov 6 2026):
+      // prof.revenue[c] = since;
+      // prof.cogs[c] = { ...since, pct: null };
+      // prof.grossProfit[c] = { ...since, pct: null };
+      // prof.opex[c] = { ...(opexValue === null ? none(qNote) : v(opexValue)), pct: null };
+      // prof.operatingProfit[c] = { ...since, pct: null };
       tire.tiresSold[c] = since;
       tire.revenue[c] = since;
       tire.cogs[c] = since;
@@ -322,16 +356,18 @@ export function buildExecutiveModel(
       tire.operatingProfit[c] = since;
       continue;
     }
-    const costNote = s.cogsComplete ? undefined : REASON.partialCost;
-    const cogsCell = s.cogs === null ? none(REASON.noCost) : v(s.cogs, costNote);
+    // ERP-only inputs of the old profitability rows:
+    // const costNote = s.cogsComplete ? undefined : REASON.partialCost;
+    // const cogsCell = s.cogs === null ? none(REASON.noCost) : v(s.cogs, costNote);
     const gp = s.cogs === null ? null : s.revenue - s.cogs;
     const op = gp === null || opexValue === null ? null : gp - opexValue;
-    const pct = (x: number | null) => (x === null || s.revenue === 0 ? null : Math.round((x / s.revenue) * 1000) / 10);
-    prof.revenue[c] = v(s.revenue);
-    prof.cogs[c] = { ...cogsCell, pct: pct(s.cogs) };
-    prof.grossProfit[c] = { ...(gp === null ? none(REASON.noCost) : v(gp, costNote)), pct: pct(gp) };
-    prof.opex[c] = { ...(opexValue === null ? none(qNote) : v(opexValue)), pct: pct(opexValue) };
-    prof.operatingProfit[c] = { ...(op === null ? none(gp === null ? REASON.noCost : qNote) : v(op)), pct: pct(op) };
+    // ERP profitability (replaced by the QuickBooks P&L above, Nov 6 2026):
+    // const pct = (x: number | null) => (x === null || s.revenue === 0 ? null : Math.round((x / s.revenue) * 1000) / 10);
+    // prof.revenue[c] = v(s.revenue);
+    // prof.cogs[c] = { ...cogsCell, pct: pct(s.cogs) };
+    // prof.grossProfit[c] = { ...(gp === null ? none(REASON.noCost) : v(gp, costNote)), pct: pct(gp) };
+    // prof.opex[c] = { ...(opexValue === null ? none(qNote) : v(opexValue)), pct: pct(opexValue) };
+    // prof.operatingProfit[c] = { ...(op === null ? none(gp === null ? REASON.noCost : qNote) : v(op)), pct: pct(op) };
 
     const perUnit = (x: number | null, missing: string) => (s.units === 0 ? none(REASON.noSales) : x === null ? none(missing) : v(Math.round((x / s.units) * 100) / 100));
     tire.tiresSold[c] = v(s.units);
@@ -345,11 +381,15 @@ export function buildExecutiveModel(
   // ---------- commission (separate from tire revenue and gross profit) ----------
   const commissionBilled = {} as Record<Cols4, Cell>;
   for (const c of cols4) {
-    const amount = erp.commission[c as PeriodKey];
-    const s = erp.sales[c as PeriodKey];
-    // Same "since go-live" rule as revenue: no ERP activity in the prior year is not a $0 year
-    commissionBilled[c] =
-      c === 'py' && amount === 0 && s.units === 0 && s.revenue === 0 ? none(REASON.sinceGoLive) : v(amount);
+    // Commission billed = QuickBooks commission income accounts (Nov 6 2026)
+    const pl = q?.pnl?.[c];
+    commissionBilled[c] = pl ? v(pl.commission) : none(qNote);
+    // ERP commission invoices (replaced by QuickBooks):
+    // const amount = erp.commission[c as PeriodKey];
+    // const s = erp.sales[c as PeriodKey];
+    // // Same "since go-live" rule as revenue: no ERP activity in the prior year is not a $0 year
+    // commissionBilled[c] =
+    //   c === 'py' && amount === 0 && s.units === 0 && s.revenue === 0 ? none(REASON.sinceGoLive) : v(amount);
   }
   const commission: ExecutiveDashboardModel['commission'] = {
     billed: commissionBilled,
@@ -452,7 +492,7 @@ export function buildExecutiveModel(
 
   return {
     asOf: erp.asOf,
-    quickBooks: { connected: qboConnected, asOf: qbo?.asOf ?? null, environment: qbo?.environment ?? null, hasPeriods: Boolean(q) },
+    quickBooks: { connected: qboConnected, asOf: qbo?.asOf ?? null, environment: qbo?.environment ?? null, hasPeriods: Boolean(q), hasPnl: Boolean(q?.pnl) },
     liquidity: {
       cashToday: current ? v(current.cash) : none(qNote),
       cashDate: current?.date ?? null,

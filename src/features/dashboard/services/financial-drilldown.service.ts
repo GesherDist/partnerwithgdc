@@ -394,9 +394,9 @@ async function efficiencyCsv(): Promise<string> {
       saleRows.push(['No delivered sales in this period']);
     }
     const saleTotal = dollars(saleLines.reduce((s, l) => s + l.lineTotal, 0) - saleCredits.reduce((s, x) => s + x.amount, 0));
-    saleRows.push(['TOTAL', '', '', '', '', round2(saleTotal)], ['Dashboard', '', '', '', '', i.creditSales]);
+    saleRows.push(['TOTAL (ERP reference)', '', '', '', '', round2(saleTotal)], ['Dashboard (QuickBooks P&L Total Income, last sync)', '', '', '', '', i.creditSales]);
     sections.push({
-      title: `DSO ${head} – Credit sales: delivered sales orders (all lines) − credit notes`,
+      title: `DSO ${head} – Credit sales: dashboard uses QuickBooks P&L Total Income; ERP delivered sales orders − credit notes listed for reference`,
       columns: ['Type', 'Delivery Date', 'SO / Credit #', 'Customer', 'SKU', 'Amount'],
       rows: saleRows,
     });
@@ -426,11 +426,11 @@ async function efficiencyCsv(): Promise<string> {
       cogsRows.push(['No delivered tires in this period']);
     }
     cogsRows.push(
-      ['TOTAL', '', '', '', '', tireLines.reduce((s, l) => s + l.quantity, 0), '', '', round2(dollars(tireLines.reduce((s, l) => s + (l.cost ?? 0), 0)))],
-      ['Dashboard', '', '', '', '', '', '', '', i.cogs]
+      ['TOTAL (ERP reference)', '', '', '', '', tireLines.reduce((s, l) => s + l.quantity, 0), '', '', round2(dollars(tireLines.reduce((s, l) => s + (l.cost ?? 0), 0)))],
+      ['Dashboard (QuickBooks P&L COGS, last sync)', '', '', '', '', '', '', '', i.cogs]
     );
     sections.push({
-      title: `DIO ${head} – COGS: ERP cost of tires delivered`,
+      title: `DIO ${head} – COGS: dashboard uses QuickBooks P&L COGS; ERP cost of tires delivered listed for reference`,
       columns: ['Delivery Date', 'SO #', 'Customer', 'Order Series', 'SKU', 'Tires', 'Cost per Tire', 'Cost Source', 'COGS'],
       rows: cogsRows,
     });
@@ -584,6 +584,14 @@ async function profitabilityCsv(): Promise<string> {
   });
 
   const kpis = [['Revenue', pf.revenue], ['COGS', pf.cogs], ['Gross Profit', pf.grossProfit], ['OPEX', pf.opex], ['Operating Profit', pf.operatingProfit]] as const;
+  // Table 2.1 comes from the QuickBooks P&L (Nov 6 2026); the ERP sections below are kept for reference
+  const qpl = qbo.periods?.pnl;
+  const qboRows: Cell[][] = PERIOD_KEYS.map((k) => {
+    const x = qpl?.[k];
+    return x
+      ? [PERIOD_LABEL[k], `${qp[k].from} to ${qp[k].to}`, x.income, x.commission, x.cogs, x.grossProfit, x.opex, x.netOperatingIncome, x.netIncome]
+      : [PERIOD_LABEL[k], `${qp[k].from} to ${qp[k].to}`, 'Sync QuickBooks'];
+  });
   return sectionsCsv([
     {
       title: 'Table 2.1 as shown (value, % of revenue)',
@@ -591,7 +599,12 @@ async function profitabilityCsv(): Promise<string> {
       rows: kpis.map(([label, cells]) => [label, ...PERIOD_KEYS.flatMap((k) => [cellValue(cells[k]), cells[k].pct ?? ''])]),
     },
     {
-      title: 'Calculation per period (totals of the sections below)',
+      title: 'QuickBooks Profit and Loss (Accrual, last sync): source of table 2.1',
+      columns: ['Period', 'Dates', 'Total Income', 'of which Commission', 'COGS', 'Gross Profit', 'Total Expenses (OPEX)', 'Net Operating Income', 'Net Income'],
+      rows: qboRows,
+    },
+    {
+      title: 'ERP reference (not used by table 2.1): calculation per period from the sections below',
       columns: ['Period', 'Dates', 'Revenue', 'COGS', 'Gross Profit = Revenue − COGS', 'OPEX (QuickBooks)', 'Operating Profit = GP − OPEX'],
       rows: build,
     },
@@ -641,10 +654,10 @@ async function commissionTableCsv(): Promise<string> {
     if (rows.length === 0) {
       rows.push(['No commission invoices in this period']);
     }
-    rows.push(['TOTAL', '', '', '', dollars(mine.reduce((s, l) => s + l.amount, 0))]);
-    rows.push(['Dashboard', '', '', '', cellValue(model.commission.billed[k])]);
+    rows.push(['TOTAL (ERP reference)', '', '', '', dollars(mine.reduce((s, l) => s + l.amount, 0))]);
+    rows.push(['Dashboard (QuickBooks, last sync)', '', '', '', cellValue(model.commission.billed[k])]);
     return {
-      title: `Commission Billed – ${rangeTitle(PERIOD_LABEL[k], p[k])}: commission invoices to Galileo (not draft / cancelled), by invoice date`,
+      title: `Commission Billed – ${rangeTitle(PERIOD_LABEL[k], p[k])}: ERP commission invoices to Galileo for reference (dashboard uses QuickBooks commission income accounts)`,
       columns: ['Invoice #', 'Invoice Date', 'Status', 'Description', 'Amount'],
       rows,
     };

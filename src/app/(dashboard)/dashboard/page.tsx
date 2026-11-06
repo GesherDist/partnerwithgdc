@@ -127,29 +127,32 @@ export default async function DashboardPage() {
   // Add commission stats as additional KPI cards if available
   if (commissionResult.success && commissionResult.data) {
     const commission = commissionResult.data;
+    // Commission Actual comes from QuickBooks: no P&L in the snapshot yet → "—"
+    const noQbo = commission.fromQuickBooks === false;
 
     // Commission Expected (YTD) card
     dynamicStats.push({
       id: 'commission-expected-ytd',
       title: 'Commission Expected (YTD)',
-      value: formatCurrency(commission.expectedYTD),
+      value: noQbo ? '—' : formatCurrency(commission.expectedYTD),
       change: `${commission.change >= 0 ? '+' : ''}${commission.change.toFixed(1)}%`,
       trend: commission.trend,
       icon: 'credit-card',
       color: 'bg-purple-500',
-      subtitle: 'vs same period last year',
+      subtitle: noQbo ? 'Sync QuickBooks' : 'vs same period last year',
     });
 
     // Commission Actual (YTD) card
     dynamicStats.push({
       id: 'commission-actual-ytd',
       title: 'Commission Actual (YTD)',
-      value: formatCurrency(commission.actualYTD),
+      value: noQbo ? '—' : formatCurrency(commission.actualYTD),
       change: `${commission.change >= 0 ? '+' : ''}${commission.change.toFixed(1)}%`,
       trend: commission.trend,
       icon: 'dollar-sign',
       color: 'bg-fuchsia-500',
-      subtitle: 'Commission invoices to Galileo',
+      // ERP subtitle (replaced by QuickBooks, Nov 6 2026): 'Commission invoices to Galileo'
+      subtitle: noQbo ? 'Sync QuickBooks' : 'QuickBooks commission income',
     });
   }
 

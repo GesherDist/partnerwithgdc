@@ -35,13 +35,17 @@ const TIRE_SIZES =
 const CALCULATION_FORMULAS: Record<string, { title: string; formula: string; notes?: string }> = {
   'revenue-mtd': {
     title: 'Revenue (MTD) Calculation',
-    formula: `Revenue = Σ tire line totals of firm sales orders delivered from the 1st of this month to today − credit notes\n\nDatabase Sources:\n• Sales: sales_order_items.line_total (after line discount, excl. tax), tire products only\n• Returns: credit_notes.subtotal WHERE status IN ("issued", "applied"), by credit_note_date${RECOGNITION_RULE}`,
-    notes: 'Ankur\'s Definition 3.1, month to date. Always MTD: the date filter changes the charts, not this card. Compared to last month. Amounts stored in cents.',
+    // ERP formula (replaced by QuickBooks, Nov 6 2026):
+    // formula: `Revenue = Σ tire line totals of firm sales orders delivered from the 1st of this month to today − credit notes\n\nDatabase Sources:\n• Sales: sales_order_items.line_total (after line discount, excl. tax), tire products only\n• Returns: credit_notes.subtotal WHERE status IN ("issued", "applied"), by credit_note_date${RECOGNITION_RULE}`,
+    formula: `Revenue = QuickBooks Profit and Loss (Accrual), 1st of this month to the last sync: Total Income − income accounts named "commission" (tire sales)\n\nSource: QuickBooks snapshot (last QuickBooks sync)`,
+    notes: 'Month to date at the last QuickBooks sync. Always MTD: the date filter changes the charts, not this card. Compared to last month (QuickBooks P&L).',
   },
   'revenue-ytd': {
     title: 'Revenue (YTD) Calculation',
-    formula: `Revenue = Σ tire line totals of firm sales orders delivered Jan 1 to today − credit notes\n\nDatabase Sources:\n• Sales: sales_order_items.line_total (after line discount, excl. tax), tire products only\n• Returns: credit_notes.subtotal WHERE status IN ("issued", "applied"), by credit_note_date${RECOGNITION_RULE}`,
-    notes: 'Ankur\'s Definition 3.1, YTD. Compared to the same period last year.',
+    // ERP formula (replaced by QuickBooks, Nov 6 2026):
+    // formula: `Revenue = Σ tire line totals of firm sales orders delivered Jan 1 to today − credit notes\n\nDatabase Sources:\n• Sales: sales_order_items.line_total (after line discount, excl. tax), tire products only\n• Returns: credit_notes.subtotal WHERE status IN ("issued", "applied"), by credit_note_date${RECOGNITION_RULE}`,
+    formula: `Revenue = QuickBooks Profit and Loss (Accrual), Jan 1 to the last sync: Total Income − income accounts named "commission" (tire sales)`,
+    notes: 'YTD at the last QuickBooks sync. Compared to the same period last year (QuickBooks P&L).',
   },
   'units-sold': {
     title: 'Units Sold (MTD) Calculation',
@@ -55,8 +59,10 @@ const CALCULATION_FORMULAS: Record<string, { title: string; formula: string; not
   },
   'blended-margin': {
     title: 'Blended Margin (YTD) Calculation - Definition 3.2',
-    formula: `Gross Profit % = (Revenue − COGS) ÷ Revenue × 100\n\nWhere:\n• Revenue = the Revenue (YTD) figure\n• COGS = cost of the same delivered tires: line cost saved by the first fulfillment allocation, else the order cycle cost, else products.base_cost × quantity${RECOGNITION_RULE}`,
-    notes: 'Ankur\'s Definition 3.2. Compared to last year YTD margin.',
+    // ERP formula (replaced by QuickBooks, Nov 6 2026):
+    // formula: `Gross Profit % = (Revenue − COGS) ÷ Revenue × 100\n\nWhere:\n• Revenue = the Revenue (YTD) figure\n• COGS = cost of the same delivered tires: line cost saved by the first fulfillment allocation, else the order cycle cost, else products.base_cost × quantity${RECOGNITION_RULE}`,
+    formula: `Gross Profit % = (Revenue − COGS) ÷ Revenue × 100\n\nWhere:\n• Revenue = the Revenue (YTD) figure (QuickBooks, commission excluded)\n• COGS = QuickBooks Profit and Loss Cost of Goods Sold, Jan 1 to the last sync`,
+    notes: 'Ankur\'s Definition 3.2, from QuickBooks. Compared to last year YTD margin.',
   },
   'open-orders': {
     title: 'Open Orders Calculation',
@@ -70,7 +76,9 @@ const CALCULATION_FORMULAS: Record<string, { title: string; formula: string; not
   },
   'commission-actual-ytd': {
     title: 'Commission Actual (YTD) Calculation',
-    formula: 'Commission Actual = Σ line totals of commission invoices to Galileo (not draft/cancelled)\n\nFiltered by: invoices.invoice_date (Jan 1 to today)\nInvoice type: Commission',
+    // ERP formula (replaced by QuickBooks, Nov 6 2026):
+    // formula: 'Commission Actual = Σ line totals of commission invoices to Galileo (not draft/cancelled)\n\nFiltered by: invoices.invoice_date (Jan 1 to today)\nInvoice type: Commission',
+    formula: 'Commission Actual = QuickBooks Profit and Loss income accounts named "commission", Jan 1 to the last sync',
     notes: 'Commission billed to Galileo (kept out of tire revenue and margin). Same as Executive › Profitability › Commission Billed. Compared to the same period last year.',
   },
 };

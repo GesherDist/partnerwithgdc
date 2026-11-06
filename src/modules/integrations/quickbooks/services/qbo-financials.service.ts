@@ -69,6 +69,8 @@ export interface QboRevenueMonth {
   /** YYYY-MM */
   month: string;
   revenue: number;
+  /** COGS of the month (accounts mapped to COGS). Missing in snapshots before Nov 6, 2026 */
+  cogs?: number;
 }
 
 /** Months of P&L revenue history kept in the snapshot (Revenue Trend before ERP data) */
@@ -140,6 +142,27 @@ export interface QboPeriodFigures {
    * credits, by transaction date. Missing in snapshots taken before Oct 20, 2026.
    */
   creditPurchases?: Record<'pm' | 't90' | 'ytd' | 'py', number>;
+  /**
+   * Profit and Loss totals per period (Accrual), as QuickBooks shows them.
+   * Missing in snapshots taken before Nov 6, 2026 (sync QuickBooks again).
+   */
+  pnl?: Record<'mtd' | 't90' | 'ytd' | 'py' | 'pm', QboPnlFigures>;
+}
+
+/** One P&L column: QuickBooks section totals (fallback: mapped account categories) */
+export interface QboPnlFigures {
+  /** Total Income (tire sales + commission) */
+  income: number;
+  /** Income accounts named "commission" */
+  commission: number;
+  /** Total Income less commission (tire sales) */
+  salesRevenue: number;
+  cogs: number;
+  grossProfit: number;
+  /** Total Expenses */
+  opex: number;
+  netOperatingIncome: number;
+  netIncome: number;
 }
 
 interface ReportRow {
@@ -312,19 +335,26 @@ export function revenueByMonth(
   const columns = (pnl.Columns?.Column ?? []).slice(1);
   const monthCount = Math.max(0, columns.length - 1);
   const [y, m] = fromMonth.split('-').map(Number) as [number, number];
-  const months: QboRevenueMonth[] = Array.from({ length: monthCount }, (_, i) => ({
+  const months = Array.from({ length: monthCount }, (_, i) => ({
     month: new Date(Date.UTC(y, m - 1 + i, 1)).toISOString().slice(0, 7),
     revenue: 0,
+    cogs: 0,
   }));
   for (const row of accountRows(pnl.Rows?.Row)) {
-    if (mappingOf(row.id, row.name)?.category !== 'revenue' || COMMISSION_ACCOUNT.test(row.name)) {
+    const category = mappingOf(row.id, row.name)?.category;
+    const field = category === 'revenue' && !COMMISSION_ACCOUNT.test(row.name) ? 'revenue' : category === 'cogs' ? 'cogs' : null;
+    if (!field) {
       continue;
     }
     for (let i = 0; i < monthCount; i++) {
-      months[i]!.revenue += row.values[i] ?? 0;
+      months[i]![field] += row.values[i] ?? 0;
     }
   }
-  return months.map((month) => ({ ...month, revenue: Math.round(month.revenue * 100) / 100 }));
+  return months.map((month) => ({
+    ...month,
+    revenue: Math.round(month.revenue * 100) / 100,
+    cogs: Math.round(month.cogs * 100) / 100,
+  }));
 }
 
 // ============================================
@@ -437,6 +467,37 @@ function totalsByCategory(
 }
 
 const round2 = (n: number | undefined) => Math.round((n ?? 0) * 100) / 100;
+
+/** P&L totals of a single-column report: QuickBooks section summaries, mapped categories as fallback */
+export function pnlFigures(
+  report: Report,
+  mappingOf: (id: string, name: string) => AccountMapping | undefined
+): QboPnlFigures {
+  const rows = report.Rows?.Row;
+  const section = (group: string) => sectionSummary(rows, group)?.[0];
+  const t = totalsByCategory(report, mappingOf);
+  let commission = 0;
+  for (const row of accountRows(rows)) {
+    if (mappingOf(row.id, row.name)?.category === 'revenue' && COMMISSION_ACCOUNT.test(row.name)) {
+      commission += row.values[0] ?? 0;
+    }
+  }
+  const income = section('Income') ?? t.revenue ?? 0;
+  const cogs = section('COGS') ?? t.cogs ?? 0;
+  const grossProfit = section('GrossProfit') ?? income - cogs;
+  const opex = section('Expenses') ?? t.opex ?? 0;
+  const netOperatingIncome = section('NetOperatingIncome') ?? grossProfit - opex;
+  return {
+    income: round2(income),
+    commission: round2(commission),
+    salesRevenue: round2(income - commission),
+    cogs: round2(cogs),
+    grossProfit: round2(grossProfit),
+    opex: round2(opex),
+    netOperatingIncome: round2(netOperatingIncome),
+    netIncome: round2(section('NetIncome') ?? netOperatingIncome),
+  };
+}
 
 async function fetchQuery(access: QboAccess, sql: string): Promise<Record<string, unknown>> {
   const url = `${getApiBaseUrl(access.environment as QuickBooksEnvironment)}/v3/company/${access.realmId}/query?query=${encodeURIComponent(sql)}&minorversion=${QBO_API_MINOR_VERSION}`;
@@ -590,8 +651,12 @@ async function buildPeriodFigures(
   });
 
   const opex = {} as Record<PeriodKey | 't90py', number>;
+  const pnl = {} as Record<'mtd' | 't90' | 'ytd' | 'py' | 'pm', QboPnlFigures>;
   pnlRanges.forEach(([key], i) => {
     opex[key] = round2(totalsByCategory(pnls[i]!, mappingOf).opex);
+    if (key !== 't90py') {
+      pnl[key] = pnlFigures(pnls[i]!, mappingOf);
+    }
   });
 
   const operatingCashFlow = {} as Record<'mtd' | 't90' | 'ytd' | 'py', number>;
@@ -621,6 +686,7 @@ async function buildPeriodFigures(
     arWeightedDays: arDays,
     apWeightedDays: apDays,
     ...(creditPurchases ? { creditPurchases } : {}),
+    pnl,
   };
 }
 

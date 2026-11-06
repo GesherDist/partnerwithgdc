@@ -10,7 +10,9 @@
 import { createAdminClient } from '@/shared/lib/supabase/admin';
 import { loadRecognizedSales, loadUnbilledDeliveredCommissionOrders, summarizeRecognizedSales } from '../services/recognized-sales.service';
 import { getPeriods } from '../lib/periods';
-import { revenueSourceOf } from '../lib/revenue-history';
+// ERP / QuickBooks split of the Revenue Trend (replaced: all months from QuickBooks, Nov 6 2026)
+// import { revenueSourceOf } from '../lib/revenue-history';
+import type { QboFinancials } from '@/modules/integrations/quickbooks/services/qbo-financials.service';
 import type { UnitsBySKUDataPoint, UnitsBySKUChartData, ProductLegendItem, ChannelPerformanceDataPoint, InventoryByLocation, DashboardStat, MarginDataPoint, RevenueDataPoint, DateRange, CommissionRevenueStats } from '../types';
 
 // Helper to format date as YYYY-MM-DD string
@@ -428,10 +430,20 @@ export async function getDashboardStats(_dateRange?: DateRange): Promise<Dashboa
   const ytd = summarizeRecognizedSales(recognized, formatDateString(currentYearStart), formatDateString(now));
   const lastYearYtd = summarizeRecognizedSales(recognized, formatDateString(lastYearStart), formatDateString(lastYearSameDay));
 
-  const currentRevenue = current.revenue;
-  const lastRevenue = lastMonth.revenue;
-  const ytdNetRevenue = ytd.revenue;
-  const lastYearYtdRevenue = lastYearYtd.revenue;
+  // Revenue and Blended Margin: QuickBooks P&L at the last sync (Ankur, Nov 5
+  // call: financials from QuickBooks). Revenue = Total Income − commission
+  // accounts (tire sales). Units, Open Orders stay ERP (not in QuickBooks).
+  const qboPnl = (await loadQboFinancials())?.periods?.pnl ?? null;
+  const toCents = (amount: number | undefined) => Math.round((amount ?? 0) * 100);
+  // ERP recognized revenue (replaced by the QuickBooks P&L, Nov 6 2026):
+  // const currentRevenue = current.revenue;
+  // const lastRevenue = lastMonth.revenue;
+  // const ytdNetRevenue = ytd.revenue;
+  // const lastYearYtdRevenue = lastYearYtd.revenue;
+  const currentRevenue = toCents(qboPnl?.mtd.salesRevenue);
+  const lastRevenue = toCents(qboPnl?.pm.salesRevenue);
+  const ytdNetRevenue = toCents(qboPnl?.ytd.salesRevenue);
+  const lastYearYtdRevenue = toCents(qboPnl?.py.salesRevenue);
   const ytdNetRevenueChange = lastYearYtdRevenue > 0
     ? ((ytdNetRevenue - lastYearYtdRevenue) / lastYearYtdRevenue) * 100
     : 0;
@@ -445,11 +457,16 @@ export async function getDashboardStats(_dateRange?: DateRange): Promise<Dashboa
   const ytdUnits24 = ytd.units24;
   const lastYearYtdUnits = lastYearYtd.units;
 
-  // Blended margin: the same recognized tire revenue and its COGS
-  const ytdTotalRevenue = ytd.revenue;
-  const ytdTotalCost = ytd.cogs;
-  const lastYearYtdTotalRevenue = lastYearYtd.revenue;
-  const lastYearYtdTotalCost = lastYearYtd.cogs;
+  // Blended margin: QuickBooks P&L tire sales and COGS
+  // ERP (replaced by the QuickBooks P&L, Nov 6 2026):
+  // const ytdTotalRevenue = ytd.revenue;
+  // const ytdTotalCost = ytd.cogs;
+  // const lastYearYtdTotalRevenue = lastYearYtd.revenue;
+  // const lastYearYtdTotalCost = lastYearYtd.cogs;
+  const ytdTotalRevenue = ytdNetRevenue;
+  const ytdTotalCost = toCents(qboPnl?.ytd.cogs);
+  const lastYearYtdTotalRevenue = lastYearYtdRevenue;
+  const lastYearYtdTotalCost = toCents(qboPnl?.py.cogs);
 
   // Open Orders: sales orders with status confirmed or processing (not deleted)
   const { data: openOrdersData, count: openOrdersCount } = await supabase
@@ -503,7 +520,8 @@ export async function getDashboardStats(_dateRange?: DateRange): Promise<Dashboa
     {
       id: 'revenue-mtd',
       title: `Revenue (${periodLabel})`,
-      value: formatCurrency(currentRevenue),
+      value: qboPnl ? formatCurrency(currentRevenue) : '—',
+      ...(qboPnl ? {} : { subtitle: 'Sync QuickBooks' }),
       change: `${revenueChange >= 0 ? '+' : ''}${revenueChange.toFixed(1)}%`,
       trend: revenueChange >= 0 ? 'up' : 'down',
       icon: 'dollar-sign',
@@ -513,12 +531,12 @@ export async function getDashboardStats(_dateRange?: DateRange): Promise<Dashboa
     {
       id: 'revenue-ytd',
       title: 'Revenue (YTD)',
-      value: formatCurrency(ytdNetRevenue),
+      value: qboPnl ? formatCurrency(ytdNetRevenue) : '—',
       change: `${ytdNetRevenueChange >= 0 ? '+' : ''}${ytdNetRevenueChange.toFixed(1)}%`,
       trend: ytdNetRevenueChange >= 0 ? 'up' : 'down',
       icon: 'trending-up',
       color: 'bg-teal-500',
-      subtitle: 'vs same period last year',
+      subtitle: qboPnl ? 'vs same period last year' : 'Sync QuickBooks',
     },
     {
       id: 'units-sold',
@@ -543,13 +561,13 @@ export async function getDashboardStats(_dateRange?: DateRange): Promise<Dashboa
     {
       id: 'blended-margin',
       title: 'Blended Margin (YTD)',
-      // (YTD revenue − YTD cost at the order cycle's cost, else products.base_cost) ÷ YTD revenue, commission lines excluded
-      value: ytdTotalRevenue > 0 ? `${ytdBlendedMargin.toFixed(1)}%` : '—',
+      // (QuickBooks YTD tire sales − YTD COGS) ÷ YTD tire sales; commission accounts excluded
+      value: qboPnl && ytdTotalRevenue > 0 ? `${ytdBlendedMargin.toFixed(1)}%` : '—',
       change: `${marginChange >= 0 ? '+' : ''}${marginChange.toFixed(1)}%`,
       trend: marginChange >= 0 ? 'up' : 'down',
       icon: 'percent',
       color: 'bg-violet-500',
-      subtitle: 'vs same period last year',
+      subtitle: qboPnl ? 'vs same period last year' : 'Sync QuickBooks',
       target: '30%',
     },
     {
@@ -635,14 +653,26 @@ export async function getMarginAnalysis(dateRange?: DateRange): Promise<MarginDa
     if (!monthlyData[monthKey]) continue;
 
     const lineCost = line.cost ?? 0;
-    monthlyData[monthKey].totalRevenue += line.lineTotal;
-    monthlyData[monthKey].totalCost += lineCost;
+    // ERP blended margin (replaced by the QuickBooks P&L below, Nov 6 2026):
+    // monthlyData[monthKey].totalRevenue += line.lineTotal;
+    // monthlyData[monthKey].totalCost += lineCost;
+    // Per-size margins stay ERP (QuickBooks has no tire sizes); not drawn on the chart
     if (line.tireSize === '38') {
       monthlyData[monthKey].revenue38 += line.lineTotal;
       monthlyData[monthKey].cost38 += lineCost;
     } else if (line.tireSize === '24') {
       monthlyData[monthKey].revenue24 += line.lineTotal;
       monthlyData[monthKey].cost24 += lineCost;
+    }
+  }
+
+  // Blended margin per month: QuickBooks P&L tire sales and COGS (last sync)
+  const qboMonths = await loadQboMonths();
+  for (const [monthKey, values] of Object.entries(monthlyData)) {
+    const qm = qboMonths.get(monthKey);
+    if (qm && qm.cogs !== null && monthKey >= startDate.slice(0, 7) && monthKey <= endDate.slice(0, 7)) {
+      values.totalRevenue = qm.revenue;
+      values.totalCost = qm.cogs;
     }
   }
 
@@ -703,20 +733,20 @@ export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDat
     queryEndDate = formatDateString(new Date());
   }
 
-  // Recognized tire revenue (Ankur 3.1, same rule as the Executive tabs):
+  // ERP recognized tire revenue (replaced by the QuickBooks P&L, Nov 6 2026):
   // tire lines of firm orders delivered in the month − credit notes in the month
-  let recognized;
-  try {
-    recognized = await loadRecognizedSales();
-  } catch (error) {
-    console.error('Error fetching revenue trend:', error);
-    recognized = { lines: [], credits: [] };
-  }
+  // let recognized;
+  // try {
+  //   recognized = await loadRecognizedSales();
+  // } catch (error) {
+  //   console.error('Error fetching revenue trend:', error);
+  //   recognized = { lines: [], credits: [] };
+  // }
 
-  // Same date range one year earlier (dates are YYYY-MM-DD strings)
-  const shiftYear = (iso: string, years: number) => `${Number(iso.slice(0, 4)) + years}${iso.slice(4)}`;
-  const lastYearStart = shiftYear(queryStartDate, -1);
-  const lastYearEnd = shiftYear(queryEndDate, -1);
+  // Same date range one year earlier, for the ERP lines (replaced by QuickBooks, Nov 6 2026):
+  // const shiftYear = (iso: string, years: number) => `${Number(iso.slice(0, 4)) + years}${iso.slice(4)}`;
+  // const lastYearStart = shiftYear(queryStartDate, -1);
+  // const lastYearEnd = shiftYear(queryEndDate, -1);
 
   // One bucket per calendar month of the range, keyed YYYY-MM (so the same month of different years never merges)
   const monthKeys: string[] = [];
@@ -737,38 +767,37 @@ export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDat
   const monthlyRevenue = new Map(monthKeys.map((k) => [k, 0]));
   const lastYearRevenue = new Map(monthKeys.map((k) => [k, 0]));
 
+  // ERP lines per month (replaced by the QuickBooks P&L below, Nov 6 2026):
   // Last year amounts go under the same month of this range (2025-06 → 2026-06)
-  const add = (date: string, cents: number) => {
-    if (date >= queryStartDate && date <= queryEndDate) {
-      const key = date.slice(0, 7);
-      monthlyRevenue.set(key, (monthlyRevenue.get(key) ?? 0) + cents / 100);
-    }
-    if (date >= lastYearStart && date <= lastYearEnd) {
-      const key = shiftYear(date, 1).slice(0, 7);
-      lastYearRevenue.set(key, (lastYearRevenue.get(key) ?? 0) + cents / 100);
-    }
-  };
-  for (const line of recognized.lines) {
-    if (line.isTire) {
-      add(line.date, line.lineTotal);
-    }
-  }
-  for (const credit of recognized.credits) {
-    add(credit.date, -credit.amount);
-  }
+  // const add = (date: string, cents: number) => {
+  //   if (date >= queryStartDate && date <= queryEndDate) {
+  //     const key = date.slice(0, 7);
+  //     monthlyRevenue.set(key, (monthlyRevenue.get(key) ?? 0) + cents / 100);
+  //   }
+  //   if (date >= lastYearStart && date <= lastYearEnd) {
+  //     const key = shiftYear(date, 1).slice(0, 7);
+  //     lastYearRevenue.set(key, (lastYearRevenue.get(key) ?? 0) + cents / 100);
+  //   }
+  // };
+  // for (const line of recognized.lines) {
+  //   if (line.isTire) {
+  //     add(line.date, line.lineTotal);
+  //   }
+  // }
+  // for (const credit of recognized.credits) {
+  //   add(credit.date, -credit.amount);
+  // }
 
-  // Months before the ERP has sales data: QuickBooks P&L revenue of the month
-  // (daily snapshot). Without a snapshot month the ERP figure stays.
-  const qboRevenue = await loadQboRevenueHistory();
+  // Every month: QuickBooks P&L tire sales of the month (commission accounts
+  // excluded), from the last sync; the current month is the P&L month to date.
+  const qboRevenue = await loadQboMonths();
   const lastYearKey = (key: string) => `${Number(key.slice(0, 4)) - 1}${key.slice(4)}`;
-  const sourceOf = (key: string) => (revenueSourceOf(key) === 'quickbooks' && qboRevenue.has(key) ? 'quickbooks' : 'erp');
+  // ERP / QuickBooks split (replaced, Nov 6 2026):
+  // const sourceOf = (key: string) => (revenueSourceOf(key) === 'quickbooks' && qboRevenue.has(key) ? 'quickbooks' : 'erp');
+  const sourceOf = (_key: string) => 'quickbooks' as const;
   for (const key of monthKeys) {
-    if (sourceOf(key) === 'quickbooks') {
-      monthlyRevenue.set(key, qboRevenue.get(key)!);
-    }
-    if (sourceOf(lastYearKey(key)) === 'quickbooks') {
-      lastYearRevenue.set(key, qboRevenue.get(lastYearKey(key))!);
-    }
+    monthlyRevenue.set(key, qboRevenue.get(key)?.revenue ?? 0);
+    lastYearRevenue.set(key, qboRevenue.get(lastYearKey(key))?.revenue ?? 0);
   }
 
   // TODO: Move to database table (monthly_targets) for dynamic updates
@@ -792,8 +821,8 @@ export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDat
   });
 }
 
-/** QuickBooks P&L revenue per month (YYYY-MM) from the latest snapshot; empty when not connected */
-async function loadQboRevenueHistory(): Promise<Map<string, number>> {
+/** Latest QuickBooks snapshot; null when not connected or not synced */
+async function loadQboFinancials(): Promise<QboFinancials | null> {
   try {
     const [{ getConnectionByProvider }, { getLatestSnapshot }] = await Promise.all([
       import('@/modules/integrations/core'),
@@ -801,14 +830,31 @@ async function loadQboRevenueHistory(): Promise<Map<string, number>> {
     ]);
     const connection = await getConnectionByProvider('quickbooks');
     if (!connection || connection.status !== 'connected' || !connection.external_account_id) {
-      return new Map();
+      return null;
     }
     const { financials } = await getLatestSnapshot(connection.external_account_id);
-    return new Map((financials?.revenueHistory ?? []).map((m) => [m.month, m.revenue]));
+    return financials ?? null;
   } catch (error) {
-    console.error('Error loading QuickBooks revenue history:', error);
-    return new Map();
+    console.error('Error loading the QuickBooks snapshot:', error);
+    return null;
   }
+}
+
+/**
+ * QuickBooks P&L tire sales (commission excluded) and COGS per month (YYYY-MM)
+ * from the latest snapshot: 24 complete months plus the current month to date.
+ * COGS is null for months of snapshots taken before Nov 6, 2026. Empty when not connected.
+ */
+async function loadQboMonths(): Promise<Map<string, { revenue: number; cogs: number | null }>> {
+  const financials = await loadQboFinancials();
+  const months = new Map<string, { revenue: number; cogs: number | null }>(
+    (financials?.revenueHistory ?? []).map((m) => [m.month, { revenue: m.revenue, cogs: m.cogs ?? null }])
+  );
+  const mtd = financials?.periods?.pnl?.mtd;
+  if (financials && mtd) {
+    months.set(financials.asOf.slice(0, 7), { revenue: mtd.salesRevenue, cogs: mtd.cogs });
+  }
+  return months;
 }
 
 /**
@@ -843,17 +889,22 @@ export async function getCommissionRevenue(): Promise<CommissionRevenueStats> {
     console.error('Error fetching commission invoices:', invoicesRes.error);
   }
 
-  // Cents
-  const billedIn = (from: string, to: string) =>
-    (invoicesRes.data ?? [])
-      .filter((inv) => inv.invoice_date >= from && inv.invoice_date <= to)
-      .reduce(
-        (sum, inv) =>
-          sum + ((inv.invoice_items ?? []) as Array<{ line_total: number | null }>).reduce((s, i) => s + Number(i.line_total ?? 0), 0),
-        0
-      );
-  const actualCents = billedIn(periods.ytd.from, periods.ytd.to);
-  const lastYearCents = billedIn(periods.py.from, periods.py.to);
+  // ERP commission invoices in cents (replaced by QuickBooks below, Nov 6 2026):
+  // const billedIn = (from: string, to: string) =>
+  //   (invoicesRes.data ?? [])
+  //     .filter((inv) => inv.invoice_date >= from && inv.invoice_date <= to)
+  //     .reduce(
+  //       (sum, inv) =>
+  //         sum + ((inv.invoice_items ?? []) as Array<{ line_total: number | null }>).reduce((s, i) => s + Number(i.line_total ?? 0), 0),
+  //       0
+  //     );
+  // Commission Actual: QuickBooks commission income accounts (P&L, last sync, Nov 6 2026)
+  const qboPnl = (await loadQboFinancials())?.periods?.pnl ?? null;
+  // ERP commission invoices (replaced by QuickBooks):
+  // const actualCents = billedIn(periods.ytd.from, periods.ytd.to);
+  // const lastYearCents = billedIn(periods.py.from, periods.py.to);
+  const actualCents = Math.round((qboPnl?.ytd.commission ?? 0) * 100);
+  const lastYearCents = Math.round((qboPnl?.py.commission ?? 0) * 100);
   const unbilledCents = unbilledOrders.reduce((sum, so) => sum + Number(so.commission_amount ?? 0), 0);
 
   const actualYTD = actualCents / 100;
@@ -866,5 +917,6 @@ export async function getCommissionRevenue(): Promise<CommissionRevenueStats> {
     lastYearActualYTD: Math.round(lastYearActualYTD),
     change: Math.round(change * 10) / 10, // Round to 1 decimal
     trend: change >= 0 ? 'up' : 'down',
+    fromQuickBooks: Boolean(qboPnl),
   };
 }

@@ -7,7 +7,8 @@
  * Manages state for date filters and fetches data accordingly.
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
+import { QBO_FINANCIALS_UPDATED_EVENT, ensureFreshOnce } from './financial-metrics/QuickBooksFinancials';
 import { toast } from 'sonner';
 import { DashboardHeader } from './DashboardHeader';
 import { DashboardStatsGrid } from './DashboardStatsCard';
@@ -142,28 +143,32 @@ export function DashboardContent({
             return `$${Math.round(amount).toLocaleString('en-US')}`;
           };
 
+          // Commission Actual comes from QuickBooks: no P&L in the snapshot yet → "—"
+          const noQbo = commission.fromQuickBooks === false;
+
           // Commission Expected (YTD) card
           updatedStats.push({
             id: 'commission-expected-ytd',
             title: 'Commission Expected (YTD)',
-            value: formatCurrency(commission.expectedYTD),
+            value: noQbo ? '—' : formatCurrency(commission.expectedYTD),
             change: `${commission.change >= 0 ? '+' : ''}${commission.change.toFixed(1)}%`,
             trend: commission.trend,
             icon: 'credit-card',
             color: 'bg-purple-500',
-            subtitle: 'vs same period last year',
+            subtitle: noQbo ? 'Sync QuickBooks' : 'vs same period last year',
           });
 
           // Commission Actual (YTD) card
           updatedStats.push({
             id: 'commission-actual-ytd',
             title: 'Commission Actual (YTD)',
-            value: formatCurrency(commission.actualYTD),
+            value: noQbo ? '—' : formatCurrency(commission.actualYTD),
             change: `${commission.change >= 0 ? '+' : ''}${commission.change.toFixed(1)}%`,
             trend: commission.trend,
             icon: 'dollar-sign',
             color: 'bg-fuchsia-500',
-            subtitle: 'Commission invoices to Galileo',
+            // ERP subtitle (replaced by QuickBooks, Nov 6 2026): 'Commission invoices to Galileo'
+            subtitle: noQbo ? 'Sync QuickBooks' : 'QuickBooks commission income',
           });
         }
 
@@ -196,6 +201,24 @@ export function DashboardContent({
       setIsLoading(false);
     }
   }, [overviewSections]);
+
+  // Revenue, Blended Margin, Commission Actual and the Revenue / Margin charts
+  // come from the QuickBooks snapshot (Nov 6 2026): on open, refresh it when it
+  // is not from today or has no P&L yet, then reload the Overview data.
+  const dateRangeRef = useRef(currentDateRange);
+  dateRangeRef.current = currentDateRange;
+  useEffect(() => {
+    const usesQuickBooks = ['kpis', 'revenueTrend', 'margin'].some((s) => overviewSections.includes(s as OverviewSection));
+    if (!usesQuickBooks) {
+      return;
+    }
+    const onUpdated = () => {
+      void fetchData(dateRangeRef.current);
+    };
+    window.addEventListener(QBO_FINANCIALS_UPDATED_EVENT, onUpdated);
+    void ensureFreshOnce();
+    return () => window.removeEventListener(QBO_FINANCIALS_UPDATED_EVENT, onUpdated);
+  }, [overviewSections, fetchData]);
 
   // Handle date range change
   const handleDateRangeChange = (preset: DateRangePreset, customRange?: DateRange) => {

@@ -104,7 +104,7 @@ function useExecutiveDashboard() {
       setState(r);
       // QuickBooks figures not from today yet: trigger the daily refresh
       // (the update event below reloads the tables when it finishes)
-      if (typeof r !== 'string' && r.quickBooks.connected && (!r.quickBooks.hasPeriods || (r.quickBooks.asOf ?? '') < r.asOf)) {
+      if (typeof r !== 'string' && r.quickBooks.connected && (!r.quickBooks.hasPeriods || !r.quickBooks.hasPnl || (r.quickBooks.asOf ?? '') < r.asOf)) {
         void ensureFreshOnce();
       }
     });
@@ -446,7 +446,7 @@ export function ProfitabilityTables() {
           <SpecTable
             id="2.1"
             title="Profitability"
-            description="Revenue = tire sales on orders delivered in the period, net of discounts and credit notes (excl. tax). OPEX from QuickBooks (chart of accounts)."
+            description="From the QuickBooks Profit and Loss (Accrual) at the last sync: Revenue = Total Income (incl. commission), OPEX = Total Expenses, Operating Profit = Net Operating Income."
             columns={C4}
             rows={[
               { label: 'Revenue', format: 'money', cells: m.profitability.revenue },
@@ -459,7 +459,7 @@ export function ProfitabilityTables() {
           <SpecTable
             id="2.1b"
             title="Commission Revenue"
-            description={`Commission from Galileo on commission-only orders, kept separate from tire revenue and gross profit. Counted after delivery. Delivered, not billed yet: ${
+            description={`Commission Billed = QuickBooks income accounts named "commission" (P&L, last sync). Delivered, not billed yet (ERP): ${
               m.commission.unbilled.value === null ? '—' : formatValue(m.commission.unbilled.value, 'money')
             } on ${m.commission.unbilledOrders} order${m.commission.unbilledOrders === 1 ? '' : 's'}.`}
             columns={C4}
