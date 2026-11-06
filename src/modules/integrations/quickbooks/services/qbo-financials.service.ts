@@ -164,6 +164,8 @@ export interface QboUnitsSold {
   /** Sales amount of the same lines */
   amount: number;
   items: Array<{ name: string; type: string; quantity: number; amount: number; size: string }>;
+  /** Report columns as read (title / type / key) and the indexes used: for checking the parsing */
+  columns?: { keys: string[]; quantity: number; amount: number };
 }
 
 /** One P&L column: QuickBooks section totals (fallback: mapped account categories) */
@@ -551,9 +553,19 @@ export async function fetchItemTypes(access: QboAccess): Promise<Map<string, str
 
 /** Units sold from a Sales by Product/Service Summary report (Quantity and Amount columns) */
 export function unitsFromItemSales(report: Report, itemTypes: Map<string, string>): QboUnitsSold {
-  const titles = (report.Columns?.Column ?? []).map((c) => (c.ColTitle ?? '').trim().toLowerCase());
-  const qtyCol = titles.indexOf('quantity');
-  const amountCol = titles.indexOf('amount');
+  // The API names the columns differently from the web report (e.g. "Qty" or only a
+  // ColType / MetaData key), and may nest them under a "Total" group: flatten, match
+  // loosely, else use the standard order (name, quantity, amount, ...)
+  type Col = { ColTitle?: string; ColType?: string; MetaData?: Array<{ Name?: string; Value?: string }>; Columns?: { Column?: Col[] } };
+  const flatten = (cols: Col[]): Col[] => cols.flatMap((c) => (c.Columns?.Column?.length ? flatten(c.Columns.Column) : [c]));
+  const keys = flatten((report.Columns?.Column ?? []) as Col[]).map((c) =>
+    [c.ColTitle, c.ColType, ...(c.MetaData ?? []).map((m) => m.Value)].filter(Boolean).join(' ').toLowerCase()
+  );
+  const find = (pattern: RegExp) => keys.findIndex((k, i) => i > 0 && pattern.test(k));
+  const qtyFound = find(/\bqty\b|quantity/);
+  const amountFound = find(/^(amount|income|sales|subt_nat_amount)\b|\bamount$/);
+  const qtyCol = qtyFound > 0 ? qtyFound : 1;
+  const amountCol = amountFound > 0 && amountFound !== qtyCol ? amountFound : 2;
   const items: QboUnitsSold['items'] = [];
   const walk = (rows: ReportRow[] | undefined) => {
     for (const row of rows ?? []) {
@@ -586,6 +598,7 @@ export function unitsFromItemSales(report: Report, itemTypes: Map<string, string
     bySize,
     amount: round2(items.reduce((s, i) => s + i.amount, 0)),
     items,
+    columns: { keys, quantity: qtyCol, amount: amountCol },
   };
 }
 

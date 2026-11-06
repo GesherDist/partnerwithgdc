@@ -85,6 +85,8 @@ export async function ensureFreshQuickBooksFinancials(): Promise<Result<{ financ
   const hasPnl =
     Boolean(financials?.periods?.pnl) &&
     Boolean(financials?.periods?.units?.ytd?.bySize) &&
+    // Units read with the wrong columns (Nov 6 2026 snapshot): sales in the P&L but no unit amount
+    !((financials?.periods?.pnl?.ytd?.salesRevenue ?? 0) > 0 && (financials?.periods?.units?.ytd?.amount ?? 0) === 0) &&
     (financials?.revenueHistory ?? []).every((m) => m.cogs !== undefined);
   if (financials && financials.asOf >= businessToday() && financials.periods && hasPnl) {
     return { success: true, data: null }; // already fresh today
