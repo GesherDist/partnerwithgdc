@@ -16,6 +16,7 @@ export type OrderStatus =
   | 'processing'
   | 'shipped'
   | 'delivered'
+  | 'invoiced' // Closed out: invoiced in QuickBooks (Ankur, Nov 5 2026)
   | 'cancelled';
 
 export const ORDER_STATUSES: OrderStatus[] = [
@@ -25,6 +26,7 @@ export const ORDER_STATUSES: OrderStatus[] = [
   'processing',
   'shipped',
   'delivered',
+  'invoiced',
   'cancelled',
 ];
 
@@ -35,6 +37,7 @@ export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   processing: 'Processing',
   shipped: 'Shipped',
   delivered: 'Delivered',
+  invoiced: 'Invoiced',
   cancelled: 'Cancelled',
 };
 
@@ -45,6 +48,7 @@ export const ORDER_STATUS_COLORS: Record<OrderStatus, string> = {
   processing: 'bg-cyan-100 text-cyan-800 border border-cyan-200',
   shipped: 'bg-sky-100 text-sky-800 border border-sky-200',
   delivered: 'bg-emerald-100 text-emerald-800 border border-emerald-200',
+  invoiced: 'bg-violet-100 text-violet-800 border border-violet-200',
   cancelled: 'bg-red-100 text-red-800 border border-red-200',
 };
 
@@ -52,10 +56,11 @@ export const ORDER_STATUS_COLORS: Record<OrderStatus, string> = {
 export const ORDER_STATUS_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   draft: ['pending', 'confirmed', 'cancelled'], // Allow direct confirmation from draft
   pending: ['confirmed', 'cancelled'],
-  confirmed: ['processing', 'cancelled'],
-  processing: ['shipped', 'cancelled'],
-  shipped: ['delivered'],
-  delivered: [],
+  confirmed: ['processing', 'cancelled', 'invoiced'],
+  processing: ['shipped', 'cancelled', 'invoiced'],
+  shipped: ['delivered', 'invoiced'],
+  delivered: ['invoiced'],
+  invoiced: [], // "Reopen" returns to status_before_invoiced (salesOrderService.reopenInvoiced)
   cancelled: [],
 };
 
@@ -217,6 +222,11 @@ export interface SalesOrder {
   cancelledAt: Date | null;
   cancelledBy: string | null;
   cancellationReason: string | null;
+  // Close-out: invoiced in QuickBooks (migration 174)
+  invoicedAt: string | null;
+  invoicedBy: string | null;
+  qboInvoiceNumber: string | null;
+  statusBeforeInvoiced: OrderStatus | null;
 
   // Commission-only order: Galileo invoices the customer, Gesher earns a per-tire commission
   isCommissionOnly: boolean;
@@ -831,6 +841,9 @@ export interface SalesOrdersTableProps {
   onDelete?: (order: SalesOrderListItem) => void;
   onConfirm?: (order: SalesOrderListItem) => void;
   onCancel?: (order: SalesOrderListItem) => void;
+  // Close-out: invoiced in QuickBooks / undo
+  onMarkInvoiced?: (order: SalesOrderListItem) => void;
+  onReopenInvoiced?: (order: SalesOrderListItem) => void;
   toolbarContent?: React.ReactNode;
   // Server-side pagination
   pagination?: {

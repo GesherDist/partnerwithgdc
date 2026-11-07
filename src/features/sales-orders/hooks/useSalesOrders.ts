@@ -139,6 +139,7 @@ export function useSalesOrderStatusCounts() {
     processing: 0,
     shipped: 0,
     delivered: 0,
+    invoiced: 0,
     cancelled: 0,
   });
   const [isLoading, setIsLoading] = useState(true);

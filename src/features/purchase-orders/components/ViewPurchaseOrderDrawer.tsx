@@ -105,6 +105,7 @@ export function ViewPurchaseOrderDrawer({
   // Customer orders this container is allocated to
   const [allocations, setAllocations] = useState<PurchaseOrderAllocationSummary[]>([]);
   const [fullySold, setFullySold] = useState(false);
+  const [soldOut, setSoldOut] = useState(false);
 
   // Load suppliers when editing
   useEffect(() => {
@@ -125,6 +126,7 @@ export function ViewPurchaseOrderDrawer({
     let cancelled = false;
     setAllocations([]);
     setFullySold(false);
+    setSoldOut(false);
     if (!open || !po?.id) {
       return;
     }
@@ -132,6 +134,7 @@ export function ViewPurchaseOrderDrawer({
       if (!cancelled && result.success && result.data) {
         setAllocations(result.data.allocations);
         setFullySold(result.data.fullySold);
+        setSoldOut(result.data.soldOut);
       }
     });
     return () => {
@@ -228,12 +231,16 @@ export function ViewPurchaseOrderDrawer({
   // Same permissions as sendPurchaseOrder / updateSalesOrderSeries
   const canSend = hasPermission('purchase_orders.send');
   const canEditOrderSeries = hasPermission('orders.edit');
-  // Sell the container to a customer order before it arrives: not sold yet,
-  // nothing received into stock (same rule as Sales Order → Add Allocation)
+  // Sell the container to customer orders before it arrives: tires left to
+  // sell, nothing received into stock (same rule as Sales Order → Add
+  // Allocation). One PO can be sold to several orders; a PO linked to an order
+  // without allocations (older direct link) counts as sold.
   const canSell =
     hasPermission('allocation.decide') &&
     !!po &&
-    !po.salesOrderId &&
+    (!po.salesOrderId || allocations.length > 0) &&
+    !fullySold &&
+    !soldOut &&
     !['draft', 'sent', 'cancelled'].includes(po.status) &&
     po.items.every((item) => Number(item.quantityReceived ?? 0) === 0);
 

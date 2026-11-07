@@ -20,6 +20,7 @@ import {
 import {
   validateAllocationRequest,
   validateMultiSourceAllocation,
+  checkPurchaseOrderCapacity,
   type MultiSourceAllocationRequest,
 } from './allocation-validation.service';
 import { db } from '@/shared/lib/supabase/database';
@@ -235,6 +236,7 @@ export async function createSingleAllocation(
       platinumDealerId: params.platinumDealerId,
       dealerLocationId: params.dealerLocationId,
       containerQty: params.containerQty,
+      purchaseOrderId: params.fulfillmentSource === 'direct' ? params.purchaseOrderId : undefined,
     });
 
     if (!validation.valid) {
@@ -294,11 +296,13 @@ export async function createSingleAllocation(
           .single();
 
         if (soItem?.sales_order_id) {
-          // Update PO to link it to this SO
+          // Update PO to link it to this SO. A PO sold to several orders keeps
+          // its first order; the others are found through the allocations.
           await db
             .from('purchase_orders')
             .update({ sales_order_id: soItem.sales_order_id })
-            .eq('id', params.purchaseOrderId);
+            .eq('id', params.purchaseOrderId)
+            .is('sales_order_id', null);
 
           console.log(`✅ Linked PO ${params.purchaseOrderId} to SO ${soItem.sales_order_id}`);
         }
@@ -492,6 +496,11 @@ export async function updateAllocationQuantity(
       platinumDealerId: currentAllocation.platinumDealerId || undefined,
       dealerLocationId: currentAllocation.dealerLocationId || undefined,
       containerQty: currentAllocation.containerQty || undefined,
+      // PO tires left: checked only when more tires are taken from the PO
+      purchaseOrderId:
+        currentAllocation.fulfillmentSource === 'direct' && params.newQuantity > oldQuantity
+          ? currentAllocation.purchaseOrderId || undefined
+          : undefined,
       excludeAllocationId: params.allocationId, // Exclude current allocation from over-allocation check
     });
 
@@ -666,6 +675,24 @@ export async function updateAllocationDetails(params: {
       saveCost = check.saveCost;
     }
 
+    // More tires taken from a PO (other PO, new direct source or a higher qty):
+    // the PO may not be sold beyond what it carries
+    const takesMoreFromPo =
+      isDirect &&
+      !!next.purchaseOrderId &&
+      (sourceChanged || next.purchaseOrderId !== current.purchaseOrderId || next.quantity > current.quantity);
+    if (takesMoreFromPo) {
+      const capacity = await checkPurchaseOrderCapacity({
+        purchaseOrderId: next.purchaseOrderId!,
+        productId: params.productId,
+        quantity: next.quantity,
+        excludeAllocationId: params.allocationId,
+      });
+      if (!capacity.valid) {
+        return { success: false, error: capacity.error || 'Not enough tires left on the purchase order' };
+      }
+    }
+
     const inventoryChanged =
       sourceChanged ||
       next.quantity !== current.quantity ||
@@ -778,7 +805,8 @@ export async function updateAllocationDetails(params: {
         const { error: linkError } = await db
           .from('purchase_orders')
           .update({ sales_order_id: soItem.sales_order_id })
-          .eq('id', next.purchaseOrderId);
+          .eq('id', next.purchaseOrderId)
+          .is('sales_order_id', null);
         if (linkError) {
           console.error('Failed to link PO to SO:', linkError);
         }
@@ -798,7 +826,8 @@ export async function updateAllocationDetails(params: {
 /**
  * A Manufacturer (direct) allocation links its PO to the sales order
  * (purchase_orders.sales_order_id). When the last active allocation of that PO
- * for that order goes away, the PO is unsold again and shows up for allocation.
+ * for that order goes away, the PO moves to another order it is still sold
+ * to; with no order left it is unsold again and shows up for allocation.
  */
 async function unlinkPurchaseOrderIfUnused(purchaseOrderId: string, salesOrderItemId: string): Promise<void> {
   const { data: soItem } = await db
@@ -810,18 +839,35 @@ async function unlinkPurchaseOrderIfUnused(purchaseOrderId: string, salesOrderIt
     return;
   }
 
-  const { count, error } = await db
+  const { data: remaining, error } = await db
     .from('fulfillment_allocations')
-    .select('id', { count: 'exact', head: true })
+    .select('created_at, sales_order_items (sales_order_id)')
     .eq('purchase_order_id', purchaseOrderId)
-    .neq('status', 'cancelled');
-  if (error || (count ?? 0) > 0) {
+    .neq('status', 'cancelled')
+    .order('created_at', { ascending: true });
+  if (error) {
+    return;
+  }
+  const remainingOrderIds = (remaining || [])
+    .map((a) => {
+      const item = (Array.isArray(a.sales_order_items) ? a.sales_order_items[0] : a.sales_order_items) as
+        | { sales_order_id: string | null }
+        | null;
+      return item?.sales_order_id ?? null;
+    })
+    .filter((id): id is string => !!id);
+  // This order still has tires on the PO
+  if (remainingOrderIds.includes(soItem.sales_order_id)) {
+    return;
+  }
+  // Older data: allocations left without an order, keep the link as before
+  if ((remaining || []).length > 0 && remainingOrderIds.length === 0) {
     return;
   }
 
   const { error: unlinkError } = await db
     .from('purchase_orders')
-    .update({ sales_order_id: null, updated_at: new Date().toISOString() })
+    .update({ sales_order_id: remainingOrderIds[0] ?? null, updated_at: new Date().toISOString() })
     .eq('id', purchaseOrderId)
     .eq('sales_order_id', soItem.sales_order_id);
   if (unlinkError) {

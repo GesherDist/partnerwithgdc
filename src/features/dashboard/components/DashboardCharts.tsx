@@ -110,12 +110,12 @@ export function RevenueChart({ data, dateRange }: RevenueChartProps) {
                   <div className="space-y-1.5">
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Calculation Formula</p>
                     <div className="rounded-md bg-muted/50 px-3 py-2.5 text-xs leading-relaxed whitespace-pre-line border">
-                      {`Revenue = QuickBooks Profit & Loss (Accrual) of the month
+                      {`Revenue = QuickBooks Profit & Loss (Cash basis) of the month
 • Accounts mapped to Revenue in Settings > Chart of Accounts
 • Commission accounts excluded (tire sales only)
 • Current month: month to date at the last QuickBooks sync
 
-Target: $220,000/month (hardcoded)
+Target: Monthly Revenue Target from Settings > Dashboard Targets (was $220,000 hardcoded)
 Last Year: Same period previous year`}
                     </div>
                   </div>
@@ -240,22 +240,24 @@ export function UnitsBySKUChart({ data, products, dateRange }: UnitsBySKUChartPr
                   <div className="space-y-1.5">
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Calculation Formula</p>
                     <div className="rounded-md bg-muted/50 px-3 py-2.5 text-xs leading-relaxed whitespace-pre-line border">
-                      {`Units = Sum of shipment_items.quantity_shipped
+                      {/* Before Nov 7 2026 (ERP): Units = Sum of shipment_items.quantity_shipped, grouped by products.name and month of shipments.eta_to_port (ETA to US Port), item_type = 'inventory' only */}
+                      {`Units = Tires sold per month, per product (QuickBooks)
 
-Database Sources:
-• Items: shipment_items.quantity_shipped
-• Shipments: shipments.eta_to_port
-• Grouped by: products.name, month
+Source:
+• QuickBooks Sales by Product/Service Summary (Accrual), one report per month
+• Quantity of each product item (QuickBooks type Inventory / Non-inventory)
+• Grouped by: QuickBooks product name, month
 
-Filtered by: eta_to_port (ETA to US Port)
-Product Type: item_type = 'inventory' only`}
+Current month = 1st of the month to the last sync
+Same products and rule as the Units Sold cards`}
                     </div>
                   </div>
                   <div className="space-y-1.5">
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Notes</p>
                     <div className="flex gap-2">
                       <div className="mt-0.5 h-4 w-0.5 rounded-full bg-primary/40 flex-shrink-0" />
-                      <p className="text-xs text-muted-foreground leading-relaxed">Shows units arriving (inventory coming IN) by SKU per month based on shipment ETA to US port. Excludes service items.</p>
+                      {/* Before Nov 7 2026: Shows units arriving (inventory coming IN) by SKU per month based on shipment ETA to US port. Excludes service items. */}
+                      <p className="text-xs text-muted-foreground leading-relaxed">Shows tires sold by SKU per month (Ankur&apos;s management KPI &quot;units by SKU&quot;). Service items (commission, fees) are excluded. Updated on each QuickBooks sync.</p>
                     </div>
                   </div>
                 </div>
@@ -264,7 +266,8 @@ Product Type: item_type = 'inventory' only`}
           </Popover>
           <DrillDownButton kind="units-by-sku" dateRange={dateRange} label="Units by SKU" />
         </div>
-        <CardDescription>Shipment units by ETA to port</CardDescription>
+        {/* Before Nov 7 2026: <CardDescription>Shipment units by ETA to port</CardDescription> */}
+        <CardDescription>Tires sold per month (QuickBooks)</CardDescription>
       </CardHeader>
       <CardContent>
         <ResponsiveContainer width="100%" height={300}>
@@ -348,23 +351,28 @@ export function ChannelPerformanceChart({ data, dateRange }: ChannelPerformanceC
                   <div className="space-y-1.5">
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Calculation Formula</p>
                     <div className="rounded-md bg-muted/50 px-3 py-2.5 text-xs leading-relaxed whitespace-pre-line border">
-                      {`Revenue by Channel = Σ tire line totals of firm sales orders delivered in the period, grouped by channel
-(Ankur's Definition 3.1, same rule as the Executive tabs)
+                      {/* Before Nov 7 2026 (ERP): Σ tire line totals of firm sales orders delivered in the period (sales_order_items.line_total, tire products only), grouped by customers.channel; recognized when delivered; commission-only orders and service lines excluded */}
+                      {`Revenue by Channel = Σ QuickBooks tire sales by customer, grouped by channel
 
-Database Sources:
-• Revenue: sales_order_items.line_total (after line discount, excl. tax), tire products only
-• Units: quantity of the same tire lines
-• Channel: customers.channel (OEM or Dealer)
+Source (QuickBooks, by transaction month):
+• Revenue: product lines of invoices + sales receipts − credit memos (excl. tax)
+• Units: quantity of the same lines
+• Product lines = QuickBooks item type Inventory / Non-inventory (same as Units Sold); commission and other service items excluded
 
-Recognized when delivered: actual delivery date, else delivered shipment arrival, else order date for status Delivered
-Excludes: commission-only orders and service lines`}
+Channel:
+1. QuickBooks Customer Type (OEM / Dealer)
+2. else the ERP customer's channel, matched by name
+3. else UNASSIGNED
+
+Whole months of the date range (current month = to the last sync)`}
                     </div>
                   </div>
                   <div className="space-y-1.5">
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Notes</p>
                     <div className="flex gap-2">
                       <div className="mt-0.5 h-4 w-0.5 rounded-full bg-primary/40 flex-shrink-0" />
-                      <p className="text-xs text-muted-foreground leading-relaxed">Recognized tire revenue by channel. OEM = Original Equipment Manufacturers, Dealer = Independent dealers.</p>
+                      {/* Before Nov 7 2026: Recognized tire revenue by channel. OEM = Original Equipment Manufacturers, Dealer = Independent dealers. */}
+                      <p className="text-xs text-muted-foreground leading-relaxed">QuickBooks tire sales by channel. OEM = Original Equipment Manufacturers, Dealer = Independent dealers. UNASSIGNED = customer with no OEM / Dealer type in QuickBooks and no matching ERP customer (or two ERP records with different channels).</p>
                     </div>
                   </div>
                 </div>
@@ -373,7 +381,8 @@ Excludes: commission-only orders and service lines`}
           </Popover>
           <DrillDownButton kind="channel" dateRange={dateRange} label="Channel Performance" />
         </div>
-        <CardDescription>OEM vs Dealer breakdown</CardDescription>
+        {/* Before Nov 7 2026: <CardDescription>OEM vs Dealer breakdown</CardDescription> */}
+        <CardDescription>OEM vs Dealer breakdown (QuickBooks)</CardDescription>
       </CardHeader>
       <CardContent>
         <div className="flex items-center gap-8">
@@ -483,19 +492,19 @@ export function MarginChart({ data, dateRange }: MarginChartProps) {
                       {`Gross Margin % = (Revenue - COGS) / Revenue × 100
 (Ankur's Definition 3.2: Gross Profit)
 
-Where (QuickBooks Profit & Loss, Accrual, per month):
+Where (QuickBooks Profit & Loss, Cash basis, per month):
 • Revenue = accounts mapped to Revenue, commission accounts excluded
 • COGS = accounts mapped to COGS
 • Current month: month to date at the last QuickBooks sync
 
-Target: 30% (hardcoded benchmark)`}
+Target: Margin Target from Settings > Dashboard Targets (was 30% hardcoded)`}
                     </div>
                   </div>
                   <div className="space-y-1.5">
                     <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Notes</p>
                     <div className="flex gap-2">
                       <div className="mt-0.5 h-4 w-0.5 rounded-full bg-primary/40 flex-shrink-0" />
-                      <p className="text-xs text-muted-foreground leading-relaxed">Gross profit margin per month from QuickBooks (last sync). Target is 30% margin.</p>
+                      <p className="text-xs text-muted-foreground leading-relaxed">Gross profit margin per month from QuickBooks (last sync). Target line = Margin Target set in Settings.</p>
                     </div>
                   </div>
                 </div>

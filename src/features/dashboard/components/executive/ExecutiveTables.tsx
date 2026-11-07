@@ -321,7 +321,11 @@ function ProjectedCashByQuarter({ projection }: { projection: CashProjection | n
           { label: 'Bills', value: (q: CashProjection['quarters'][number]) => String(q.bills) },
         ]
       : []),
-    { label: '+ Orders on the books', value: (q) => money(q.inflow) },
+    // Before Nov 7 2026: { label: '+ Orders on the books', value: (q) => money(q.inflow) },
+    {
+      label: projection.ordersSource === 'quickbooks' ? '+ Open sales orders (QuickBooks)' : '+ Open sales orders (sync QuickBooks)',
+      value: (q) => money(q.inflow),
+    },
     { label: 'Orders / Tires', value: (q) => `${q.orders} / ${q.tires.toLocaleString('en-US')}` },
     { label: 'Projected Cash (quarter end)', value: (q) => money(q.closing), bold: true },
   ];
@@ -334,7 +338,8 @@ function ProjectedCashByQuarter({ projection }: { projection: CashProjection | n
         <CardDescription>
           {/* Before Nov 6 2026: Cash Today + firm orders still to be invoiced, by expected delivery date */}
           {inv
-            ? `Cash Today + QuickBooks open invoices (by due date) + firm orders still to be invoiced (by expected delivery date)${projection.openBills ? ' − QuickBooks open bills (by due date)' : ''}`
+            ? // Before Nov 7 2026: `Cash Today + QuickBooks open invoices (by due date) + firm orders still to be invoiced (by expected delivery date)${...}`
+              `Cash Today + QuickBooks open invoices (by due date) + QuickBooks open sales orders (by ship / due date${projection.ordersSource === 'quickbooks' ? '' : '; not in this snapshot, sync QuickBooks'})${projection.openBills ? ' − QuickBooks open bills (by due date)' : ''}`
             : 'Cash Today + firm orders still to be invoiced, by expected delivery date (sync QuickBooks to add open invoices)'}{' '}
           · through {projection.throughDate}
           {inv && inv.overdue > 0 && ` · ${money(inv.overdue)} overdue invoices are in the current quarter`}
@@ -468,7 +473,7 @@ export function ProfitabilityTables() {
           <SpecTable
             id="2.1"
             title="Profitability"
-            description="From the QuickBooks Profit and Loss (Accrual) at the last sync: Revenue = Total Income (incl. commission), OPEX = Total Expenses, Operating Profit = Net Operating Income."
+            description={`From the QuickBooks Profit and Loss (${m.quickBooks.pnlBasis} basis) at the last sync: Revenue = Total Income (incl. commission), OPEX = Total Expenses, Operating Profit = Net Operating Income, Net Income = QuickBooks Net Income.`}
             columns={C4}
             rows={[
               { label: 'Revenue', format: 'money', cells: m.profitability.revenue },
@@ -476,6 +481,7 @@ export function ProfitabilityTables() {
               { label: 'Gross Profit', format: 'money', cells: m.profitability.grossProfit, showPct: true },
               { label: 'OPEX', format: 'cost', cells: m.profitability.opex, showPct: true },
               { label: 'Operating Profit', format: 'money', cells: m.profitability.operatingProfit, showPct: true },
+              { label: 'Net Income', format: 'money', cells: m.profitability.netIncome, showPct: true },
             ]}
           />
           <SpecTable

@@ -24,7 +24,7 @@ import { db } from '@/shared/lib/supabase/database';
 import { productCycleCostRepository } from '@/features/products/repositories/product-cycle-cost.repository';
 
 /** Sales order statuses whose delivered tires are recognized */
-export const RECOGNIZABLE_SO_STATUSES = ['confirmed', 'processing', 'shipped', 'delivered'];
+export const RECOGNIZABLE_SO_STATUSES = ['confirmed', 'processing', 'shipped', 'delivered', 'invoiced'];
 /** Shipment load statuses that mean the load reached the customer */
 export const DELIVERED_LOAD_STATUSES = ['delivered', 'invoiced'];
 /** Credit notes that reduce revenue */
@@ -146,7 +146,8 @@ export function deliveryDate(order: RecognitionOrder, shipmentDates: Map<string,
   if (fromShipment) {
     return fromShipment;
   }
-  return order.status === 'delivered' && order.order_date ? String(order.order_date).slice(0, 10) : null;
+  // Invoiced = closed out after delivery (migration 174)
+  return (order.status === 'delivered' || order.status === 'invoiced') && order.order_date ? String(order.order_date).slice(0, 10) : null;
 }
 
 /**

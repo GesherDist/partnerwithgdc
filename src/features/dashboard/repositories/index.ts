@@ -11,14 +11,17 @@ import { createAdminClient } from '@/shared/lib/supabase/admin';
 // summarizeRecognizedSales: ERP cards (replaced by QuickBooks, Nov 6 2026)
 import { loadRecognizedSales, loadUnbilledDeliveredCommissionOrders /* , summarizeRecognizedSales */ } from '../services/recognized-sales.service';
 import { getPeriods } from '../lib/periods';
+import { erpChannelIndex, resolveChannel } from '../lib/channel';
+import { getDashboardTargets } from '../services/dashboard-targets.service';
 // ERP / QuickBooks split of the Revenue Trend (replaced: all months from QuickBooks, Nov 6 2026)
 // import { revenueSourceOf } from '../lib/revenue-history';
 import type { QboFinancials } from '@/modules/integrations/quickbooks/services/qbo-financials.service';
 import type { UnitsBySKUDataPoint, UnitsBySKUChartData, ProductLegendItem, ChannelPerformanceDataPoint, InventoryByLocation, DashboardStat, MarginDataPoint, RevenueDataPoint, DateRange, CommissionRevenueStats } from '../types';
 
 // Helper to format date as YYYY-MM-DD string
-/** Open Orders = sales orders being worked on (agreed definition, Aug 27 2025) */
-const OPEN_ORDER_STATUSES = ['confirmed', 'processing'];
+// Open Orders now come from QuickBooks (Nov 7 2026); kept for the commented ERP query below
+// /** Open Orders = sales orders being worked on (agreed definition, Aug 27 2025) */
+// const OPEN_ORDER_STATUSES = ['confirmed', 'processing'];
 
 function formatDateString(date: Date): string {
   const year = date.getFullYear();
@@ -48,7 +51,8 @@ const PRODUCT_COLORS = [
  * @param dateRange - Optional date range filter. Defaults to last 6 months if not provided.
  */
 export async function getUnitsBySKU(dateRange?: DateRange): Promise<UnitsBySKUChartData> {
-  const supabase = createAdminClient();
+  // Used by the commented ERP query below (Nov 7 2026: data from QuickBooks)
+  // const supabase = createAdminClient();
 
   // Use provided date range or default to last 6 months
   let startDate: string;
@@ -65,6 +69,9 @@ export async function getUnitsBySKU(dateRange?: DateRange): Promise<UnitsBySKUCh
     endDate = formatDateString(new Date());
   }
 
+  // ERP version (replaced Nov 7 2026: Ankur wants tires SOLD by SKU, from QuickBooks).
+  // It showed units arriving (shipment_items by ETA to US port).
+  /*
   // Query shipment_items joined with shipments and products
   // Filter by eta_to_port (ETA to US Port) - this is the key date for tracking incoming inventory
   // Only include inventory products (exclude service and non_inventory)
@@ -169,6 +176,54 @@ export async function getUnitsBySKU(dateRange?: DateRange): Promise<UnitsBySKUCh
     });
 
   return { data: result, products };
+  */
+  // Nov 7 2026: tires sold per month by product from QuickBooks (Sales by Product/Service
+  // Summary, product items only, same as the Units Sold cards). Months not in the snapshot show 0.
+  const unitsByMonth = (await loadQboFinancials())?.unitsByMonth ?? [];
+  const soldByMonth = new Map(unitsByMonth.map((m) => [m.month, m]));
+  const monthNamesQbo = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  // Month keys from the start to the end of the date range
+  const monthKeys: string[] = [];
+  const cursor = new Date(Number(startDate.slice(0, 4)), Number(startDate.slice(5, 7)) - 1, 1);
+  const lastKey = endDate.slice(0, 7);
+  for (let guard = 0; guard < 240; guard++) {
+    const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}`;
+    if (key > lastKey) {
+      break;
+    }
+    monthKeys.push(key);
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+
+  // Products sold in the range, biggest first (stable colors / legend order)
+  const productTotals = new Map<string, number>();
+  for (const key of monthKeys) {
+    for (const item of soldByMonth.get(key)?.items ?? []) {
+      productTotals.set(item.name, (productTotals.get(item.name) ?? 0) + item.quantity);
+    }
+  }
+  const productNames = [...productTotals.entries()]
+    .filter(([, qty]) => qty !== 0)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([name]) => name);
+  const keyOf = (index: number) => `units_qbo_${index}`;
+  const products: ProductLegendItem[] = productNames.map((name, index) => ({
+    key: keyOf(index),
+    label: name.length > 20 ? `${name.substring(0, 20)}...` : name,
+    color: PRODUCT_COLORS[index % PRODUCT_COLORS.length] || '#888888',
+  }));
+
+  const result: UnitsBySKUDataPoint[] = monthKeys.map((key) => {
+    const point: UnitsBySKUDataPoint = { name: monthNamesQbo[Number(key.slice(5, 7)) - 1] || 'Unknown' };
+    const items = soldByMonth.get(key)?.items ?? [];
+    productNames.forEach((name, index) => {
+      point[keyOf(index)] = items.filter((i) => i.name === name).reduce((n, i) => n + i.quantity, 0);
+    });
+    return point;
+  });
+
+  return { data: result, products };
 }
 
 // Channel colors
@@ -197,6 +252,8 @@ export async function getChannelPerformance(dateRange?: DateRange): Promise<Chan
     endDate = formatDateString(now);
   }
 
+  // ERP version (replaced Nov 7 2026: chart from QuickBooks sales by customer).
+  /*
   // Recognized tire sales (Ankur 3.1, same rule as the Executive tabs):
   // tire lines of firm orders delivered in the period, by customer channel
   let recognized;
@@ -229,6 +286,49 @@ export async function getChannelPerformance(dateRange?: DateRange): Promise<Chan
   // Convert to array format
   const result: ChannelPerformanceDataPoint[] = Object.entries(channelData)
     .filter(([, data]) => data.revenue > 0 || data.units > 0)
+    .map(([channel, data]) => ({
+      channel: channel.toUpperCase(),
+      revenue: Math.round(data.revenue),
+      units: data.units,
+      fill: CHANNEL_COLORS[channel] || '#94a3b8',
+    }));
+  */
+
+  // Nov 7 2026: QuickBooks tire sales by customer per month (invoices + sales receipts
+  // - credit memos, product lines only). Channel = QuickBooks Customer Type (OEM / Dealer),
+  // else the ERP customer's channel by name, else UNASSIGNED (never guessed).
+  const salesByMonth = (await loadQboFinancials())?.salesByCustomerMonth ?? null;
+  if (!salesByMonth) {
+    return [];
+  }
+  const { data: erpCustomers } = await createAdminClient()
+    .from('customers')
+    .select('name, channel')
+    .is('deleted_at', null);
+  const erpIndex = erpChannelIndex((erpCustomers ?? []) as Array<{ name: string | null; channel: string | null }>);
+
+  const channelData: Record<string, { revenue: number; units: number }> = {
+    oem: { revenue: 0, units: 0 },
+    dealer: { revenue: 0, units: 0 },
+  };
+  const fromMonth = startDate.slice(0, 7);
+  const toMonth = endDate.slice(0, 7);
+  for (const m of salesByMonth) {
+    if (m.month < fromMonth || m.month > toMonth) {
+      continue;
+    }
+    for (const c of m.customers) {
+      const { channel } = resolveChannel(c.customer, c.customerType, erpIndex);
+      const row = channelData[channel] ?? { revenue: 0, units: 0 };
+      row.revenue += c.amount;
+      row.units += c.units;
+      channelData[channel] = row;
+    }
+  }
+
+  // Convert to array format
+  const result: ChannelPerformanceDataPoint[] = Object.entries(channelData)
+    .filter(([, data]) => data.revenue !== 0 || data.units !== 0)
     .map(([channel, data]) => ({
       channel: channel.toUpperCase(),
       revenue: Math.round(data.revenue),
@@ -349,7 +449,7 @@ export async function getInventoryByLocation(): Promise<InventoryByLocation[]> {
     `)
     .gte('sales_orders.order_date', thirtyDaysAgo)
     .is('sales_orders.deleted_at', null)
-    .in('sales_orders.status', ['confirmed', 'processing', 'shipped', 'delivered']);
+    .in('sales_orders.status', ['confirmed', 'processing', 'shipped', 'delivered', 'invoiced']);
 
   // Calculate daily sales by location
   const salesByLocation: Record<string, number> = {};
@@ -400,7 +500,10 @@ export async function getInventoryByLocation(): Promise<InventoryByLocation[]> {
  * @param _dateRange - Overview date filter (not used by the cards)
  */
 export async function getDashboardStats(_dateRange?: DateRange): Promise<DashboardStat[]> {
-  const supabase = createAdminClient();
+  // Settings > Dashboard Targets (Nov 7 2026; defaults $220,000 / 30%)
+  const targets = await getDashboardTargets();
+  // Only the commented ERP Open Orders query used the database (Nov 7 2026: cards all from QuickBooks)
+  // const supabase = createAdminClient();
 
   // Current dates for comparison periods
   const now = new Date();
@@ -483,22 +586,34 @@ export async function getDashboardStats(_dateRange?: DateRange): Promise<Dashboa
   const lastYearYtdTotalRevenue = lastYearYtdRevenue;
   const lastYearYtdTotalCost = toCents(qboPnl?.py.cogs);
 
-  // Open Orders: sales orders with status confirmed or processing (not deleted)
-  const { data: openOrdersData, count: openOrdersCount } = await supabase
-    .from('sales_orders')
-    .select('grand_total', { count: 'exact' })
-    .in('status', OPEN_ORDER_STATUSES)
-    .is('deleted_at', null);
+  // ERP Open Orders (replaced Nov 7 2026: Ankur, Nov 5 call — open sales orders come from QuickBooks only)
+  // // Open Orders: sales orders with status confirmed or processing (not deleted)
+  // const { data: openOrdersData, count: openOrdersCount } = await supabase
+  //   .from('sales_orders')
+  //   .select('grand_total', { count: 'exact' })
+  //   .in('status', OPEN_ORDER_STATUSES)
+  //   .is('deleted_at', null);
+  //
+  // // Comparison: the same open orders that were already placed by the end of last month
+  // const { count: lastMonthOpenCount } = await supabase
+  //   .from('sales_orders')
+  //   .select('id', { count: 'exact', head: true })
+  //   .in('status', OPEN_ORDER_STATUSES)
+  //   .is('deleted_at', null)
+  //   .lte('order_date', formatDateString(lastMonthEnd));
+  //
+  // const openOrdersValue = openOrdersData?.reduce((sum, so) => sum + (so.grand_total || 0), 0) || 0;
 
-  // Comparison: the same open orders that were already placed by the end of last month
-  const { count: lastMonthOpenCount } = await supabase
-    .from('sales_orders')
-    .select('id', { count: 'exact', head: true })
-    .in('status', OPEN_ORDER_STATUSES)
-    .is('deleted_at', null)
-    .lte('order_date', formatDateString(lastMonthEnd));
-
-  const openOrdersValue = openOrdersData?.reduce((sum, so) => sum + (so.grand_total || 0), 0) || 0;
+  // Nov 7 2026 (Ankur, Nov 5 call): open sales orders from QuickBooks only (not invoiced yet).
+  // No ERP fallback: without QuickBooks sales orders the card shows "—" and "Sync QuickBooks".
+  const qboOpenSalesOrders = (await loadQboFinancials())?.periods?.openSalesOrders ?? null;
+  const lastMonthEndKey = formatDateString(lastMonthEnd);
+  const openOrdersCountShown = qboOpenSalesOrders?.count ?? 0;
+  const lastMonthOpenShown = qboOpenSalesOrders
+    ? qboOpenSalesOrders.orders.filter((o) => o.txnDate && o.txnDate <= lastMonthEndKey).length
+    : 0;
+  // QuickBooks amount is dollars; formatCurrency takes cents
+  const openOrdersValue = Math.round((qboOpenSalesOrders?.total ?? 0) * 100);
 
   // Units change calculation
   const ytdUnitsChange = lastYearYtdUnits > 0 ? ((ytdUnits - lastYearYtdUnits) / lastYearYtdUnits) * 100 : 0;
@@ -519,7 +634,8 @@ export async function getDashboardStats(_dateRange?: DateRange): Promise<Dashboa
   // Calculate revenue change (using invoice-based revenue calculated above)
   const revenueChange = lastRevenue > 0 ? ((currentRevenue - lastRevenue) / lastRevenue) * 100 : 0;
   const unitsChange = lastMonthUnits > 0 ? ((currentMonthUnits - lastMonthUnits) / lastMonthUnits) * 100 : 0;
-  const openOrdersChange = (openOrdersCount || 0) - (lastMonthOpenCount || 0);
+  // Before Nov 7 2026 (ERP only): const openOrdersChange = (openOrdersCount || 0) - (lastMonthOpenCount || 0);
+  const openOrdersChange = openOrdersCountShown - lastMonthOpenShown;
 
   // Format currency
   const formatCurrency = (cents: number) => {
@@ -541,7 +657,8 @@ export async function getDashboardStats(_dateRange?: DateRange): Promise<Dashboa
       trend: revenueChange >= 0 ? 'up' : 'down',
       icon: 'dollar-sign',
       color: 'bg-emerald-500',
-      target: '$220,000',
+      // Before Nov 7 2026: target: '$220,000',
+      target: `$${targets.monthlyRevenueTarget.toLocaleString('en-US')}`,
     },
     {
       id: 'revenue-ytd',
@@ -583,17 +700,20 @@ export async function getDashboardStats(_dateRange?: DateRange): Promise<Dashboa
       icon: 'percent',
       color: 'bg-violet-500',
       subtitle: qboPnl ? 'vs same period last year' : 'Sync QuickBooks',
-      target: '30%',
+      // Before Nov 7 2026: target: '30%',
+      target: `${targets.marginTargetPct}%`,
     },
     {
       id: 'open-orders',
       title: 'Open Orders',
-      value: (openOrdersCount || 0).toString(),
+      // Before Nov 7 2026: value: (openOrdersCount || 0).toString(),
+      value: qboOpenSalesOrders ? openOrdersCountShown.toString() : '—',
       change: `${openOrdersChange >= 0 ? '+' : ''}${openOrdersChange}`,
       trend: openOrdersChange <= 0 ? 'down' : 'up',
       icon: 'shopping-cart',
       color: 'bg-orange-500',
-      subtitle: formatCurrency(openOrdersValue) + ' value',
+      // Before Nov 7 2026: subtitle: formatCurrency(openOrdersValue) + ' value',
+      subtitle: qboOpenSalesOrders ? formatCurrency(openOrdersValue) + ' value' : 'Sync QuickBooks',
     },
   ];
 
@@ -606,6 +726,8 @@ export async function getDashboardStats(_dateRange?: DateRange): Promise<Dashboa
  * @param dateRange - Optional date range filter. Defaults to last 6 months if not provided.
  */
 export async function getMarginAnalysis(dateRange?: DateRange): Promise<MarginDataPoint[]> {
+  // Settings > Dashboard Targets (Nov 7 2026; default 30%)
+  const marginTarget = (await getDashboardTargets()).marginTargetPct;
   // Use provided date range or default to last 6 months
   let startDate: string;
   let endDate: string;
@@ -716,7 +838,8 @@ export async function getMarginAnalysis(dateRange?: DateRange): Promise<MarginDa
       return {
         month: monthNames[monthIndex] || 'Unknown',
         margin: Math.round(overallMargin * 10) / 10, // Round to 1 decimal
-        target: 30, // Target margin is 30%
+        // Before Nov 7 2026: target: 30, // Target margin is 30%
+        target: marginTarget, // Settings > Dashboard Targets
         sku38Margin: Math.round(margin38 * 10) / 10,
         sku24Margin: Math.round(margin24 * 10) / 10,
       };
@@ -818,7 +941,8 @@ export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDat
   // TODO: Move to database table (monthly_targets) for dynamic updates
   // For demo: Update this value here if target changes
   // Long-term: Create `monthly_targets` table with year/month/target_amount columns
-  const MONTHLY_TARGET = 220000; // $220,000 per month (hardcoded - update here if needed)
+  // Before Nov 7 2026: const MONTHLY_TARGET = 220000; // $220,000 per month (hardcoded - update here if needed)
+  const MONTHLY_TARGET = (await getDashboardTargets()).monthlyRevenueTarget; // Settings > Dashboard Targets
 
   // Label "Jun", or "Jun 26" when the range spans more than one year
   const spansYears = monthKeys.length > 0 && monthKeys[0]!.slice(0, 4) !== monthKeys[monthKeys.length - 1]!.slice(0, 4);

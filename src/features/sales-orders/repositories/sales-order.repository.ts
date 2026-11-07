@@ -62,6 +62,10 @@ interface DbSalesOrder {
   cancelled_at: string | null;
   cancelled_by: string | null;
   cancellation_reason: string | null;
+  invoiced_at?: string | null;
+  invoiced_by?: string | null;
+  qbo_invoice_number?: string | null;
+  status_before_invoiced?: string | null;
   is_commission_only?: boolean | null;
   commission_rate?: number | null;
   commission_amount?: number | null;
@@ -431,6 +435,7 @@ class SalesOrderRepositoryImpl {
       processing: 0,
       shipped: 0,
       delivered: 0,
+      invoiced: 0,
       cancelled: 0,
     };
 
@@ -636,6 +641,67 @@ class SalesOrderRepositoryImpl {
     }
 
     return this.mapToSalesOrder(result as DbSalesOrder);
+  }
+
+  /**
+   * Close out an order: invoiced (in QuickBooks). Keeps the previous status
+   * so "Reopen" can return to it. Only changes the row while it still has
+   * `fromStatus` (a parallel change wins). Returns null when nothing changed.
+   */
+  async markInvoiced(
+    id: string,
+    fromStatus: OrderStatus,
+    details: { invoicedAt: string; qboInvoiceNumber: string | null },
+    userId?: string
+  ): Promise<SalesOrder | null> {
+    const { data, error } = await db
+      .from('sales_orders')
+      .update({
+        status: 'invoiced',
+        status_before_invoiced: fromStatus,
+        invoiced_at: details.invoicedAt,
+        invoiced_by: userId || null,
+        qbo_invoice_number: details.qboInvoiceNumber,
+        updated_by: userId || null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .eq('status', fromStatus)
+      .is('deleted_at', null)
+      .select()
+      .maybeSingle();
+
+    if (error) {
+      throw new Error(`Failed to mark order invoiced: ${error.message}`);
+    }
+    return data ? this.mapToSalesOrder(data as DbSalesOrder) : null;
+  }
+
+  /**
+   * Reopen an invoiced order: back to the status it had before. Returns null
+   * when the order is no longer invoiced.
+   */
+  async reopenInvoiced(id: string, toStatus: OrderStatus, userId?: string): Promise<SalesOrder | null> {
+    const { data, error } = await db
+      .from('sales_orders')
+      .update({
+        status: toStatus,
+        status_before_invoiced: null,
+        invoiced_at: null,
+        invoiced_by: null,
+        qbo_invoice_number: null,
+        updated_by: userId || null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .eq('status', 'invoiced')
+      .select()
+      .maybeSingle();
+
+    if (error) {
+      throw new Error(`Failed to reopen order: ${error.message}`);
+    }
+    return data ? this.mapToSalesOrder(data as DbSalesOrder) : null;
   }
 
   /**
@@ -1148,6 +1214,10 @@ class SalesOrderRepositoryImpl {
       cancelledAt: data.cancelled_at ? new Date(data.cancelled_at) : null,
       cancelledBy: data.cancelled_by,
       cancellationReason: data.cancellation_reason,
+      invoicedAt: data.invoiced_at ?? null,
+      invoicedBy: data.invoiced_by ?? null,
+      qboInvoiceNumber: data.qbo_invoice_number ?? null,
+      statusBeforeInvoiced: (data.status_before_invoiced as OrderStatus | null | undefined) ?? null,
       isCommissionOnly: data.is_commission_only === true,
       commissionRate: data.commission_rate ?? DEFAULT_COMMISSION_RATE_CENTS,
       commissionAmount: Number(data.commission_amount ?? 0),

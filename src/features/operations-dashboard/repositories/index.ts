@@ -1333,7 +1333,7 @@ export async function getSupplierShipmentSchedule(filters?: OperationsFilters): 
  * Status mapping:
  *   - draft, pending → AVAILABLE (in stock, not committed)
  *   - confirmed, processing → SOLD (committed to customer)
- *   - shipped, delivered → INVOICED
+ *   - shipped, delivered, invoiced → INVOICED
  *   - cancelled → excluded
  */
 export async function getGDC1Inventory(filters?: OperationsFilters): Promise<{ data: GDC1InventoryItem[]; uniqueSkus: SKUColumnInfo[] }> {
@@ -1343,7 +1343,7 @@ export async function getGDC1Inventory(filters?: OperationsFilters): Promise<{ d
   const statusToSoStatus: Partial<Record<ShipmentStatus, string[]>> = {
     'AVAILABLE': ['draft', 'pending'],
     'SOLD': ['confirmed', 'processing'],
-    'INVOICED': ['shipped', 'delivered'],
+    'INVOICED': ['shipped', 'delivered', 'invoiced'],
   };
 
   // Get Sales Orders (all orders - product_source column removed in migration 123)
@@ -1474,7 +1474,8 @@ export async function getGDC1Inventory(filters?: OperationsFilters): Promise<{ d
         return 'SOLD';       // Committed to customer
       case 'shipped':
       case 'delivered':
-        return 'INVOICED';   // Shipped/Delivered
+      case 'invoiced':
+        return 'INVOICED';   // Shipped/Delivered/Invoiced
       default:
         return 'OPEN';
     }
@@ -1714,6 +1715,7 @@ export async function getGDCInventoryByOrderSeries(
     .eq('order_series', orderSeries)
     .neq('status', 'cancelled')
     .neq('status', 'delivered')
+    .neq('status', 'invoiced')
     .is('deleted_at', null)
     .order('created_at', { ascending: false });
 
@@ -2126,7 +2128,7 @@ export async function getGDCInventoryByOrderSeries(
     // - If status filter = "DELIVERED" → show only delivered
     // - If status filter = undefined ("All Statuses") → show all (including delivered)
     // - If status filter = other status → hide delivered
-    const isDelivered = linkedSO?.status === 'delivered' || shipment?.status === 'delivered';
+    const isDelivered = linkedSO?.status === 'delivered' || linkedSO?.status === 'invoiced' || shipment?.status === 'delivered';
 
     if (filters?.status) {
       // Status filter is active
@@ -2406,7 +2408,7 @@ export async function getGDCInventoryByOrderSeries(
     const shipment = shipmentBySO.get(so.id);
 
     // Skip delivered shipments based on filter (same logic as POs):
-    const isDelivered = so.status === 'delivered' || shipment?.status === 'delivered';
+    const isDelivered = so.status === 'delivered' || so.status === 'invoiced' || shipment?.status === 'delivered';
 
     if (filters?.status) {
       // Status filter is active
@@ -2845,7 +2847,7 @@ export async function getRimInstallationRequired(filters?: OperationsFilters): P
       displayStatus = 'PROCESSING';
     } else if (so.status === 'shipped') {
       displayStatus = 'IN_TRANSIT';
-    } else if (so.status === 'delivered') {
+    } else if (so.status === 'delivered' || so.status === 'invoiced') {
       displayStatus = 'DELIVERED';
     }
 

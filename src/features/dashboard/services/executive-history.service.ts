@@ -28,12 +28,18 @@ const isMissingTable = (error: { code?: string; message?: string } | null) =>
   Boolean(error && (error.code === '42P01' || error.code === 'PGRST205') && (error.message ?? '').includes(TABLE));
 
 /** Store today's figures. Returns false when migration 163 is not applied. */
-export async function saveDailySnapshot(erp: ErpExecutiveFigures, inventoryAtCost: number | null): Promise<boolean> {
+export async function saveDailySnapshot(
+  erp: ErpExecutiveFigures,
+  inventoryAtCost: number | null,
+  /** Nov 7 2026: QuickBooks open sales orders (tires, revenue) when the snapshot has them; else the ERP backlog */
+  backlogFromQbo: { tires: number; revenue: number } | null = null
+): Promise<boolean> {
   const { error } = await db.from(TABLE).upsert(
     {
       snapshot_date: erp.asOf,
-      backlog_tires: erp.backlog.tires,
-      backlog_revenue: erp.backlog.revenue,
+      // Before Nov 7 2026: backlog_tires: erp.backlog.tires, backlog_revenue: erp.backlog.revenue,
+      backlog_tires: backlogFromQbo ? backlogFromQbo.tires : erp.backlog.tires,
+      backlog_revenue: backlogFromQbo ? backlogFromQbo.revenue : erp.backlog.revenue,
       tires_on_hand: erp.inventory.tiresOnHand,
       tires_allocated: erp.inventory.allocated,
       uncommitted_tires: erp.inventory.uncommitted,

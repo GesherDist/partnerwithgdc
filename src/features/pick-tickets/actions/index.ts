@@ -290,7 +290,11 @@ export async function updatePickTicket(id: string, data: UpdatePickTicketDTO) {
 
         // Update sales order status to 'shipped'
         try {
-          if (updatedPT.data.salesOrderId) {
+          // An order already invoiced (closed out) keeps its status
+          const { data: soNow } = updatedPT.data.salesOrderId
+            ? await db.from('sales_orders').select('status').eq('id', updatedPT.data.salesOrderId).single()
+            : { data: null };
+          if (updatedPT.data.salesOrderId && soNow?.status !== 'invoiced') {
             await db
               .from('sales_orders')
               .update({
@@ -447,7 +451,11 @@ export async function completePicking(id: string) {
 
     // Update sales order status to 'shipped'
     try {
-      if (pickTicket.salesOrderId) {
+      // An order already invoiced (closed out) keeps its status
+      const { data: soNow } = pickTicket.salesOrderId
+        ? await db.from('sales_orders').select('status').eq('id', pickTicket.salesOrderId).single()
+        : { data: null };
+      if (pickTicket.salesOrderId && soNow?.status !== 'invoiced') {
         await db
           .from('sales_orders')
           .update({

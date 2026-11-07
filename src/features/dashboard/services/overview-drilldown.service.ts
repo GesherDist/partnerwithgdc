@@ -18,6 +18,9 @@ import {
 import { getRevenueTrend } from '../repositories';
 import type { DateRange, RevenueDataPoint } from '../types';
 import type { CsvExport, OverviewDrillDown } from '../lib/drilldown';
+import { getConnectionByProvider } from '@/modules/integrations/core';
+import { erpChannelIndex, resolveChannel } from '../lib/channel';
+import { getLatestSnapshot, type QboFinancials } from '@/modules/integrations/quickbooks/services/qbo-financials.service';
 
 export type Cell = string | number | null | undefined;
 
@@ -283,6 +286,78 @@ async function unitsBySkuCsv(from: string, to: string): Promise<string> {
   return toCsv(['ETA to US Port', 'Shipment #', 'Container', 'Status', 'SKU', 'Product', 'Units'], rows);
 }
 
+/** Latest QuickBooks snapshot (same as the dashboard cards); null when not connected / not synced */
+async function loadQboSnapshot(): Promise<QboFinancials | null> {
+  const connection = await getConnectionByProvider('quickbooks');
+  if (!connection || connection.status !== 'connected' || !connection.external_account_id) {
+    return null;
+  }
+  return (await getLatestSnapshot(connection.external_account_id)).financials ?? null;
+}
+
+/** Two CSV blocks in one file: the dashboard's QuickBooks rows, then the ERP rows for reference */
+const withErpReference = (qboCsv: string, erpTitle: string, erpCsv: string) =>
+  `${qboCsv}\r\n\r\n${toCsv([erpTitle], [])}\r\n${erpCsv}`;
+
+/** Open Orders card (Nov 7 2026): QuickBooks open sales orders; ERP open orders below for reference */
+async function openOrdersQboCsv(): Promise<string> {
+  const qso = (await loadQboSnapshot())?.periods?.openSalesOrders;
+  const qboCsv = qso
+    ? toCsv(
+        ['Sales Order', 'Customer', 'Order Date', 'Ship / Due Date', 'QuickBooks Status', 'Tires', 'Amount (lines, excl. tax)'],
+        [
+          ...qso.orders.map((o) => [o.doc, o.customer, o.txnDate, o.expectedDate, o.status, o.quantity, o.amount] as Cell[]),
+          [`TOTAL (${qso.count} orders)`, '', '', '', '', qso.tires, qso.total],
+        ]
+      )
+    : toCsv(['QuickBooks open sales orders are not in the latest snapshot: sync QuickBooks (the card shows "—")'], []);
+  return withErpReference(qboCsv, 'ERP sales orders (confirmed / processing), for reference only — not used by the card', await openOrdersCsv());
+}
+
+/** Units by SKU chart (Nov 7 2026): QuickBooks tires sold per month by product; ERP incoming shipments below for reference */
+async function unitsBySkuQboCsv(from: string, to: string): Promise<string> {
+  const months = ((await loadQboSnapshot())?.unitsByMonth ?? []).filter((m) => m.month >= from.slice(0, 7) && m.month <= to.slice(0, 7));
+  let total = 0;
+  const rows: Cell[][] = [];
+  for (const m of months) {
+    for (const item of m.items) {
+      total += item.quantity;
+      rows.push([m.month, `${m.month}-01 to ${m.to}`, item.name, item.size, item.quantity, item.amount]);
+    }
+  }
+  rows.push(['TOTAL', '', '', '', total, '']);
+  const qboCsv = months.length
+    ? toCsv(['Month', 'Period Read', 'QuickBooks Product', 'Size', 'Units Sold', 'Sales Amount'], rows)
+    : toCsv(['QuickBooks units by month are not in the latest snapshot: sync QuickBooks'], []);
+  return withErpReference(qboCsv, 'ERP incoming shipments by ETA to US port (the old chart), for reference only', await unitsBySkuCsv(from, to));
+}
+
+/** Channel Performance chart (Nov 7 2026): QuickBooks tire sales by customer and channel; ERP rows below for reference */
+async function channelQboCsv(from: string, to: string): Promise<string> {
+  const months = ((await loadQboSnapshot())?.salesByCustomerMonth ?? []).filter((m) => m.month >= from.slice(0, 7) && m.month <= to.slice(0, 7));
+  const { data: erpCustomers } = await db.from('customers').select('name, channel').is('deleted_at', null);
+  const erpIndex = erpChannelIndex((erpCustomers ?? []) as Array<{ name: string | null; channel: string | null }>);
+  const totals = new Map<string, { revenue: number; units: number }>();
+  const rows: Cell[][] = [];
+  for (const m of months) {
+    for (const c of m.customers) {
+      const { channel, source } = resolveChannel(c.customer, c.customerType, erpIndex);
+      const t = totals.get(channel) ?? { revenue: 0, units: 0 };
+      t.revenue += c.amount;
+      t.units += c.units;
+      totals.set(channel, t);
+      rows.push([channel.toUpperCase(), source, m.month, c.customer, c.customerType ?? '', c.units, c.amount]);
+    }
+  }
+  for (const [channel, t] of totals) {
+    rows.push([`TOTAL ${channel.toUpperCase()}`, '', '', '', '', t.units, Math.round(t.revenue * 100) / 100]);
+  }
+  const qboCsv = months.length
+    ? toCsv(['Channel', 'Channel From', 'Month', 'QuickBooks Customer', 'QuickBooks Customer Type', 'Units', 'Revenue (product lines, excl. tax)'], rows)
+    : toCsv(['QuickBooks sales by customer are not in the latest snapshot: sync QuickBooks'], []);
+  return withErpReference(qboCsv, 'ERP delivered tire lines by channel (the old chart), for reference only', channelCsv(await loadRecognizedSales(), from, to));
+}
+
 function channelCsv(sales: RecognizedSales, from: string, to: string): string {
   const lines = tireLinesIn(sales, from, to);
   const totals = new Map<string, { revenue: number; units: number }>();
@@ -327,6 +402,9 @@ const QBO_NOTE: Partial<Record<OverviewDrillDown, string>> = {
   'commission-actual': 'Commission Actual = QuickBooks P&L commission income accounts, last sync. ERP commission invoices below are for reference.',
   'commission-expected': 'Commission Actual part = QuickBooks P&L commission income accounts, last sync. ERP commission invoices below are for reference.',
   'margin-analysis': 'Chart = QuickBooks P&L tire sales and COGS per month, last sync. ERP delivered tire lines below are for reference.',
+  'open-orders': 'Open Orders = QuickBooks open sales orders (not closed / cancelled, not linked to an invoice), last sync. ERP sales orders below are for reference only.',
+  'units-by-sku': 'Chart = QuickBooks Sales by Product/Service Summary, tires sold per month by product, last sync. ERP incoming shipments below are for reference only.',
+  channel: 'Chart = QuickBooks tire sales by customer (invoices + sales receipts − credit memos, product lines), channel from QuickBooks Customer Type, else ERP customer by name, else UNASSIGNED; last sync. ERP rows below are for reference only.',
 };
 
 export async function buildOverviewDrillDown(kind: OverviewDrillDown, dateRange?: DateRange): Promise<CsvExport> {
@@ -353,7 +431,8 @@ export async function buildOverviewDrillDown(kind: OverviewDrillDown, dateRange?
       break;
     case 'open-orders':
       span = null;
-      csv = await openOrdersCsv();
+      // Before Nov 7 2026: csv = await openOrdersCsv();
+      csv = await openOrdersQboCsv();
       break;
     case 'commission-expected':
     case 'commission-actual':
@@ -366,11 +445,13 @@ export async function buildOverviewDrillDown(kind: OverviewDrillDown, dateRange?
       break;
     case 'units-by-sku':
       span = r.chart;
-      csv = await unitsBySkuCsv(span.from, span.to);
+      // Before Nov 7 2026: csv = await unitsBySkuCsv(span.from, span.to);
+      csv = await unitsBySkuQboCsv(span.from, span.to);
       break;
     case 'channel':
       span = r.chart;
-      csv = channelCsv(await loadRecognizedSales(), span.from, span.to);
+      // Before Nov 7 2026: csv = channelCsv(await loadRecognizedSales(), span.from, span.to);
+      csv = await channelQboCsv(span.from, span.to);
       break;
     case 'margin-analysis':
       span = r.chart;

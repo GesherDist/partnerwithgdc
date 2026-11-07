@@ -96,6 +96,9 @@ interface UnallocatedPurchaseOrder {
   grand_total: number;
   order_series: string | null;
   location_name: string | null;
+  /** Tires on the PO / already sold to customer orders (one PO, several orders) */
+  ordered_qty?: number;
+  allocated_qty?: number;
 }
 
 // ============================================
@@ -916,13 +919,19 @@ export function CreateAllocationDialog({
                                     </div>
 
                                     {/* PO Number */}
-                                    <div className="flex items-center">
+                                    <div className="flex flex-col justify-center min-w-0">
                                       <Label
                                         htmlFor={`po-${po.id}`}
                                         className="font-semibold text-[11px] cursor-pointer text-blue-600 truncate"
                                       >
                                         {po.po_number}
                                       </Label>
+                                      {/* Partly sold to other customer orders */}
+                                      {!!po.allocated_qty && !!po.ordered_qty && (
+                                        <span className="text-[9px] text-amber-700 truncate">
+                                          {po.allocated_qty}/{po.ordered_qty} sold
+                                        </span>
+                                      )}
                                     </div>
 
                                     {/* Location Name */}

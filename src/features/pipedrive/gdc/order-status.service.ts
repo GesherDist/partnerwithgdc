@@ -48,6 +48,7 @@ const ORDER_LABELS: Record<string, string> = {
   processing: 'Processing',
   shipped: 'Shipped',
   delivered: 'Delivered',
+  invoiced: 'Invoiced',
   cancelled: 'Order cancelled',
 };
 

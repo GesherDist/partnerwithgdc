@@ -90,7 +90,7 @@ export function EditSalesOrderDrawer({
       const result = await getSalesOrder(orderId);
       if (result.success && result.data) {
         // Check if order can be edited - allow draft, pending, confirmed, and processing
-        if (['cancelled', 'shipped', 'delivered'].includes(result.data.status)) {
+        if (['cancelled', 'shipped', 'delivered', 'invoiced'].includes(result.data.status)) {
           setError(`Cannot edit order in "${result.data.status}" status. Order has been ${result.data.status}.`);
           setOrder(null);
         } else {

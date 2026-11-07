@@ -35,7 +35,7 @@ import {
   type RecognizedSales,
 } from './recognized-sales.service';
 import { dollars, toCsv, type Cell } from './overview-drilldown.service';
-import { buildExecutiveModel, cashQuarterOf, invoiceQuarterOf, type ExecutiveDashboardModel } from '../lib/executive-model';
+import { buildExecutiveModel, cashQuarterOf, invoiceQuarterOf, projectionOrdersOf, type ExecutiveDashboardModel } from '../lib/executive-model';
 import { addDays, addYears, getPeriods, monthEnd, monthStart } from '../lib/periods';
 import type { CsvExport, TableDrillDown } from '../lib/drilldown';
 
@@ -215,7 +215,8 @@ async function accountsByDate(qboAccess: Awaited<ReturnType<typeof access>>, poi
 // ---------- 1.1 Liquidity ----------
 
 async function liquidityCsv(): Promise<string> {
-  const { qbo, model, erp } = await loadContext();
+  // erp: was used for the ERP orders on the books (Nov 7 2026: QuickBooks open sales orders)
+  const { qbo, model /* , erp */ } = await loadContext();
   const qboAccess = await access();
   const pyDate = qbo.periods?.priorYearDate ?? addYears(qbo.asOf, -1);
   const [today, py] = await Promise.all([fetchAccountBalances(qboAccess, qbo.asOf), fetchAccountBalances(qboAccess, pyDate)]);
@@ -295,9 +296,11 @@ async function liquidityCsv(): Promise<string> {
         ...projection.quarters
           .filter((q) => q.orders > 0)
           .map((q): Section => {
-            const orders = erp.backlogOrders.filter((o) => cashQuarterOf(o, model.asOf) === q.start);
+            // Before Nov 7 2026: erp.backlogOrders (ERP only)
+            const source = projectionOrdersOf(qbo);
+            const orders = source.orders.filter((o) => cashQuarterOf(o, model.asOf) === q.start);
             return {
-              title: `${q.label}: orders on the books (${q.start} to ${q.end})`,
+              title: `${q.label}: QuickBooks open sales orders (${q.start} to ${q.end}) · as of ${qbo.asOf}`,
               columns: ['Sales Order', 'Order Date', 'Status', 'Expected Delivery', 'Date Source', 'Tires', 'Revenue (tire lines, excl. tax)'],
               rows: [
                 ...orders.map((o) => [
@@ -641,7 +644,7 @@ async function profitabilityCsv(): Promise<string> {
     return [PERIOD_LABEL[k], `${p[k].from} to ${p[k].to}`, round2(s.revenue), round2(s.cogs), gp, opex.totals[i], round2(gp - opex.totals[i]!)];
   });
 
-  const kpis = [['Revenue', pf.revenue], ['COGS', pf.cogs], ['Gross Profit', pf.grossProfit], ['OPEX', pf.opex], ['Operating Profit', pf.operatingProfit]] as const;
+  const kpis = [['Revenue', pf.revenue], ['COGS', pf.cogs], ['Gross Profit', pf.grossProfit], ['OPEX', pf.opex], ['Operating Profit', pf.operatingProfit], ['Net Income', pf.netIncome]] as const;
   // Table 2.1 comes from the QuickBooks P&L (Nov 6 2026); the ERP sections below are kept for reference
   const qpl = qbo.periods?.pnl;
   const qboRows: Cell[][] = PERIOD_KEYS.map((k) => {
@@ -657,7 +660,7 @@ async function profitabilityCsv(): Promise<string> {
       rows: kpis.map(([label, cells]) => [label, ...PERIOD_KEYS.flatMap((k) => [cellValue(cells[k]), cells[k].pct ?? ''])]),
     },
     {
-      title: 'QuickBooks Profit and Loss (Accrual, last sync): source of table 2.1',
+      title: `QuickBooks Profit and Loss (${qbo.periods?.pnlBasis ?? 'Accrual'} basis, last sync): source of table 2.1`,
       columns: ['Period', 'Dates', 'Total Income', 'of which Commission', 'COGS', 'Gross Profit', 'Total Expenses (OPEX)', 'Net Operating Income', 'Net Income'],
       rows: qboRows,
     },
@@ -784,7 +787,7 @@ type BacklogItem = { id: string; product_id: string | null; sku: string | null; 
 type BacklogOrder = { order_number: string; order_date: string | null; status: string; order_series: string | null; is_commission_only: boolean | null; customer_po_number: string | null; customers: { name: string | null } | { name: string | null }[] | null; sales_order_items: BacklogItem[] | null };
 
 async function backlogCsv(): Promise<string> {
-  const { model, history } = await loadContext();
+  const { model, history, qbo } = await loadContext();
   const [soRes, sales, cycleCost] = await Promise.all([
     db
       .from('sales_orders')
@@ -837,7 +840,33 @@ async function backlogCsv(): Promise<string> {
   }
   const b = model.backlog;
   rows.push(['TOTAL', '', '', '', '', '', '', tires, '', dollars(revenue), '', '', dollars(cogs), dollars(revenue - cogs)]);
-  rows.push(['Dashboard', '', '', '', '', '', '', cellValue(b.tires.current), '', cellValue(b.revenue.current), '', '', '', cellValue(b.grossProfit.current)]);
+  // Before Nov 7 2026: rows.push(['Dashboard', '', '', '', '', '', '', cellValue(b.tires.current), '', cellValue(b.revenue.current), '', '', '', cellValue(b.grossProfit.current)]);
+  // Tires / Revenue now come from QuickBooks (section above); these ERP rows give the cost per tire
+  // Before Nov 7 2026 (GP on ERP rows): rows.push(['Dashboard (Gross Profit)', '', '', '', '', '', '', '', '', '', '', '', '', cellValue(b.grossProfit.current)]);
+  const erpCostPerTire = tires > 0 ? cogs / tires : null;
+  rows.push(['ERP cost per tire = TOTAL COGS ÷ TOTAL Tires', '', '', '', '', '', '', '', '', '', erpCostPerTire === null ? 'n/a' : dollars(erpCostPerTire)]);
+
+  // Nov 7 2026: Backlog Tires / Revenue / Revenue per Tire = QuickBooks open sales orders
+  const qso = qbo.periods?.openSalesOrders;
+  const qboSection: Section = qso
+    ? {
+        title: `Current Tires / Revenue / Revenue per Tire: QuickBooks open sales orders (not invoiced yet, product lines excl. tax) · as of ${qbo.asOf}`,
+        columns: ['Sales Order', 'Customer', 'Order Date', 'Ship / Due Date', 'QuickBooks Status', 'Tires', 'Amount'],
+        rows: [
+          ...qso.orders.map((o) => [o.doc, o.customer, o.txnDate, o.expectedDate ?? '', o.status, o.quantity, o.amount] as Cell[]),
+          [`TOTAL (${qso.count} orders)`, '', '', '', '', qso.tires, qso.total],
+          ['Dashboard', '', '', '', '', cellValue(b.tires.current), cellValue(b.revenue.current)],
+          [],
+          ['Gross Profit = Revenue − Tires × ERP cost per tire (section below)', '', '', '', '', '', cellValue(b.grossProfit.current)],
+          ['GP / Tire = Gross Profit ÷ Tires', '', '', '', '', '', cellValue(b.gpPerTire.current)],
+          ['GP % = Gross Profit ÷ Revenue × 100', '', '', '', '', '', cellValue(b.gpPct.current)],
+        ],
+      }
+    : {
+        title: 'QuickBooks open sales orders are not in the latest snapshot: sync QuickBooks (Backlog Tires / Revenue show "Sync QuickBooks")',
+        columns: [''],
+        rows: [],
+      };
 
   const kpis = [['Backlog Tires', b.tires], ['Backlog Revenue', b.revenue], ['Revenue / Tire', b.revenuePerTire], ['Backlog Gross Profit', b.grossProfit], ['GP / Tire', b.gpPerTire], ['GP %', b.gpPct]] as const;
   return sectionsCsv([
@@ -846,8 +875,11 @@ async function backlogCsv(): Promise<string> {
       columns: ['KPI', 'Current', 'T90 Avg', 'YTD Avg', 'PY'],
       rows: kpis.map(([label, c]) => [label, cellValue(c.current), cellValue(c.t90Avg), cellValue(c.ytdAvg), cellValue(c.py)]),
     },
+    qboSection,
     {
-      title: 'Current: firm orders (confirmed / processing) not delivered yet, tire lines, commission-only excluded',
+      // Before Nov 7 2026: title: 'Current: firm orders (confirmed / processing) not delivered yet, tire lines, commission-only excluded',
+      // Nov 7 2026 (before): title: 'Current Gross Profit / GP per Tire / GP %: ERP firm orders (confirmed / processing) not delivered yet, tire lines, commission-only excluded (needs the ERP tire cost)',
+      title: 'ERP cost per tire (used for Backlog GP): ERP firm orders (confirmed / processing) not delivered yet, tire lines, commission-only excluded',
       columns: ['SO #', 'Customer', 'Customer PO', 'Status', 'Order Date', 'Order Series', 'SKU', 'Tires', 'Unit Price (net)', 'Revenue', 'Cost per Tire', 'Cost Source', 'COGS', 'Gross Profit'],
       rows,
     },

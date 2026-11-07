@@ -47,7 +47,11 @@ export async function getExecutiveDashboard(): Promise<
     // Record today's backlog/inventory for the averages; never blocks the dashboard
     const qbo = snapshot.financials;
     const inventoryAtCost = qbo && qbo.asOf === erp.asOf ? qbo.inventory : null;
-    await saveDailySnapshot(erp, inventoryAtCost).catch((error) => console.error('[ExecutiveDashboard] Daily snapshot failed:', error));
+    // Nov 7 2026: backlog history from the QuickBooks open sales orders when the snapshot has them
+    const qso = qbo?.periods?.openSalesOrders;
+    await saveDailySnapshot(erp, inventoryAtCost, qso ? { tires: qso.tires, revenue: qso.total } : null).catch((error) =>
+      console.error('[ExecutiveDashboard] Daily snapshot failed:', error)
+    );
     const history = await loadDailyHistory(erp.asOf).catch((error) => {
       console.error('[ExecutiveDashboard] Daily history failed:', error);
       return [];

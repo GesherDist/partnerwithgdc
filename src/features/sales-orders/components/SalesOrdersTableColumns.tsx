@@ -7,7 +7,7 @@
  */
 
 import { ColumnDef } from '@tanstack/react-table';
-import { CheckCircle, XCircle, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import { CheckCircle, XCircle, ArrowUpDown, ArrowUp, ArrowDown, FileCheck, RotateCcw } from 'lucide-react';
 import { Badge } from '@/shared/components/ui/badge';
 import { Checkbox } from '@/shared/components/ui/checkbox';
 import { DataTableRowActions, createCommonRowActions } from '@/shared/components/data-table/DataTableRowActions';
@@ -19,6 +19,7 @@ import {
   canEditOrder,
 } from '../types';
 import { formatDate } from '../lib/mock-data';
+import { INVOICEABLE_ORDER_STATUSES } from './MarkInvoicedDialog';
 
 // ============================================
 // TYPES
@@ -30,6 +31,8 @@ interface ColumnOptions {
   onDelete?: (order: SalesOrderListItem) => void;
   onConfirm?: (order: SalesOrderListItem) => void;
   onCancel?: (order: SalesOrderListItem) => void;
+  onMarkInvoiced?: (order: SalesOrderListItem) => void;
+  onReopenInvoiced?: (order: SalesOrderListItem) => void;
   // Sorting options
   sortColumn?: SOSortColumn | null;
   sortDirection?: SOSortDirection;
@@ -94,7 +97,7 @@ function formatAmount(cents: number, currencyCode: string = 'USD'): string {
 export function getSalesOrdersTableColumns(
   options: ColumnOptions = {}
 ): ColumnDef<SalesOrderListItem>[] {
-  const { onView, onEdit, onDelete, onConfirm, onCancel, sortColumn, sortDirection, onSortChange } = options;
+  const { onView, onEdit, onDelete, onConfirm, onCancel, onMarkInvoiced, onReopenInvoiced, sortColumn, sortDirection, onSortChange } = options;
 
   return [
     // Select Checkbox
@@ -293,7 +296,7 @@ export function getSalesOrdersTableColumns(
         const status = row.original.status;
         const isEditable = canEditOrder(status);
         const canConfirmOrder = ['draft', 'pending'].includes(status);
-        const canCancelOrder = !['delivered', 'cancelled'].includes(status);
+        const canCancelOrder = !['delivered', 'invoiced', 'cancelled'].includes(status);
 
         const { actions, separatorAfter } = createCommonRowActions({
           onView: onView ? () => onView(row.original) : undefined,
@@ -310,6 +313,23 @@ export function getSalesOrdersTableColumns(
             label: 'Confirm Order',
             icon: <CheckCircle className="h-4 w-4" />,
             onClick: () => onConfirm(row.original),
+          });
+        }
+
+        // Close-out once invoiced in QuickBooks (Ankur, Nov 5 2026)
+        if (onMarkInvoiced && INVOICEABLE_ORDER_STATUSES.includes(status)) {
+          statusActions.push({
+            label: 'Mark as Invoiced',
+            icon: <FileCheck className="h-4 w-4" />,
+            onClick: () => onMarkInvoiced(row.original),
+          });
+        }
+
+        if (onReopenInvoiced && status === 'invoiced') {
+          statusActions.push({
+            label: 'Reopen Order',
+            icon: <RotateCcw className="h-4 w-4" />,
+            onClick: () => onReopenInvoiced(row.original),
           });
         }
 

@@ -29,7 +29,11 @@ async function handle(request: NextRequest) {
     const { financials, stored } = await syncFinancials();
     // Executive dashboard history: one row per day even if nobody opens the dashboard
     const historyStored = await buildErpExecutiveFigures()
-      .then((erp) => saveDailySnapshot(erp, financials.asOf === erp.asOf ? financials.inventory : null))
+      .then((erp) => {
+        // Nov 7 2026: backlog history from the QuickBooks open sales orders when the snapshot has them
+        const qso = financials.periods?.openSalesOrders;
+        return saveDailySnapshot(erp, financials.asOf === erp.asOf ? financials.inventory : null, qso ? { tires: qso.tires, revenue: qso.total } : null);
+      })
       .catch((error) => {
         console.error('[QuickBooks Financials Cron] Executive daily snapshot failed:', error);
         return false;

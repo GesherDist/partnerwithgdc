@@ -37,6 +37,7 @@ export interface AllocationRequest {
   platinumDealerId?: string;
   dealerLocationId?: string;
   containerQty?: number;
+  purchaseOrderId?: string;
 
   // For update operations
   excludeAllocationId?: string;
@@ -109,6 +110,19 @@ export async function validateAllocationRequest(
       const containerValidation = validateContainerQuantity(request);
       if (!containerValidation.valid) {
         return containerValidation;
+      }
+
+      // Step 5: The PO may be sold to several orders, never more than it carries
+      if (request.purchaseOrderId) {
+        const capacity = await checkPurchaseOrderCapacity({
+          purchaseOrderId: request.purchaseOrderId,
+          productId: request.productId,
+          quantity: request.quantity,
+          excludeAllocationId: request.excludeAllocationId,
+        });
+        if (!capacity.valid) {
+          return capacity;
+        }
       }
     }
 
@@ -515,6 +529,53 @@ function validateContainerQuantity(
     };
   }
 
+  return { valid: true };
+}
+
+/**
+ * One PO (container) can be sold to several customer orders (Ankur, Nov 5
+ * 2026), but the active allocations of a product on that PO may not add up
+ * to more tires than the PO carries. A PO without that product is not checked
+ * here (unchanged behaviour).
+ */
+export async function checkPurchaseOrderCapacity(params: {
+  purchaseOrderId: string;
+  productId: string;
+  quantity: number;
+  excludeAllocationId?: string;
+}): Promise<AllocationValidationResult> {
+  const [{ data: poItems, error: itemsError }, { data: allocations, error: allocError }] = await Promise.all([
+    db
+      .from('purchase_order_items')
+      .select('quantity_ordered')
+      .eq('purchase_order_id', params.purchaseOrderId)
+      .eq('product_id', params.productId),
+    db
+      .from('fulfillment_allocations')
+      .select('id, quantity, sales_order_items!inner (product_id)')
+      .eq('purchase_order_id', params.purchaseOrderId)
+      .eq('sales_order_items.product_id', params.productId)
+      .neq('status', 'cancelled'),
+  ]);
+  if (itemsError || allocError) {
+    return { valid: false, error: 'Could not check how many tires are left on the purchase order' };
+  }
+
+  const ordered = (poItems || []).reduce((sum, item) => sum + Number(item.quantity_ordered || 0), 0);
+  if (ordered === 0) {
+    return { valid: true };
+  }
+  const sold = (allocations || [])
+    .filter((a) => a.id !== params.excludeAllocationId)
+    .reduce((sum, a) => sum + Number(a.quantity || 0), 0);
+  const left = Math.max(0, ordered - sold);
+  if (params.quantity > left) {
+    return {
+      valid: false,
+      error: `Only ${left} of ${ordered} tires are left on this purchase order (${sold} already sold to customer orders)`,
+      details: { ordered, sold, left },
+    };
+  }
   return { valid: true };
 }
 

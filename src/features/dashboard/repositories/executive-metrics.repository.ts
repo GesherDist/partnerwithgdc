@@ -81,7 +81,7 @@ export async function getCOGSData(dateRange: DateRange) {
         status
       )
     `)
-    .eq('sales_orders.status', 'delivered')
+    .in('sales_orders.status', ['delivered', 'invoiced'])
     .gte('sales_orders.order_date', dateRange.startDate)
     .lte('sales_orders.order_date', dateRange.endDate);
 
@@ -151,7 +151,7 @@ export async function getTiresSoldData(dateRange: DateRange) {
         status
       )
     `)
-    .eq('sales_orders.status', 'delivered')
+    .in('sales_orders.status', ['delivered', 'invoiced'])
     .gte('sales_orders.order_date', dateRange.startDate)
     .lte('sales_orders.order_date', dateRange.endDate);
 
@@ -396,7 +396,7 @@ export async function getUncommittedMonthsOfSupply() {
         status
       )
     `)
-    .eq('sales_orders.status', 'delivered')
+    .in('sales_orders.status', ['delivered', 'invoiced'])
     .gte('sales_orders.order_date', threeMonthsAgo.toISOString());
 
   if (error) {

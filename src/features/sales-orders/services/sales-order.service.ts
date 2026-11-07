@@ -348,7 +348,7 @@ export const salesOrderService = {
       }
 
       // Check if order can be edited (draft, pending, confirmed, processing)
-      if (['cancelled', 'shipped', 'delivered'].includes(existing.status)) {
+      if (['cancelled', 'shipped', 'delivered', 'invoiced'].includes(existing.status)) {
         return {
           success: false,
           error: `Cannot edit order in ${existing.status} status. Order has been ${existing.status}.`,
@@ -501,7 +501,7 @@ export const salesOrderService = {
       }
 
       // Check if order can be edited (draft, pending, confirmed, processing)
-      if (['cancelled', 'shipped', 'delivered'].includes(existing.status)) {
+      if (['cancelled', 'shipped', 'delivered', 'invoiced'].includes(existing.status)) {
         return {
           success: false,
           error: `Cannot edit items for order in ${existing.status} status. Order has been ${existing.status}.`,
@@ -673,6 +673,120 @@ export const salesOrderService = {
         success: false,
         error: 'Failed to cancel sales order',
       };
+    }
+  },
+
+  /**
+   * Close out an order once it is invoiced in QuickBooks (Ankur, Nov 5 2026:
+   * the ERP is done with an order when it is invoiced, paid or not).
+   * Confirmed / processing / shipped / delivered orders only.
+   */
+  async markInvoiced(
+    id: string,
+    details: { invoicedAt?: string | null; qboInvoiceNumber?: string | null },
+    userId?: string
+  ): Promise<ServiceResult<SalesOrder>> {
+    try {
+      const existing = await salesOrderRepository.findById(id);
+      if (!existing) {
+        return { success: false, error: 'Sales order not found' };
+      }
+      if (existing.status === 'invoiced') {
+        return { success: false, error: 'Sales order is already invoiced' };
+      }
+      if (!isValidStatusTransition(existing.status, 'invoiced')) {
+        return {
+          success: false,
+          error: `Only confirmed, processing, shipped or delivered orders can be marked invoiced (this one is ${existing.status})`,
+        };
+      }
+
+      const today = new Date().toISOString().slice(0, 10);
+      // The user's "today" can be a day ahead of UTC
+      const latest = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const invoicedAt = details.invoicedAt?.trim() || today;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(invoicedAt) || Number.isNaN(Date.parse(invoicedAt))) {
+        return { success: false, error: 'Enter a valid invoice date' };
+      }
+      if (invoicedAt > latest) {
+        return { success: false, error: 'Invoice date cannot be in the future' };
+      }
+      const qboInvoiceNumber = details.qboInvoiceNumber?.trim() || null;
+      if (qboInvoiceNumber && qboInvoiceNumber.length > 50) {
+        return { success: false, error: 'QuickBooks invoice number is too long (max 50 characters)' };
+      }
+
+      const order = await salesOrderRepository.markInvoiced(id, existing.status, { invoicedAt, qboInvoiceNumber }, userId);
+      if (!order) {
+        return { success: false, error: 'The order was changed by someone else. Refresh and try again.' };
+      }
+
+      auditService.log({
+        action: 'update', // status_change
+        module: 'sales_orders',
+        entityType: 'SalesOrder',
+        entityId: order.id,
+        oldData: { status: existing.status },
+        newData: { status: 'invoiced', invoicedAt, qboInvoiceNumber },
+        userId,
+        description: `Sales order ${order.orderNumber} marked invoiced${qboInvoiceNumber ? ` (QuickBooks invoice ${qboInvoiceNumber})` : ''}: ${existing.status} → invoiced`,
+      }).catch((err) => {
+        console.error('Failed to log sales order invoiced audit:', err);
+      });
+
+      await refreshPipedrivePurchaseHistory(id, [existing.status, 'invoiced']);
+      syncPipedriveOrderStatus(id);
+
+      return { success: true, data: order };
+    } catch (error) {
+      console.error('SalesOrderService.markInvoiced error:', error);
+      return { success: false, error: 'Failed to mark the order invoiced' };
+    }
+  },
+
+  /**
+   * Undo "Mark as Invoiced" (e.g. marked by mistake): back to the status the
+   * order had before.
+   */
+  async reopenInvoiced(id: string, userId?: string): Promise<ServiceResult<SalesOrder>> {
+    try {
+      const existing = await salesOrderRepository.findById(id);
+      if (!existing) {
+        return { success: false, error: 'Sales order not found' };
+      }
+      if (existing.status !== 'invoiced') {
+        return { success: false, error: 'Only an invoiced order can be reopened' };
+      }
+      const toStatus: OrderStatus =
+        existing.statusBeforeInvoiced && existing.statusBeforeInvoiced !== 'invoiced'
+          ? existing.statusBeforeInvoiced
+          : 'confirmed';
+
+      const order = await salesOrderRepository.reopenInvoiced(id, toStatus, userId);
+      if (!order) {
+        return { success: false, error: 'The order was changed by someone else. Refresh and try again.' };
+      }
+
+      auditService.log({
+        action: 'update', // status_change
+        module: 'sales_orders',
+        entityType: 'SalesOrder',
+        entityId: order.id,
+        oldData: { status: 'invoiced', invoicedAt: existing.invoicedAt, qboInvoiceNumber: existing.qboInvoiceNumber },
+        newData: { status: toStatus },
+        userId,
+        description: `Sales order ${order.orderNumber} reopened: invoiced → ${toStatus}`,
+      }).catch((err) => {
+        console.error('Failed to log sales order reopen audit:', err);
+      });
+
+      await refreshPipedrivePurchaseHistory(id, ['invoiced', toStatus]);
+      syncPipedriveOrderStatus(id);
+
+      return { success: true, data: order };
+    } catch (error) {
+      console.error('SalesOrderService.reopenInvoiced error:', error);
+      return { success: false, error: 'Failed to reopen the order' };
     }
   },
 

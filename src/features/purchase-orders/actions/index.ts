@@ -1212,25 +1212,16 @@ export async function getUnallocatedPurchaseOrders(): Promise<ActionResult<any[]
       };
     }
 
-    // Get PO IDs that are already used by an active allocation (cancelled ones free the PO)
-    const { data: allocatedPOs, error: allocError } = await supabase
-      .from('fulfillment_allocations')
-      .select('purchase_order_id')
-      .not('purchase_order_id', 'is', null)
-      .neq('status', 'cancelled');
+    // One PO can be sold to several customer orders (Ankur, Nov 5 2026): a PO
+    // is left out only once every tire on it is allocated (cancelled
+    // allocations free their tires)
+    const { getPurchaseOrderSoldStates } = await import('../services/po-sold-state.service');
+    const soldStates = await getPurchaseOrderSoldStates(poIdsWithShipments);
+    const allocatedPOIds = poIdsWithShipments.filter((id) => soldStates.get(id)?.fullySold);
 
-    if (allocError) {
-      console.warn('[getUnallocatedPurchaseOrders] Error fetching allocated POs:', allocError);
-    }
+    console.log(`📊 [getUnallocatedPurchaseOrders] Fully allocated PO IDs: ${allocatedPOIds.length}`);
 
-    // Get the list of allocated PO IDs
-    const allocatedPOIds = (allocatedPOs || [])
-      .map(a => a.purchase_order_id)
-      .filter((id): id is string => id !== null);
-
-    console.log(`📊 [getUnallocatedPurchaseOrders] Already allocated PO IDs: ${allocatedPOIds.length}`);
-
-    // Filter: POs with shipments but not yet allocated
+    // Filter: POs with shipments that still have tires to sell
     const eligiblePOIds = poIdsWithShipments.filter(id => !allocatedPOIds.includes(id));
 
     console.log(`📊 [getUnallocatedPurchaseOrders] Eligible PO IDs (with shipment, not allocated): ${eligiblePOIds.length}`);
@@ -1259,9 +1250,8 @@ export async function getUnallocatedPurchaseOrders(): Promise<ActionResult<any[]
     // Unallocated POs with a shipment, headed to a warehouse (GDC Inventory, Kansas, Nebraska)
     const { data, error } = await supabase
       .from('purchase_orders')
-      .select('id, po_number, po_date, expected_delivery_date, status, grand_total, order_series, warehouse_id, warehouse:locations!warehouse_id(name, location_code)')
-      .in('id', notReceivedPOIds)        // Shipment, not allocated, nothing received
-      .is('sales_order_id', null)        // Not linked to any SO directly
+      .select('id, po_number, po_date, expected_delivery_date, status, grand_total, order_series, warehouse_id, sales_order_id, warehouse:locations!warehouse_id(name, location_code)')
+      .in('id', notReceivedPOIds)       // Shipment, not fully allocated, nothing received
       .is('deleted_at', null)            // Not deleted
       .neq('status', 'cancelled')
       .in('warehouse_id', warehouseIds.length > 0 ? warehouseIds : ['00000000-0000-0000-0000-000000000000'])
@@ -1276,11 +1266,16 @@ export async function getUnallocatedPurchaseOrders(): Promise<ActionResult<any[]
       };
     }
 
-    // Map location name
-    const result = (data || []).map(po => ({
-      ...po,
-      location_name: (po as any).warehouse?.name || null,
-    }));
+    // Map location name. A PO linked to a sales order without any allocation
+    // (older direct link) stays sold, as before.
+    const result = (data || [])
+      .filter((po) => !po.sales_order_id || soldStates.get(po.id)?.hasAllocations)
+      .map(po => ({
+        ...po,
+        location_name: (po as any).warehouse?.name || null,
+        ordered_qty: soldStates.get(po.id)?.orderedQty ?? 0,
+        allocated_qty: soldStates.get(po.id)?.soldQty ?? 0,
+      }));
 
     console.log(`✅ [getUnallocatedPurchaseOrders] Found ${result.length} POs (with shipments, unallocated, not received)`);
     if (result.length > 0) {
@@ -1322,7 +1317,7 @@ export interface PurchaseOrderAllocationSummary {
  * whole container is sold (then it is not received into warehouse stock).
  */
 export async function getPurchaseOrderAllocations(purchaseOrderId: string): Promise<
-  ActionResult<{ allocations: PurchaseOrderAllocationSummary[]; fullySold: boolean }>
+  ActionResult<{ allocations: PurchaseOrderAllocationSummary[]; fullySold: boolean; soldOut: boolean }>
 > {
   const auth = await authorize('purchase_orders.view_detail');
   if (!auth.ok) {
@@ -1363,7 +1358,10 @@ export async function getPurchaseOrderAllocations(purchaseOrderId: string): Prom
     });
     const { poReceivingService } = await import('@/features/inventory/services/po-receiving.service');
     const fullySold = await poReceivingService.isPurchaseOrderFullySold(purchaseOrderId);
-    return { success: true, data: { allocations, fullySold } };
+    // No tires left to sell to another customer order (Sell to Sales Order)
+    const { getPurchaseOrderSoldStates } = await import('../services/po-sold-state.service');
+    const soldOut = !!(await getPurchaseOrderSoldStates([purchaseOrderId])).get(purchaseOrderId)?.fullySold;
+    return { success: true, data: { allocations, fullySold, soldOut } };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : 'Failed to load allocations' };
   }

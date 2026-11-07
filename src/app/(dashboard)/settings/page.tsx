@@ -9,6 +9,7 @@ import { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { PageHeader } from '@/shared/components/layout';
 import { IntegrationsSettings } from '@/features/integrations';
+import { DashboardTargetsSettings } from '@/features/dashboard/components/DashboardTargetsSettings';
 import { getCurrentUser, hasPermission } from '@/shared/lib/auth/check-permission';
 
 // ============================================
@@ -45,6 +46,9 @@ export default async function SettingsPage() {
       />
 
       <div className="grid gap-6">
+        {/* Dashboard targets (Nov 7 2026: were hardcoded $220,000 / 30%) */}
+        <DashboardTargetsSettings />
+
         {/* Integrations - QuickBooks & Pipedrive */}
         <IntegrationsSettings />
       </div>

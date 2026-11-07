@@ -246,14 +246,18 @@ export async function transitionPackingListStatus(id: string, status: PackingLis
     if (status === 'delivered') {
       try {
         const { db } = await import('@/shared/lib/supabase/database');
-        await db
-          .from('sales_orders')
-          .update({
-            status: 'delivered',
-            updated_at: new Date().toISOString(),
-            updated_by: userId || null,
-          })
-          .eq('id', result.data.salesOrderId);
+        // An order already invoiced (closed out) keeps its status
+        const { data: soNow } = await db.from('sales_orders').select('status').eq('id', result.data.salesOrderId).single();
+        if (soNow?.status !== 'invoiced') {
+          await db
+            .from('sales_orders')
+            .update({
+              status: 'delivered',
+              updated_at: new Date().toISOString(),
+              updated_by: userId || null,
+            })
+            .eq('id', result.data.salesOrderId);
+        }
 
         console.log(`[Packing List DELIVERED] Updated SO ${result.data.salesOrderId} to delivered status`);
       } catch (error) {

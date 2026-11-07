@@ -123,7 +123,7 @@ export interface BacklogOrder {
   status: string;
   /** Expected delivery date, null when the order has none */
   expectedDate: string | null;
-  dateSource: 'Requested delivery' | 'Confirmed ETA' | 'ETA to US port' | null;
+  dateSource: 'Requested delivery' | 'Confirmed ETA' | 'ETA to US port' | 'QuickBooks ship / due date' | null;
   tires: number;
   /** Dollars, same basis as backlog revenue (tire lines, net of discounts, excl. tax) */
   revenue: number;

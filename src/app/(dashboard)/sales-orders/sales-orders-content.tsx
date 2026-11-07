@@ -51,6 +51,7 @@ import {
   useSalesOrders,
 } from '@/features/sales-orders';
 import { deleteSalesOrder, confirmSalesOrder, cancelSalesOrder } from '@/features/sales-orders/actions';
+import { MarkInvoicedDialog } from '@/features/sales-orders/components/MarkInvoicedDialog';
 import type { SalesOrderListItem, OrderStatus, SalesOrderWithItems, SOSortColumn, SOSortDirection } from '@/features/sales-orders/types';
 import { ORDER_STATUS_LABELS } from '@/features/sales-orders/types';
 import { ORDER_SERIES } from '@/shared/lib/global-data';
@@ -81,6 +82,8 @@ export function SalesOrdersPageContent() {
   const canEdit = hasMounted && hasPermission('orders.edit');
   const canDelete = hasMounted && hasPermission('orders.delete');
   // const canApprove = hasMounted && hasPermission('orders.approve'); // TODO: Use when approve feature is implemented
+  // Mark as Invoiced / Reopen: same permission as the server actions
+  const canCloseOut = hasMounted && hasPermission('orders.approve');
 
   // ----------------------------------------
   // STATE
@@ -275,6 +278,18 @@ export function SalesOrdersPageContent() {
   };
 
   // Cancel Order
+  // Close-out (invoiced in QuickBooks) from the row menu
+  const [closeOutOrder, setCloseOutOrder] = useState<SalesOrderListItem | null>(null);
+  const [closeOutMode, setCloseOutMode] = useState<'invoice' | 'reopen'>('invoice');
+  const handleMarkInvoicedClick = useCallback((order: SalesOrderListItem) => {
+    setCloseOutMode('invoice');
+    setCloseOutOrder(order);
+  }, []);
+  const handleReopenInvoicedClick = useCallback((order: SalesOrderListItem) => {
+    setCloseOutMode('reopen');
+    setCloseOutOrder(order);
+  }, []);
+
   const handleCancelClick = useCallback((order: SalesOrderListItem) => {
     setOrderToCancel(order);
     setCancelDialogOpen(true);
@@ -367,6 +382,8 @@ export function SalesOrdersPageContent() {
         onDelete={canDelete ? handleDeleteClick : undefined}
         onConfirm={canEdit ? handleConfirmClick : undefined}
         onCancel={canEdit ? handleCancelClick : undefined}
+        onMarkInvoiced={canCloseOut ? handleMarkInvoicedClick : undefined}
+        onReopenInvoiced={canCloseOut ? handleReopenInvoicedClick : undefined}
         pagination={{
           page: meta.page,
           pageSize: meta.limit,
@@ -441,6 +458,15 @@ export function SalesOrdersPageContent() {
       />
 
       {/* Delete Confirmation Dialog */}
+      {/* Mark as Invoiced / Reopen */}
+      <MarkInvoicedDialog
+        order={closeOutOrder}
+        mode={closeOutMode}
+        open={!!closeOutOrder}
+        onOpenChange={(open) => !open && setCloseOutOrder(null)}
+        onDone={() => refetchOrders()}
+      />
+
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>

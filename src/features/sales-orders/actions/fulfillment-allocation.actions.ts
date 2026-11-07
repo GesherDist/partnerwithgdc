@@ -400,6 +400,8 @@ export interface SellablePurchaseOrder {
   poNumber: string;
   /** Tires ordered on the PO per product (the container quantity) */
   containerQtyByProduct: Record<string, number>;
+  /** Tires on the PO per product not sold to any customer order yet */
+  availableByProduct: Record<string, number>;
   lines: SellablePurchaseOrderLine[];
 }
 
@@ -456,7 +458,14 @@ async function whyPurchaseOrderNotSellable(purchaseOrderId: string): Promise<str
     return 'This purchase order is cancelled.';
   }
   const linked = (po.sales_orders as { order_number?: string } | null)?.order_number;
-  if (po.sales_order_id || (allocations && allocations.length > 0)) {
+  const { getPurchaseOrderSoldStates } = await import('@/features/purchase-orders/services/po-sold-state.service');
+  const soldState = (await getPurchaseOrderSoldStates([purchaseOrderId])).get(purchaseOrderId);
+  if (soldState?.fullySold) {
+    return allocations && allocations.length > 0 && soldState.orderedQty > 0
+      ? 'All tires on this purchase order are already sold to customer orders.'
+      : `This purchase order is already sold${linked ? ` to ${linked}` : ''}.`;
+  }
+  if (po.sales_order_id && !(allocations && allocations.length > 0)) {
     return `This purchase order is already sold${linked ? ` to ${linked}` : ''}.`;
   }
   if ((received ?? 0) > 0) {
@@ -511,15 +520,23 @@ export async function getSellablePurchaseOrderLines(
         containerQtyByProduct[item.product_id] = (containerQtyByProduct[item.product_id] || 0) + Number(item.quantity_ordered || 0);
       }
     }
-    const productIds = Object.keys(containerQtyByProduct);
+    // A PO can be sold to several orders: only its tires not sold yet are offered
+    const { getPurchaseOrderSoldStates } = await import('@/features/purchase-orders/services/po-sold-state.service');
+    const soldState = (await getPurchaseOrderSoldStates([purchaseOrderId])).get(purchaseOrderId);
+    const availableByProduct: Record<string, number> = {};
+    for (const productId of Object.keys(containerQtyByProduct)) {
+      availableByProduct[productId] = soldState?.availableByProduct.get(productId) ?? containerQtyByProduct[productId] ?? 0;
+    }
+
+    const productIds = Object.keys(containerQtyByProduct).filter((productId) => (availableByProduct[productId] || 0) > 0);
     if (productIds.length === 0) {
-      return { success: true, data: { purchaseOrderId, poNumber: po.po_number, containerQtyByProduct, lines: [] } };
+      return { success: true, data: { purchaseOrderId, poNumber: po.po_number, containerQtyByProduct, availableByProduct, lines: [] } };
     }
 
     // Open orders (not shipped / delivered / cancelled) for the same tires
     const { data: soItems, error: soError } = await db
       .from('sales_order_items')
-      .select('id, product_id, sku, quantity, sales_orders!inner (id, order_number, status, customer_po_number, deleted_at, customers (name))')
+      .select('id, product_id, sku, quantity, customer_qty, sales_orders!inner (id, order_number, status, customer_po_number, deleted_at, customers (name))')
       .in('product_id', productIds)
       .in('sales_orders.status', ['draft', 'pending', 'confirmed', 'processing'])
       // Customer orders only (C-SO...). Internal shipment orders (SO26000xx)
@@ -552,7 +569,8 @@ export async function getSellablePurchaseOrderLines(
         continue;
       }
       const customer = Array.isArray(so.customers) ? so.customers[0] : so.customers;
-      const orderQty = Number(item.quantity || 0);
+      // Allocations must add up to the customer quantity (checked on confirm)
+      const orderQty = Number(item.customer_qty ?? item.quantity ?? 0);
       const remaining = orderQty - (allocatedByItem.get(String(item.id)) || 0);
       if (remaining <= 0) {
         continue;
@@ -572,7 +590,7 @@ export async function getSellablePurchaseOrderLines(
     }
     lines.sort((a, b) => a.orderNumber.localeCompare(b.orderNumber));
 
-    return { success: true, data: { purchaseOrderId, poNumber: po.po_number, containerQtyByProduct, lines } };
+    return { success: true, data: { purchaseOrderId, poNumber: po.po_number, containerQtyByProduct, availableByProduct, lines } };
   } catch (error) {
     console.error('Error in getSellablePurchaseOrderLines:', error);
     return { success: false, error: error instanceof Error ? error.message : 'An unexpected error occurred' };

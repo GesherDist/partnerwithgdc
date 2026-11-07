@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState, useTransition } from 'react';
-import { Loader2, MapPin, Package, FileText, Calendar, User, Building2, Truck, AlertTriangle, ShieldCheck, CheckCircle, XCircle, ClipboardList, Receipt, Eye } from 'lucide-react';
+import { Loader2, MapPin, Package, FileText, Calendar, User, Building2, Truck, AlertTriangle, ShieldCheck, CheckCircle, XCircle, ClipboardList, Receipt, Eye, FileCheck, RotateCcw } from 'lucide-react';
 
 import { Button } from '@/shared/components/ui/button';
 import { useAuthStore } from '@/shared/stores';
@@ -63,6 +63,7 @@ import {
 } from '@/shared/components/ui/select';
 import { ConfirmAllocationsModal } from './ConfirmAllocationsModal';
 import { EditOrderPricesDialog } from './EditOrderPricesDialog';
+import { MarkInvoicedDialog, INVOICEABLE_ORDER_STATUSES } from './MarkInvoicedDialog';
 import { PRICE_EDITABLE_ORDER_STATUSES } from '../types';
 import { toast } from 'sonner';
 import { AllocationManager } from './AllocationManager';
@@ -193,6 +194,8 @@ export function ViewSalesOrderDrawer({
 
   const canEditPermission = hasMounted && hasPermission('orders.edit');
   const canReleaseHold = hasMounted && hasPermission('sales_orders.release_hold');
+  // Mark as Invoiced / Reopen: same permission as the server actions
+  const canCloseOut = hasMounted && hasPermission('orders.approve');
 
   // ----------------------------------------
   // STATE
@@ -208,6 +211,7 @@ const [isReleasingHold, setIsReleasingHold] = useState(false);
   const [showEditPricesDialog, setShowEditPricesDialog] = useState(false);
   const [showCancelDialog, setShowCancelDialog] = useState(false);
   const [showInvoiceDialog, setShowInvoiceDialog] = useState(false);
+  const [closeOutMode, setCloseOutMode] = useState<'invoice' | 'reopen' | null>(null);
   const [isValidating, setIsValidating] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
   const [showPdfModal, setShowPdfModal] = useState(false);
@@ -463,8 +467,8 @@ const handleReleaseHold = async () => {
   const canEditPrices = order && PRICE_EDITABLE_ORDER_STATUSES.includes(order.status) && canEditPermission;
   // Can confirm draft or pending orders
   const canConfirm = order && ['draft', 'pending'].includes(order.status) && canEditPermission;
-  // Can cancel any order except delivered/cancelled
-  const canCancel = order && !['delivered', 'cancelled'].includes(order.status) && canEditPermission;
+  // Can cancel any order except delivered/invoiced/cancelled
+  const canCancel = order && !['delivered', 'invoiced', 'cancelled'].includes(order.status) && canEditPermission;
   // Can create invoice for confirmed, processing, shipped, or delivered orders
   const canCreateInvoice = order &&
     ['confirmed', 'processing', 'shipped', 'delivered'].includes(order.status) &&
@@ -521,6 +525,14 @@ const handleReleaseHold = async () => {
                   )}
                   {order.isCommissionOnly && <CommissionBadge />}
                 </div>
+
+                {/* Closed out: invoiced in QuickBooks */}
+                {order.status === 'invoiced' && (order.invoicedAt || order.qboInvoiceNumber) && (
+                  <p className="text-sm text-muted-foreground">
+                    Invoiced{order.invoicedAt ? ` on ${order.invoicedAt}` : ''}
+                    {order.qboInvoiceNumber ? ` · QuickBooks invoice ${order.qboInvoiceNumber}` : ''}
+                  </p>
+                )}
 
                 {/* Credit Hold Banner */}
                 {isOnHold && (
@@ -858,6 +870,12 @@ const handleReleaseHold = async () => {
                     Cancel Order
                   </Button>
                 )}
+                {canCloseOut && order.status === 'invoiced' && (
+                  <Button variant="outline" size="sm" onClick={() => setCloseOutMode('reopen')} disabled={isPending}>
+                    <RotateCcw className="mr-2 h-4 w-4" />
+                    Reopen Order
+                  </Button>
+                )}
               </div>
               <div className="flex flex-wrap gap-2">
                 <Button variant="outline" size="sm" onClick={onClose}>
@@ -881,7 +899,7 @@ const handleReleaseHold = async () => {
                     Edit Prices
                   </Button>
                 )}
-                {canCreateInvoice && existingInvoice && (
+                {(canCreateInvoice || order.status === 'invoiced') && existingInvoice && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -902,6 +920,12 @@ const handleReleaseHold = async () => {
                     Create Invoice
                   </Button>
                 )}
+                {canCloseOut && INVOICEABLE_ORDER_STATUSES.includes(order.status) && (
+                  <Button variant="outline" size="sm" onClick={() => setCloseOutMode('invoice')} disabled={isPending}>
+                    <FileCheck className="mr-2 h-4 w-4" />
+                    Mark as Invoiced
+                  </Button>
+                )}
                 {canConfirm && (
                   <Button size="sm" onClick={handleConfirmClick} disabled={isPending || isValidating}>
                     {isValidating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
@@ -913,6 +937,15 @@ const handleReleaseHold = async () => {
             </div>
           </div>
         )}
+
+        {/* Mark as Invoiced / Reopen */}
+        <MarkInvoicedDialog
+          order={order}
+          mode={closeOutMode ?? 'invoice'}
+          open={closeOutMode !== null}
+          onOpenChange={(value) => !value && setCloseOutMode(null)}
+          onDone={() => fetchOrder()}
+        />
 
         {/* Confirm Allocations Modal */}
         {order && (

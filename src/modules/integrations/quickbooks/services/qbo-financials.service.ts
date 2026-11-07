@@ -73,8 +73,40 @@ export interface QboRevenueMonth {
   cogs?: number;
 }
 
+/**
+ * Basis of every Profit and Loss read for the dashboard (Ankur, Nov 5 2026 call:
+ * he compares with the QuickBooks P&L on cash basis, YTD net income $132,996).
+ * Balance Sheet (AR / AP / inventory) stays Accrual; DSO / DIO use an Accrual
+ * P&L (accrualPnl) because they need sales and COGS when invoiced, not paid.
+ */
+export const PNL_ACCOUNTING_METHOD = 'Cash' as const;
+
 /** Months of P&L revenue history kept in the snapshot (Revenue Trend before ERP data) */
 const REVENUE_HISTORY_MONTHS = 24;
+
+/** Tire sales of one calendar month by customer (Channel Performance chart, Nov 7 2026) */
+export interface QboCustomerSalesMonth {
+  /** YYYY-MM */
+  month: string;
+  customers: Array<{
+    customer: string;
+    /** QuickBooks Customer Type name, null when the customer has none */
+    customerType: string | null;
+    /** Product lines (tires), excl. tax: invoices + sales receipts − credit memos */
+    amount: number;
+    units: number;
+  }>;
+}
+
+/** Tires sold in one calendar month by product (Units by SKU chart, Nov 7 2026) */
+export interface QboUnitsMonth {
+  /** YYYY-MM */
+  month: string;
+  /** Last day read: month end, or the sync date for the current month */
+  to: string;
+  total: number;
+  items: Array<{ name: string; quantity: number; amount: number; size: string }>;
+}
 
 export interface QboFinancials {
   realmId: string;
@@ -113,6 +145,19 @@ export interface QboFinancials {
    * has sales data. Null / missing when it could not be read.
    */
   revenueHistory?: QboRevenueMonth[] | null;
+  /**
+   * Tires sold per month by product for the last 24 complete months and the
+   * current month to date (Sales by Product/Service Summary, Accrual, product
+   * items only — same rule as Units Sold). Used by the Units by SKU chart.
+   * Missing in snapshots taken before Nov 7, 2026.
+   */
+  unitsByMonth?: QboUnitsMonth[] | null;
+  /**
+   * Tire sales per month by customer (with the QuickBooks Customer Type) for the
+   * last 24 complete months and the current month to date. Used by the Channel
+   * Performance chart. Missing in snapshots taken before Nov 7, 2026.
+   */
+  salesByCustomerMonth?: QboCustomerSalesMonth[] | null;
 }
 
 export interface QboBalances {
@@ -143,10 +188,18 @@ export interface QboPeriodFigures {
    */
   creditPurchases?: Record<'pm' | 't90' | 'ytd' | 'py', number>;
   /**
-   * Profit and Loss totals per period (Accrual), as QuickBooks shows them.
-   * Missing in snapshots taken before Nov 6, 2026 (sync QuickBooks again).
+   * Profit and Loss totals per period, as QuickBooks shows them, on the basis
+   * in pnlBasis (Cash since Nov 7, 2026; Accrual before). Missing in snapshots
+   * taken before Nov 6, 2026 (sync QuickBooks again).
    */
   pnl?: Record<'mtd' | 't90' | 'ytd' | 'py' | 'pm', QboPnlFigures>;
+  /** Basis of pnl, opex and revenueHistory. Missing = Accrual (snapshots before Nov 7, 2026) */
+  pnlBasis?: 'Cash' | 'Accrual';
+  /**
+   * Accrual P&L income and COGS per period, for DSO and DIO (sales / COGS when
+   * invoiced). Missing in snapshots taken before Nov 7, 2026 (pnl was Accrual then).
+   */
+  accrualPnl?: Record<'pm' | 't90' | 'ytd' | 'py', { income: number; cogs: number }>;
   /**
    * Units sold per period: Sales by Product/Service Summary (Accrual), product
    * items only (QuickBooks item type Inventory / Non-inventory; Service items
@@ -164,6 +217,36 @@ export interface QboPeriodFigures {
    * Cash. Missing in snapshots taken before Nov 6, 2026.
    */
   openBills?: QboOpenBills;
+  /**
+   * Open sales orders in QuickBooks (Ankur, Nov 5 call: "on QuickBooks under
+   * invoices, the open sales orders"), for the Open Orders card and Projected
+   * Cash. Missing when QuickBooks did not return sales orders: the dashboard
+   * then keeps using the ERP sales orders.
+   */
+  openSalesOrders?: QboOpenSalesOrders;
+  /** Why open sales orders could not be read from QuickBooks (ERP is used instead) */
+  openSalesOrdersError?: string;
+}
+
+/** Open customer sales orders (confirmed, not invoiced yet), as read on the snapshot date */
+export interface QboOpenSalesOrders {
+  total: number;
+  count: number;
+  tires: number;
+  /** Status values QuickBooks returned for all sales orders, with counts (for checking what "open" means) */
+  statuses: Record<string, number>;
+  orders: Array<{
+    doc: string;
+    customer: string;
+    txnDate: string;
+    /** Ship date, else due date; null when the order has neither */
+    expectedDate: string | null;
+    status: string;
+    /** Product / service line quantities (tires) */
+    quantity: number;
+    /** Sum of the product / service lines (excl. tax) */
+    amount: number;
+  }>;
 }
 
 /** Open vendor bills (money still to be paid), as read on the snapshot date */
@@ -726,6 +809,59 @@ async function fetchOpenBills(access: QboAccess, today: string): Promise<QboOpen
   };
 }
 
+/** Sales order statuses that mean the order is no longer open */
+const CLOSED_SALES_ORDER_STATUSES = new Set(['closed', 'converted', 'invoiced', 'rejected', 'cancelled', 'canceled', 'voided', 'void']);
+
+/**
+ * Open sales orders (Ankur, Nov 5 call: open sales orders that have not been
+ * invoiced yet). Reads the QuickBooks SalesOrder entity (GET query only).
+ * Open = status not closed / converted / cancelled and not linked to an invoice.
+ * Throws when QuickBooks does not return sales orders (the caller falls back to ERP).
+ */
+async function fetchOpenSalesOrders(access: QboAccess): Promise<QboOpenSalesOrders> {
+  type Line = { Amount?: number; DetailType?: string; SalesItemLineDetail?: { Qty?: number } };
+  type Row = {
+    DocNumber?: string;
+    TxnDate?: string;
+    ShipDate?: string;
+    DueDate?: string;
+    TxnStatus?: string;
+    Status?: string;
+    CustomerRef?: { name?: string };
+    LinkedTxn?: Array<{ TxnType?: string }>;
+    Line?: Line[];
+  };
+  const rows = await fetchQueryAll<Row>(access, 'SalesOrder', '*', "TxnDate > '1900-01-01'");
+  const statuses: Record<string, number> = {};
+  const orders: QboOpenSalesOrders['orders'] = [];
+  for (const r of rows) {
+    const status = r.TxnStatus ?? r.Status ?? '';
+    statuses[status || '(none)'] = (statuses[status || '(none)'] ?? 0) + 1;
+    const invoiced = (r.LinkedTxn ?? []).some((t) => t.TxnType === 'Invoice');
+    if (CLOSED_SALES_ORDER_STATUSES.has(status.toLowerCase()) || invoiced) {
+      continue;
+    }
+    const lines = (r.Line ?? []).filter((l) => l.DetailType === 'SalesItemLineDetail');
+    orders.push({
+      doc: r.DocNumber ?? '',
+      customer: r.CustomerRef?.name ?? '',
+      txnDate: r.TxnDate ?? '',
+      expectedDate: r.ShipDate ?? r.DueDate ?? null,
+      status,
+      quantity: lines.reduce((n, l) => n + Number(l.SalesItemLineDetail?.Qty ?? 0), 0),
+      amount: round2(lines.reduce((n, l) => n + Number(l.Amount ?? 0), 0)),
+    });
+  }
+  orders.sort((a, b) => a.txnDate.localeCompare(b.txnDate));
+  return {
+    total: round2(orders.reduce((n, o) => n + o.amount, 0)),
+    count: orders.length,
+    tires: orders.reduce((n, o) => n + o.quantity, 0),
+    statuses,
+    orders,
+  };
+}
+
 /**
  * Credit purchases per period (spec 2.8, DPO): vendor bills less vendor
  * credits, by transaction date.
@@ -798,7 +934,20 @@ async function buildPeriodFigures(
   ].sort();
 
   const pnlJobs = pnlRanges.map(([, r]) => () =>
-    fetchReport(access, 'ProfitAndLoss', { start_date: r.from, end_date: r.to, accounting_method: 'Accrual' })
+    fetchReport(access, 'ProfitAndLoss', { start_date: r.from, end_date: r.to, accounting_method: PNL_ACCOUNTING_METHOD })
+  );
+  // DSO / DIO: sales and COGS when invoiced (Accrual), whatever the P&L basis shown
+  const accrualRanges: Array<['pm' | 't90' | 'ytd' | 'py', { from: string; to: string }]> = [
+    ['pm', periods.pm],
+    ['t90', periods.t90],
+    ['ytd', periods.ytd],
+    ['py', periods.py],
+  ];
+  const accrualJobs = accrualRanges.map(([, r]) => () =>
+    fetchReport(access, 'ProfitAndLoss', { start_date: r.from, end_date: r.to, accounting_method: 'Accrual' }).catch((error) => {
+      console.error('[QboFinancials] Accrual P&L failed:', error);
+      return null as unknown as Report;
+    })
   );
   const cashJobs = cashRanges.map(([, r]) => () =>
     fetchReport(access, 'CashFlow', { start_date: r.from, end_date: r.to })
@@ -817,11 +966,21 @@ async function buildPeriodFigures(
   );
 
   // One queue for every report so QuickBooks never sees more than 3 parallel calls
-  const all = await limited<Report>([...pnlJobs, ...cashJobs, ...balanceJobs, ...unitJobs], 3);
+  const all = await limited<Report>([...pnlJobs, ...cashJobs, ...balanceJobs, ...unitJobs, ...accrualJobs], 3);
   const pnls = all.slice(0, pnlJobs.length);
   const cashFlows = all.slice(pnlJobs.length, pnlJobs.length + cashJobs.length);
   const balanceSheets = all.slice(pnlJobs.length + cashJobs.length, pnlJobs.length + cashJobs.length + balanceJobs.length);
-  const itemSales = all.slice(pnlJobs.length + cashJobs.length + balanceJobs.length);
+  const unitsStart = pnlJobs.length + cashJobs.length + balanceJobs.length;
+  const itemSales = all.slice(unitsStart, unitsStart + unitJobs.length);
+  const accrualPnls = all.slice(unitsStart + unitJobs.length);
+  const accrualPnl = accrualPnls.every(Boolean)
+    ? (Object.fromEntries(
+        accrualRanges.map(([key], i) => {
+          const f = pnlFigures(accrualPnls[i]!, mappingOf);
+          return [key, { income: f.income, cogs: f.cogs }];
+        })
+      ) as Record<'pm' | 't90' | 'ytd' | 'py', { income: number; cogs: number }>)
+    : undefined;
   const itemTypes = await fetchItemTypes(access).catch((error) => {
     console.error('[QboFinancials] Item types failed:', error);
     return new Map<string, string>();
@@ -837,6 +996,13 @@ async function buildPeriodFigures(
   });
   const openBills = await fetchOpenBills(access, today).catch((error) => {
     console.error('[QboFinancials] Open bills failed:', error);
+    return undefined;
+  });
+  // Optional (Nov 7 2026): when QuickBooks has no sales orders the dashboard keeps the ERP sales orders
+  let openSalesOrdersError: string | undefined;
+  const openSalesOrders = await fetchOpenSalesOrders(access).catch((error) => {
+    openSalesOrdersError = error instanceof Error ? error.message : 'Failed to read sales orders';
+    console.error('[QboFinancials] Open sales orders failed:', error);
     return undefined;
   });
   const creditPurchases = await creditPurchasesByPeriod(access, [
@@ -886,10 +1052,147 @@ async function buildPeriodFigures(
     apWeightedDays: apDays,
     ...(creditPurchases ? { creditPurchases } : {}),
     pnl,
+    pnlBasis: PNL_ACCOUNTING_METHOD,
+    ...(accrualPnl ? { accrualPnl } : {}),
     ...(units ? { units } : {}),
     ...(openInvoices ? { openInvoices } : {}),
     ...(openBills ? { openBills } : {}),
+    ...(openSalesOrders ? { openSalesOrders } : {}),
+    ...(openSalesOrdersError ? { openSalesOrdersError } : {}),
   };
+}
+
+/**
+ * Tires sold per month by product (Units by SKU chart, Nov 7 2026): one Sales by
+ * Product/Service Summary report per month (same parser and product rule as Units
+ * Sold), for the last 24 complete months and the current month to date. A month
+ * whose report fails is left out (the chart shows it as 0).
+ */
+async function fetchUnitsByMonth(access: QboAccess, today: string): Promise<QboUnitsMonth[]> {
+  const itemTypes = await fetchItemTypes(access).catch(() => new Map<string, string>());
+  const starts = Array.from({ length: REVENUE_HISTORY_MONTHS + 1 }, (_, i) => monthStart(today, REVENUE_HISTORY_MONTHS - i));
+  const reports = await limited<Report | null>(
+    starts.map((from) => () => {
+      const end = monthEnd(from);
+      return fetchReport(access, 'ItemSales', { start_date: from, end_date: end < today ? end : today, accounting_method: 'Accrual' }).catch((error) => {
+        console.error(`[QboFinancials] Sales by product for ${from} failed:`, error);
+        return null;
+      });
+    }),
+    3
+  );
+  const months: QboUnitsMonth[] = [];
+  starts.forEach((from, i) => {
+    const report = reports[i];
+    if (!report) {
+      return;
+    }
+    const units = unitsFromItemSales(report, itemTypes);
+    const end = monthEnd(from);
+    months.push({
+      month: from.slice(0, 7),
+      to: end < today ? end : today,
+      total: units.total,
+      items: units.items.map(({ name, quantity, amount, size }) => ({ name, quantity, amount, size })),
+    });
+  });
+  return months;
+}
+
+/**
+ * Tire sales per month by customer (Channel Performance chart, Nov 7 2026).
+ * Reads invoices, sales receipts and credit memos (GET queries only) and keeps the
+ * product lines (QuickBooks item type Inventory / Non-inventory, same rule as Units
+ * Sold; service items such as commission are left out). Credit memos subtract.
+ */
+async function fetchSalesByCustomerMonth(access: QboAccess, today: string): Promise<QboCustomerSalesMonth[]> {
+  const from = monthStart(today, REVENUE_HISTORY_MONTHS);
+  const itemTypes = await fetchItemTypes(access).catch(() => new Map<string, string>());
+
+  // Customer → Customer Type name (optional: an empty map when QuickBooks has no customer types)
+  type CustomerRow = { Id?: string; DisplayName?: string; CustomerTypeRef?: { value?: string; name?: string } };
+  const typeNames = new Map<string, string>();
+  try {
+    const page = await fetchQuery(access, 'SELECT * FROM CustomerType MAXRESULTS 1000');
+    for (const t of (page.CustomerType ?? []) as Array<{ Id?: string; Name?: string }>) {
+      if (t.Id) {
+        typeNames.set(String(t.Id), t.Name ?? '');
+      }
+    }
+  } catch (error) {
+    console.error('[QboFinancials] Customer types failed:', error);
+  }
+  const customerType = new Map<string, string | null>();
+  const customers = await fetchQueryAll<CustomerRow>(access, 'Customer', '*', 'Active IN (true, false)').catch(() => [] as CustomerRow[]);
+  for (const c of customers) {
+    const ref = c.CustomerTypeRef;
+    if (c.Id) {
+      customerType.set(String(c.Id), ref?.value ? typeNames.get(String(ref.value)) ?? ref.name ?? null : null);
+    }
+  }
+
+  type Line = {
+    Amount?: number;
+    DetailType?: string;
+    SalesItemLineDetail?: { Qty?: number; ItemRef?: { value?: string; name?: string } };
+    GroupLineDetail?: { Line?: Line[] };
+  };
+  type Txn = { TxnDate?: string; CustomerRef?: { value?: string; name?: string }; Line?: Line[] };
+  const where = `TxnDate >= '${from}' AND TxnDate <= '${today}'`;
+  const [invoices, receipts, credits] = await Promise.all([
+    fetchQueryAll<Txn>(access, 'Invoice', '*', where),
+    fetchQueryAll<Txn>(access, 'SalesReceipt', '*', where).catch(() => [] as Txn[]),
+    fetchQueryAll<Txn>(access, 'CreditMemo', '*', where).catch(() => [] as Txn[]),
+  ]);
+
+  const isProduct = (item?: { value?: string; name?: string }) => {
+    const type = item?.value ? itemTypes.get(String(item.value)) : undefined;
+    return type !== undefined ? UNIT_ITEM_TYPES.has(type) : UNIT_ITEM_NAME.test(item?.name ?? '');
+  };
+  const productLines = (lines: Line[] = []): Line[] =>
+    lines.flatMap((l) =>
+      l.DetailType === 'GroupLineDetail'
+        ? productLines(l.GroupLineDetail?.Line)
+        : l.DetailType === 'SalesItemLineDetail' && isProduct(l.SalesItemLineDetail?.ItemRef)
+          ? [l]
+          : []
+    );
+
+  // month → customer id → totals
+  const byMonth = new Map<string, Map<string, { customer: string; customerType: string | null; amount: number; units: number }>>();
+  const add = (txns: Txn[], sign: 1 | -1) => {
+    for (const t of txns) {
+      const month = (t.TxnDate ?? '').slice(0, 7);
+      const id = String(t.CustomerRef?.value ?? t.CustomerRef?.name ?? '');
+      if (!month || !id) {
+        continue;
+      }
+      const lines = productLines(t.Line);
+      if (!lines.length) {
+        continue;
+      }
+      const customersOfMonth = byMonth.get(month) ?? new Map();
+      const row = customersOfMonth.get(id) ?? { customer: t.CustomerRef?.name ?? id, customerType: customerType.get(id) ?? null, amount: 0, units: 0 };
+      for (const l of lines) {
+        row.amount += sign * Number(l.Amount ?? 0);
+        row.units += sign * Number(l.SalesItemLineDetail?.Qty ?? 0);
+      }
+      customersOfMonth.set(id, row);
+      byMonth.set(month, customersOfMonth);
+    }
+  };
+  add(invoices, 1);
+  add(receipts, 1);
+  add(credits, -1);
+
+  return [...byMonth.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([month, rows]) => ({
+      month,
+      customers: [...rows.values()]
+        .map((r) => ({ ...r, amount: round2(r.amount) }))
+        .sort((a, b) => b.amount - a.amount),
+    }));
 }
 
 // ============================================
@@ -917,7 +1220,7 @@ export async function buildFinancials(access: QboAccess): Promise<QboFinancials>
       start_date: opexFrom,
       end_date: today,
       summarize_column_by: 'Month',
-      accounting_method: 'Accrual',
+      accounting_method: PNL_ACCOUNTING_METHOD,
     }),
   ]);
 
@@ -967,11 +1270,27 @@ export async function buildFinancials(access: QboAccess): Promise<QboFinancials>
       start_date: historyFrom,
       end_date: monthEnd(lastMonth),
       summarize_column_by: 'Month',
-      accounting_method: 'Accrual',
+      accounting_method: PNL_ACCOUNTING_METHOD,
     });
     revenueHistory = revenueByMonth(historyPnl, historyFrom.slice(0, 7), (id) => mapping.get(id));
   } catch (error) {
     console.error('[QboFinancials] Revenue history failed:', error);
+  }
+
+  // Tires sold per month by product (Units by SKU chart, Nov 7 2026): optional, never breaks the main figures
+  let unitsByMonth: QboUnitsMonth[] | null = null;
+  try {
+    unitsByMonth = await fetchUnitsByMonth(access, today);
+  } catch (error) {
+    console.error('[QboFinancials] Units by month failed:', error);
+  }
+
+  // Tire sales per month by customer (Channel Performance chart, Nov 7 2026): optional, never breaks the main figures
+  let salesByCustomerMonth: QboCustomerSalesMonth[] | null = null;
+  try {
+    salesByCustomerMonth = await fetchSalesByCustomerMonth(access, today);
+  } catch (error) {
+    console.error('[QboFinancials] Sales by customer failed:', error);
   }
 
   const round = (n: number | undefined) => Math.round((n ?? 0) * 100) / 100;
@@ -998,6 +1317,8 @@ export async function buildFinancials(access: QboAccess): Promise<QboFinancials>
     periods: periodFigures,
     ...(periodsError ? { periodsError } : {}),
     revenueHistory,
+    ...(unitsByMonth ? { unitsByMonth } : {}),
+    ...(salesByCustomerMonth ? { salesByCustomerMonth } : {}),
   };
 }
 
@@ -1208,7 +1529,7 @@ export interface QboOpexAccount {
 export async function fetchOpexAccounts(access: QboAccess, from: string, to: string): Promise<QboOpexAccount[]> {
   const [mapping, report] = await Promise.all([
     loadAccountMapping(access.realmId),
-    fetchReport(access, 'ProfitAndLoss', { start_date: from, end_date: to, accounting_method: 'Accrual' }),
+    fetchReport(access, 'ProfitAndLoss', { start_date: from, end_date: to, accounting_method: PNL_ACCOUNTING_METHOD }),
   ]);
   const out: QboOpexAccount[] = [];
   for (const row of accountRows(report.Rows?.Row)) {

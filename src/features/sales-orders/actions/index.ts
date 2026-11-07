@@ -680,14 +680,16 @@ export async function confirmSalesOrder(
           console.log(`ℹ️ [confirmSalesOrder] Found ${linkedPOIds.length} existing PO(s) linked to allocations. Updating instead of creating new...`);
 
           try {
-            // Update all linked POs with this sales_order_id
+            // Update all linked POs with this sales_order_id. A PO also sold to
+            // another order keeps that order's link (one PO, several orders).
             const { error: updateError } = await db
               .from('purchase_orders')
               .update({
                 sales_order_id: id,
                 updated_at: new Date().toISOString()
               })
-              .in('id', linkedPOIds);
+              .in('id', linkedPOIds)
+              .or(`sales_order_id.is.null,sales_order_id.eq.${id}`);
 
             if (updateError) {
               console.error('❌ [confirmSalesOrder] Failed to update linked POs:', updateError);
@@ -1517,6 +1519,48 @@ export async function deliverSalesOrder(id: string): Promise<ActionResult<SalesO
  * Cancel an order
  * If warehouse fulfillment, deallocates inventory
  */
+/**
+ * Close out an order once it is invoiced in QuickBooks (Ankur, Nov 5 2026).
+ * Manual control; a QuickBooks webhook can do the same later.
+ */
+export async function markSalesOrderInvoiced(
+  id: string,
+  details: { invoicedAt?: string | null; qboInvoiceNumber?: string | null } = {}
+): Promise<ActionResult<SalesOrder>> {
+  const auth = await authorize('orders.approve');
+  if (!auth.ok) {
+    return auth.result;
+  }
+
+  const result = await salesOrderService.markInvoiced(id, details, auth.user.id);
+
+  if (result.success) {
+    revalidatePath('/sales-orders');
+    revalidatePath(`/sales-orders/${id}`);
+  }
+
+  return result;
+}
+
+/**
+ * Undo "Mark as Invoiced": the order goes back to its previous status
+ */
+export async function reopenInvoicedSalesOrder(id: string): Promise<ActionResult<SalesOrder>> {
+  const auth = await authorize('orders.approve');
+  if (!auth.ok) {
+    return auth.result;
+  }
+
+  const result = await salesOrderService.reopenInvoiced(id, auth.user.id);
+
+  if (result.success) {
+    revalidatePath('/sales-orders');
+    revalidatePath(`/sales-orders/${id}`);
+  }
+
+  return result;
+}
+
 export async function cancelSalesOrder(
   id: string,
   reason?: string

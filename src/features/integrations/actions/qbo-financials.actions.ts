@@ -84,6 +84,9 @@ export async function ensureFreshQuickBooksFinancials(): Promise<Result<{ financ
   // read QuickBooks again once so the dashboard gets them
   const hasPnl =
     Boolean(financials?.periods?.pnl) &&
+    // P&L on cash basis (Ankur, Nov 5 2026) + Accrual P&L for DSO / DIO (Nov 7 2026)
+    financials?.periods?.pnlBasis === 'Cash' &&
+    Boolean(financials?.periods?.accrualPnl) &&
     Boolean(financials?.periods?.units?.ytd?.bySize) &&
     // Units read with the wrong columns (Nov 6 2026 snapshot): sales in the P&L but no unit amount
     !((financials?.periods?.pnl?.ytd?.salesRevenue ?? 0) > 0 && (financials?.periods?.units?.ytd?.amount ?? 0) === 0) &&

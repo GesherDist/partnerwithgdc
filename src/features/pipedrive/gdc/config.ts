@@ -119,7 +119,7 @@ export type GdcFieldKey = (typeof GDC_CUSTOM_FIELDS)[number]['key'];
  * Sales order statuses counted as purchases (orders placed). Draft, pending
  * and cancelled orders are excluded.
  */
-export const PURCHASE_HISTORY_ORDER_STATUSES = ['confirmed', 'processing', 'shipped', 'delivered'] as const;
+export const PURCHASE_HISTORY_ORDER_STATUSES = ['confirmed', 'processing', 'shipped', 'delivered', 'invoiced'] as const;
 
 /** Marker that identifies the integration-managed purchase history note on an organization */
 export const PURCHASE_HISTORY_NOTE_MARKER = '[GDC Purchase History]';

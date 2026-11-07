@@ -19,6 +19,7 @@ export const orderStatusSchema = z.enum([
   'processing',
   'shipped',
   'delivered',
+  'invoiced',
   'cancelled',
 ]);
 

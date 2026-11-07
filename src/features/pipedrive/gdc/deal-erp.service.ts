@@ -792,7 +792,7 @@ export async function handleLostDeal(pipedriveDealId: number): Promise<LostDealR
     const action =
       order.status === 'cancelled'
         ? 'It is already cancelled.'
-        : ['shipped', 'delivered'].includes(String(order.status))
+        : ['shipped', 'delivered', 'invoiced'].includes(String(order.status))
           ? `It is already ${order.status}; nothing was changed.`
           : 'It was not cancelled automatically; cancel it in Gesher if the order is off.';
     await addDealNoteOnce(connectionId, deal.id, `Deal lost (${reason}). ERP sales order ${orderNumber} exists (${order.status}). ${action}`);
