@@ -728,7 +728,19 @@ async function fetchQuery(access: QboAccess, sql: string): Promise<Record<string
     await new Promise((resolve) => setTimeout(resolve, 2000 * (attempt + 1)));
   }
   if (!response || !response.ok) {
-    throw new Error(`QuickBooks query failed (${response?.status ?? 'no response'})`);
+    // Before Nov 7 2026: throw new Error(`QuickBooks query failed (${response?.status ?? 'no response'})`);
+    // Nov 7 2026: add QuickBooks' own fault text (no secrets in it) so the snapshot shows why
+    let detail = '';
+    if (response) {
+      try {
+        const body = (await response.json()) as { Fault?: { Error?: Array<{ Message?: string; Detail?: string; code?: string }> } };
+        const fault = body.Fault?.Error?.[0];
+        detail = fault ? `: ${[fault.code, fault.Message, fault.Detail].filter(Boolean).join(' · ')}`.slice(0, 400) : '';
+      } catch {
+        // body was not JSON
+      }
+    }
+    throw new Error(`QuickBooks query failed (${response?.status ?? 'no response'})${detail}`);
   }
   const json = (await response.json()) as { QueryResponse?: Record<string, unknown> };
   return json.QueryResponse ?? {};
