@@ -323,7 +323,13 @@ function ProjectedCashByQuarter({ projection }: { projection: CashProjection | n
       : []),
     // Before Nov 7 2026: { label: '+ Orders on the books', value: (q) => money(q.inflow) },
     {
-      label: projection.ordersSource === 'quickbooks' ? '+ Open sales orders (QuickBooks)' : '+ Open sales orders (sync QuickBooks)',
+      // Before Nov 9 2026: label: projection.ordersSource === 'quickbooks' ? '+ Open sales orders (QuickBooks)' : '+ Open sales orders (sync QuickBooks)',
+      label:
+        projection.ordersSource === 'quickbooks'
+          ? '+ Open sales orders (QuickBooks)'
+          : projection.ordersSource === 'erp'
+            ? '+ Open orders (ERP, for now)'
+            : '+ Open sales orders (sync QuickBooks)',
       value: (q) => money(q.inflow),
     },
     { label: 'Orders / Tires', value: (q) => `${q.orders} / ${q.tires.toLocaleString('en-US')}` },
@@ -339,7 +345,12 @@ function ProjectedCashByQuarter({ projection }: { projection: CashProjection | n
           {/* Before Nov 6 2026: Cash Today + firm orders still to be invoiced, by expected delivery date */}
           {inv
             ? // Before Nov 7 2026: `Cash Today + QuickBooks open invoices (by due date) + firm orders still to be invoiced (by expected delivery date)${...}`
-              `Cash Today + QuickBooks open invoices (by due date) + QuickBooks open sales orders (by ship / due date${projection.ordersSource === 'quickbooks' ? '' : '; not in this snapshot, sync QuickBooks'})${projection.openBills ? ' − QuickBooks open bills (by due date)' : ''}`
+              // Before Nov 9 2026: `... + QuickBooks open sales orders (by ship / due date${projection.ordersSource === 'quickbooks' ? '' : '; not in this snapshot, sync QuickBooks'})...`
+              `Cash Today + QuickBooks open invoices (by due date) + ${
+                projection.ordersSource === 'erp'
+                  ? 'ERP open orders for now (QuickBooks sales orders not available; by expected delivery date)'
+                  : `QuickBooks open sales orders (by ship / due date${projection.ordersSource === 'quickbooks' ? '' : '; not in this snapshot, sync QuickBooks'})`
+              }${projection.openBills ? ' − QuickBooks open bills (by due date)' : ''}`
             : 'Cash Today + firm orders still to be invoiced, by expected delivery date (sync QuickBooks to add open invoices)'}{' '}
           · through {projection.throughDate}
           {inv && inv.overdue > 0 && ` · ${money(inv.overdue)} overdue invoices are in the current quarter`}
@@ -396,10 +407,10 @@ export function FinancialMetricsTables() {
             ]}
             rows={[
               { label: 'Cash Today', format: 'money', cells: { amount: m.liquidity.cashToday, py: m.liquidity.cashPy } },
-              // Hidden (Ankur, Nov 4 call: "Let's remove for now the low cash and high cash").
-              // The calculation is still built in executive-model.ts; uncomment to show again.
-              // { label: 'Low Cash', format: 'money', cells: { amount: m.liquidity.lowCash, py: { value: null } } },
-              // { label: 'High Cash', format: 'money', cells: { amount: m.liquidity.highCash, py: { value: null } } },
+              // Hidden Nov 4 (Ankur: "Let's remove for now the low cash and high cash");
+              // shown again Nov 9 (Ankur's email reply Nov 7: "Display please").
+              { label: 'Low Cash', format: 'money', cells: { amount: m.liquidity.lowCash, py: { value: null } } },
+              { label: 'High Cash', format: 'money', cells: { amount: m.liquidity.highCash, py: { value: null } } },
               { label: 'Projected Cash', format: 'money', cells: { amount: m.liquidity.projectedCash, py: { value: null } } },
             ]}
           />

@@ -33,9 +33,19 @@ interface QboInvoice {
   TxnDate?: string;
   PrivateNote?: string;
   CustomerMemo?: { value?: string };
-  CustomField?: Array<{ StringValue?: string }>;
+  // CustomField?: Array<{ StringValue?: string }>;
+  CustomField?: Array<{ Name?: string; StringValue?: string }>;
   LinkedTxn?: Array<{ TxnId?: string; TxnType?: string }>;
 }
+
+/**
+ * Name of the QuickBooks invoice custom field that holds the ERP SO number
+ * (Ankur, Nov 7 2026 #15). A value in this field may be a bare number
+ * ("2600062"): the field exists only for the SO number, so it is not a guess.
+ */
+// const SO_NUMBER_FIELD = /^\s*SO\s*(no\.?|number|#)?\s*$/i;
+// "SO Number", "so_number", "SO-No.", "SO #", "SO num", "SO"
+const SO_NUMBER_FIELD = /^\s*SO[\s_.-]*(no\.?|num(ber)?|#)?\s*$/i;
 
 export interface InvoiceCloseResult {
   invoiceId: string;
@@ -72,7 +82,10 @@ function linkedDocDigits(docNumber: string | null | undefined): string[] {
 }
 
 async function getEntity<T>(access: QboAccess, entity: string, id: string): Promise<T | null> {
-  const url = `${getApiBaseUrl(access.environment as QuickBooksEnvironment)}/v3/company/${access.realmId}/${entity.toLowerCase()}/${encodeURIComponent(id)}?minorversion=${QBO_API_MINOR_VERSION}`;
+  // const url = `${getApiBaseUrl(access.environment as QuickBooksEnvironment)}/v3/company/${access.realmId}/${entity.toLowerCase()}/${encodeURIComponent(id)}?minorversion=${QBO_API_MINOR_VERSION}`;
+  // QuickBooks' newer custom fields (Settings → Custom fields) are only
+  // returned with include=enhancedAllCustomFields (checked on sandbox, Nov 9)
+  const url = `${getApiBaseUrl(access.environment as QuickBooksEnvironment)}/v3/company/${access.realmId}/${entity.toLowerCase()}/${encodeURIComponent(id)}?minorversion=${QBO_API_MINOR_VERSION}&include=enhancedAllCustomFields`;
   let response: Response | null = null;
   // QuickBooks throttles bursts (429): back off and retry
   for (let attempt = 0; attempt < 4; attempt++) {
@@ -110,6 +123,27 @@ async function findErpOrders(digits: string): Promise<Array<{ id: string; order_
   );
 }
 
+/**
+ * Was this order reopened by hand ("Reopen Order") after being invoiced?
+ * Read from the audit log (sales-order.service reopenInvoiced writes
+ * "Sales order … reopened: invoiced → …"). When the log cannot be read,
+ * answer "yes" so an invoice update never closes an order by mistake.
+ */
+async function wasReopenedByHand(orderId: string): Promise<boolean> {
+  const { data, error } = await db
+    .from('audit_logs')
+    .select('id')
+    .eq('entity_type', 'SalesOrder')
+    .eq('entity_id', orderId)
+    .ilike('description', '% reopened: invoiced %')
+    .limit(1);
+  if (error) {
+    console.error('[QBO Invoice Close] Audit log could not be read:', error.message);
+    return true;
+  }
+  return (data ?? []).length > 0;
+}
+
 /** Today in the business time zone (YYYY-MM-DD) */
 function businessToday(): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
@@ -119,7 +153,13 @@ function businessToday(): string {
  * Read one QuickBooks invoice and close out the ERP sales order(s) it is for.
  * Safe to call more than once for the same invoice.
  */
-export async function closeSalesOrdersForQboInvoice(realmId: string, invoiceId: string): Promise<InvoiceCloseResult> {
+// export async function closeSalesOrdersForQboInvoice(realmId: string, invoiceId: string): Promise<InvoiceCloseResult> {
+export async function closeSalesOrdersForQboInvoice(
+  realmId: string,
+  invoiceId: string,
+  /** skipReopened: invoice "Update" event – leave orders reopened by hand alone */
+  options: { skipReopened?: boolean } = {}
+): Promise<InvoiceCloseResult> {
   const result: InvoiceCloseResult = { invoiceId, invoiceNumber: null, closed: [], skipped: [] };
 
   const access = await getQboAccess();
@@ -152,6 +192,15 @@ export async function closeSalesOrdersForQboInvoice(realmId: string, invoiceId: 
     linkedDocDigits(linked?.DocNumber).forEach((d) => digits.add(d));
   }
 
+  // 2a. The "SO Number" custom field: "SO2600062" or a bare "2600062"
+  if (digits.size === 0) {
+    for (const field of invoice.CustomField ?? []) {
+      if (field.Name && SO_NUMBER_FIELD.test(field.Name)) {
+        linkedDocDigits(field.StringValue).forEach((d) => digits.add(d));
+      }
+    }
+  }
+
   // 2. An SO number written on the invoice
   if (digits.size === 0) {
     const texts = [
@@ -182,6 +231,10 @@ export async function closeSalesOrdersForQboInvoice(realmId: string, invoiceId: 
       }
       if (!(ORDER_STATUS_TRANSITIONS[order.status] ?? []).includes('invoiced')) {
         result.skipped.push({ orderNumber: order.order_number, reason: `status is ${order.status}` });
+        continue;
+      }
+      if (options.skipReopened && (await wasReopenedByHand(order.id))) {
+        result.skipped.push({ orderNumber: order.order_number, reason: 'reopened by hand in the ERP (invoice update ignored)' });
         continue;
       }
       const closed = await salesOrderService.markInvoiced(order.id, {

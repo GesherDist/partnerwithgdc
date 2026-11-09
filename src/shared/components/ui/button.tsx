@@ -47,6 +47,9 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       <Comp
         className={cn(buttonVariants({ variant, size, className }))}
         ref={ref}
+        // Browser extensions add attributes such as fdprocessedid to buttons before
+        // React loads (dev hydration warning). Only this element's own attributes are ignored.
+        suppressHydrationWarning
         {...props}
       />
     )

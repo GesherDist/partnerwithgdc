@@ -209,12 +209,20 @@ async function openOrdersCsv(): Promise<string> {
     throw new Error(error.message);
   }
   let total = 0;
+  // Nov 9 2026: the card's ERP fallback leaves commission-only orders out
+  let countedTotal = 0;
+  let countedOrders = 0;
   const rows: Cell[][] = (data ?? []).map((so) => {
     const customer = (Array.isArray(so.customers) ? so.customers[0] : so.customers) as { name: string | null } | null;
     total += Number(so.grand_total ?? 0);
+    if (so.is_commission_only !== true) {
+      countedTotal += Number(so.grand_total ?? 0);
+      countedOrders += 1;
+    }
     return [so.order_number, customer?.name, so.customer_po_number, so.status, so.order_date, so.order_series, so.is_commission_only ? 'Yes' : 'No', dollars(Number(so.grand_total ?? 0))];
   });
   rows.push([`TOTAL (${(data ?? []).length} orders)`, '', '', '', '', '', '', dollars(total)]);
+  rows.push([`TOTAL without commission-only (${countedOrders} orders): Open Orders card when QuickBooks has no sales orders`, '', '', '', '', '', '', dollars(countedTotal)]);
   return toCsv(['SO #', 'Customer', 'Customer PO', 'Status', 'Order Date', 'Order Series', 'Commission Only', 'Grand Total'], rows);
 }
 
@@ -310,8 +318,16 @@ async function openOrdersQboCsv(): Promise<string> {
           [`TOTAL (${qso.count} orders)`, '', '', '', '', qso.tires, qso.total],
         ]
       )
-    : toCsv(['QuickBooks open sales orders are not in the latest snapshot: sync QuickBooks (the card shows "—")'], []);
-  return withErpReference(qboCsv, 'ERP sales orders (confirmed / processing), for reference only — not used by the card', await openOrdersCsv());
+    : // Before Nov 9 2026: toCsv(['QuickBooks open sales orders are not in the latest snapshot: sync QuickBooks (the card shows "—")'], []);
+      toCsv(['QuickBooks open sales orders are not in the latest snapshot: the card uses the ERP open orders below for now (commission-only orders not counted)'], []);
+  // Before Nov 9 2026: return withErpReference(qboCsv, 'ERP sales orders (confirmed / processing), for reference only — not used by the card', await openOrdersCsv());
+  return withErpReference(
+    qboCsv,
+    qso
+      ? 'ERP sales orders (confirmed / processing), for reference only — not used by the card'
+      : 'ERP sales orders (confirmed / processing): used by the card for now (Ankur, Nov 7), commission-only orders not counted',
+    await openOrdersCsv()
+  );
 }
 
 /** Units by SKU chart (Nov 7 2026): QuickBooks tires sold per month by product; ERP incoming shipments below for reference */
@@ -394,15 +410,19 @@ const LABELS: Record<OverviewDrillDown, string> = {
 
 /** Cards / charts whose value comes from the QuickBooks P&L (Nov 6 2026); their ERP rows are for reference */
 const QBO_NOTE: Partial<Record<OverviewDrillDown, string>> = {
-  'revenue-period': 'Dashboard value = QuickBooks P&L tire sales (Total Income − commission accounts), last sync. ERP delivered tire lines below are for reference.',
-  'revenue-ytd': 'Dashboard value = QuickBooks P&L tire sales (Total Income − commission accounts), last sync. ERP delivered tire lines below are for reference.',
+  // Before Nov 9 2026 (commission excluded):
+  // 'revenue-period': 'Dashboard value = QuickBooks P&L tire sales (Total Income − commission accounts), last sync. ERP delivered tire lines below are for reference.',
+  // 'revenue-ytd': 'Dashboard value = QuickBooks P&L tire sales (Total Income − commission accounts), last sync. ERP delivered tire lines below are for reference.',
+  'revenue-period': 'Dashboard value = QuickBooks P&L Total Income (tire sales + commission income), last sync. ERP delivered tire lines below (tires only) are for reference.',
+  'revenue-ytd': 'Dashboard value = QuickBooks P&L Total Income (tire sales + commission income), last sync. ERP delivered tire lines below (tires only) are for reference.',
   'units-period': 'Dashboard value = QuickBooks Sales by Product/Service Summary, tire products quantity, last sync. ERP delivered tire lines below are for reference.',
   'units-ytd': 'Dashboard value = QuickBooks Sales by Product/Service Summary, tire products quantity, last sync. ERP delivered tire lines below are for reference.',
   'blended-margin': 'Dashboard value = (QuickBooks P&L tire sales − COGS) ÷ tire sales, last sync. ERP delivered tire lines below are for reference.',
   'commission-actual': 'Commission Actual = QuickBooks P&L commission income accounts, last sync. ERP commission invoices below are for reference.',
   'commission-expected': 'Commission Actual part = QuickBooks P&L commission income accounts, last sync. ERP commission invoices below are for reference.',
   'margin-analysis': 'Chart = QuickBooks P&L tire sales and COGS per month, last sync. ERP delivered tire lines below are for reference.',
-  'open-orders': 'Open Orders = QuickBooks open sales orders (not closed / cancelled, not linked to an invoice), last sync. ERP sales orders below are for reference only.',
+  // Before Nov 9 2026: 'open-orders': 'Open Orders = QuickBooks open sales orders (not closed / cancelled, not linked to an invoice), last sync. ERP sales orders below are for reference only.',
+  'open-orders': 'Open Orders = QuickBooks open sales orders (not closed / cancelled, not linked to an invoice), last sync. When QuickBooks has none, the card uses the ERP open orders below for now (commission-only not counted).',
   'units-by-sku': 'Chart = QuickBooks Sales by Product/Service Summary, tires sold per month by product, last sync. ERP incoming shipments below are for reference only.',
   channel: 'Chart = QuickBooks tire sales by customer (invoices + sales receipts − credit memos, product lines), channel from QuickBooks Customer Type, else ERP customer by name, else UNASSIGNED; last sync. ERP rows below are for reference only.',
 };

@@ -46,6 +46,7 @@ import { Label } from '@/shared/components/ui/label';
 import { getSalesOrder, releaseSalesOrderHold, confirmSalesOrder, cancelSalesOrder, updateSalesOrderSeries } from '../actions';
 import { createInvoiceFromSalesOrder, getInvoiceBySalesOrder } from '@/features/invoices/actions';
 import type { InvoiceListItem } from '@/features/invoices/types';
+import { INVOICES_READ_ONLY } from '@/features/invoices/lib/permissions';
 import type { SalesOrderWithItems } from '../types';
 import {
   ORDER_STATUS_LABELS,
@@ -909,7 +910,9 @@ const handleReleaseHold = async () => {
                     View Invoice
                   </Button>
                 )}
-                {canCreateInvoice && !existingInvoice && !invoiceCreated && !order?.isCommissionOnly && (
+                {/* Before Nov 9 2026: {canCreateInvoice && !existingInvoice && !invoiceCreated && !order?.isCommissionOnly && (
+                    Hidden: invoices are created in QuickBooks (Ankur, Nov 7 email) */}
+                {!INVOICES_READ_ONLY && canCreateInvoice && !existingInvoice && !invoiceCreated && !order?.isCommissionOnly && (
                   <Button
                     variant="outline"
                     size="sm"

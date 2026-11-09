@@ -39,14 +39,18 @@ const CALCULATION_FORMULAS: Record<string, { title: string; formula: string; not
     title: 'Revenue (MTD) Calculation',
     // ERP formula (replaced by QuickBooks, Nov 6 2026):
     // formula: `Revenue = Σ tire line totals of firm sales orders delivered from the 1st of this month to today − credit notes\n\nDatabase Sources:\n• Sales: sales_order_items.line_total (after line discount, excl. tax), tire products only\n• Returns: credit_notes.subtotal WHERE status IN ("issued", "applied"), by credit_note_date${RECOGNITION_RULE}`,
-    formula: `Revenue = QuickBooks Profit and Loss (Cash basis), 1st of this month to the last sync: Total Income − income accounts named "commission" (tire sales)\n\nSource: QuickBooks snapshot (last QuickBooks sync)`,
+    // Before Nov 9 2026 (commission excluded):
+    // formula: `Revenue = QuickBooks Profit and Loss (Cash basis), 1st of this month to the last sync: Total Income − income accounts named "commission" (tire sales)\n\nSource: QuickBooks snapshot (last QuickBooks sync)`,
+    formula: `Revenue = QuickBooks Profit and Loss (Cash basis), 1st of this month to the last sync: Total Income (tire sales + commission income). Commission included per Ankur (Nov 7)\n\nSource: QuickBooks snapshot (last QuickBooks sync)`,
     notes: 'Month to date at the last QuickBooks sync. Always MTD: the date filter changes the charts, not this card. Compared to last month (QuickBooks P&L).',
   },
   'revenue-ytd': {
     title: 'Revenue (YTD) Calculation',
     // ERP formula (replaced by QuickBooks, Nov 6 2026):
     // formula: `Revenue = Σ tire line totals of firm sales orders delivered Jan 1 to today − credit notes\n\nDatabase Sources:\n• Sales: sales_order_items.line_total (after line discount, excl. tax), tire products only\n• Returns: credit_notes.subtotal WHERE status IN ("issued", "applied"), by credit_note_date${RECOGNITION_RULE}`,
-    formula: `Revenue = QuickBooks Profit and Loss (Cash basis), Jan 1 to the last sync: Total Income − income accounts named "commission" (tire sales)`,
+    // Before Nov 9 2026 (commission excluded):
+    // formula: `Revenue = QuickBooks Profit and Loss (Cash basis), Jan 1 to the last sync: Total Income − income accounts named "commission" (tire sales)`,
+    formula: `Revenue = QuickBooks Profit and Loss (Cash basis), Jan 1 to the last sync: Total Income (tire sales + commission income). Commission included per Ankur (Nov 7)`,
     notes: 'YTD at the last QuickBooks sync. Compared to the same period last year (QuickBooks P&L).',
   },
   'units-sold': {
@@ -67,7 +71,9 @@ const CALCULATION_FORMULAS: Record<string, { title: string; formula: string; not
     title: 'Blended Margin (YTD) Calculation - Definition 3.2',
     // ERP formula (replaced by QuickBooks, Nov 6 2026):
     // formula: `Gross Profit % = (Revenue − COGS) ÷ Revenue × 100\n\nWhere:\n• Revenue = the Revenue (YTD) figure\n• COGS = cost of the same delivered tires: line cost saved by the first fulfillment allocation, else the order cycle cost, else products.base_cost × quantity${RECOGNITION_RULE}`,
-    formula: `Gross Profit % = (Revenue − COGS) ÷ Revenue × 100\n\nWhere:\n• Revenue = the Revenue (YTD) figure (QuickBooks, commission excluded)\n• COGS = QuickBooks Profit and Loss Cost of Goods Sold, Jan 1 to the last sync`,
+    // Before Nov 9 2026:
+    // formula: `Gross Profit % = (Revenue − COGS) ÷ Revenue × 100\n\nWhere:\n• Revenue = the Revenue (YTD) figure (QuickBooks, commission excluded)\n• COGS = QuickBooks Profit and Loss Cost of Goods Sold, Jan 1 to the last sync`,
+    formula: `Gross Profit % = (Revenue − COGS) ÷ Revenue × 100\n\nWhere:\n• Revenue = QuickBooks P&L tire sales, Jan 1 to the last sync (Total Income − commission accounts; the Revenue cards include commission since Nov 9, margin does not)\n• COGS = QuickBooks Profit and Loss Cost of Goods Sold, Jan 1 to the last sync`,
     notes: 'Ankur\'s Definition 3.2, from QuickBooks. Compared to last year YTD margin.',
   },
   'open-orders': {
@@ -78,8 +84,11 @@ const CALCULATION_FORMULAS: Record<string, { title: string; formula: string; not
     // Before Nov 7 2026 (ERP only):
     // formula: 'Open Order = a confirmed sales order that is not invoiced yet (closed once it is invoiced), including pre-sold orders on containers not received yet\n\nOpen Orders = Count of sales orders with status IN ("confirmed", "processing")\nOrder Value = Sum of sales_orders.grand_total for those orders\nChange = vs the open orders already placed by the end of last month',
     // notes: 'Definition from Ankur (Nov 4 call: "confirmed, but not paid"; Nov 5 call: open sales orders "that have not been invoiced yet", closed "when they\'re invoiced"). Source today: ERP sales orders (deleted excluded; commission-only counted; no date filter). Ankur keeps open sales orders in QuickBooks too: this moves to QuickBooks once the QuickBooks transaction type is confirmed.',
-    formula: 'Open Order = a confirmed sales order that is not invoiced yet (closed once it is invoiced)\n\nOpen Orders = Count of QuickBooks sales orders that are not closed / cancelled and not linked to an invoice\nOrder Value = Sum of their product / service lines (excl. tax)\nChange = vs the open orders already dated by the end of last month\n\nSource: QuickBooks only. If the sync could not read sales orders the card shows "—" and "Sync QuickBooks".',
-    notes: 'Definition from Ankur (Nov 4 call: "confirmed, but not paid"; Nov 5 call: "on QuickBooks under invoices, the open sales orders", "that have not been invoiced yet", closed "when they\'re invoiced"). Read from QuickBooks on each sync.',
+    // Before Nov 9 2026 (QuickBooks only):
+    // formula: 'Open Order = a confirmed sales order that is not invoiced yet (closed once it is invoiced)\n\nOpen Orders = Count of QuickBooks sales orders that are not closed / cancelled and not linked to an invoice\nOrder Value = Sum of their product / service lines (excl. tax)\nChange = vs the open orders already dated by the end of last month\n\nSource: QuickBooks only. If the sync could not read sales orders the card shows "—" and "Sync QuickBooks".',
+    // notes: 'Definition from Ankur (Nov 4 call: "confirmed, but not paid"; Nov 5 call: "on QuickBooks under invoices, the open sales orders", "that have not been invoiced yet", closed "when they\'re invoiced"). Read from QuickBooks on each sync.',
+    formula: 'Open Order = a confirmed sales order that is not invoiced yet (closed once it is invoiced)\n\nQuickBooks (preferred): Count of QuickBooks sales orders that are not closed / cancelled and not linked to an invoice; Order Value = Sum of their product / service lines (excl. tax)\n\nERP (for now, while QuickBooks sales orders cannot be read): Count of ERP sales orders with status IN ("confirmed", "processing"), commission-only orders excluded; Order Value = Sum of sales_orders.grand_total\n\nChange = vs the open orders already dated by the end of last month. The card says "ERP (for now)" when the ERP is used.',
+    notes: 'Definition from Ankur (Nov 4 call: "confirmed, but not paid"; Nov 5 call: "on QuickBooks under invoices, the open sales orders", "that have not been invoiced yet", closed "when they\'re invoiced"). Nov 7 email: "If we cannot find it from there we can temporarily use from ERP although I prefer QuickBooks for this data." An ERP order leaves the count once it is marked Invoiced in the ERP.',
   },
   'commission-expected-ytd': {
     title: 'Commission Expected (YTD) Calculation',

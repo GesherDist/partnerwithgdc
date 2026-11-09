@@ -215,8 +215,9 @@ async function accountsByDate(qboAccess: Awaited<ReturnType<typeof access>>, poi
 // ---------- 1.1 Liquidity ----------
 
 async function liquidityCsv(): Promise<string> {
-  // erp: was used for the ERP orders on the books (Nov 7 2026: QuickBooks open sales orders)
-  const { qbo, model /* , erp */ } = await loadContext();
+  // erp: ERP orders on the books, used again Nov 9 2026 while QuickBooks open sales orders are not available
+  // Before Nov 9 2026: const { qbo, model /* , erp */ } = await loadContext();
+  const { qbo, model, erp } = await loadContext();
   const qboAccess = await access();
   const pyDate = qbo.periods?.priorYearDate ?? addYears(qbo.asOf, -1);
   const [today, py] = await Promise.all([fetchAccountBalances(qboAccess, qbo.asOf), fetchAccountBalances(qboAccess, pyDate)]);
@@ -297,10 +298,15 @@ async function liquidityCsv(): Promise<string> {
           .filter((q) => q.orders > 0)
           .map((q): Section => {
             // Before Nov 7 2026: erp.backlogOrders (ERP only)
-            const source = projectionOrdersOf(qbo);
+            // Before Nov 9 2026: const source = projectionOrdersOf(qbo);
+            const source = projectionOrdersOf(qbo, erp.backlogOrders);
             const orders = source.orders.filter((o) => cashQuarterOf(o, model.asOf) === q.start);
             return {
-              title: `${q.label}: QuickBooks open sales orders (${q.start} to ${q.end}) · as of ${qbo.asOf}`,
+              // Before Nov 9 2026: title: `${q.label}: QuickBooks open sales orders (${q.start} to ${q.end}) · as of ${qbo.asOf}`,
+              title:
+                source.source === 'erp'
+                  ? `${q.label}: ERP open orders, firm orders not delivered yet (QuickBooks sales orders not available) (${q.start} to ${q.end}) · as of ${model.asOf}`
+                  : `${q.label}: QuickBooks open sales orders (${q.start} to ${q.end}) · as of ${qbo.asOf}`,
               columns: ['Sales Order', 'Order Date', 'Status', 'Expected Delivery', 'Date Source', 'Tires', 'Revenue (tire lines, excl. tax)'],
               rows: [
                 ...orders.map((o) => [
@@ -324,25 +330,24 @@ async function liquidityCsv(): Promise<string> {
     accountSection(`Cash Today: accounts mapped to Cash on ${qbo.asOf}`, qbo.asOf, today, 'cash', cellValue(model.liquidity.cashToday)),
     accountSection(`PY: the same on ${pyDate}`, pyDate, py, 'cash', cellValue(model.liquidity.cashPy)),
     ...projectionSections,
-    // Low / High Cash section hidden with the dashboard rows (Ankur, Nov 4 call: "remove for now").
-    // Uncomment to export it again.
-    // projection && projection.movements.length
-    //   ? {
-    //       title: `Low Cash / High Cash: cash day by day from ${model.asOf} through ${projection.throughDate} (open invoices on due date, open bills on due date, orders on expected delivery; overdue / no date → today). Low ${cellValue(model.liquidity.lowCash)} on ${projection.lowCash?.date ?? ''} · High ${cellValue(model.liquidity.highCash)} on ${projection.highCash?.date ?? ''}`,
-    //       columns: ['Date', 'Type', 'Reference', 'Customer / Vendor', 'Amount', 'Cash after'],
-    //       rows: [
-    //         [model.asOf, 'Cash Today', '', '', '', cellValue(model.liquidity.cashToday)],
-    //         ...projection.movements.map((m) => [m.date, m.kind, m.ref, m.party, m.amount, m.balance]),
-    //       ],
-    //     }
-    //   : {
-    //       title: 'Low Cash / High Cash: needs QuickBooks open invoices and bills (sync QuickBooks again)',
-    //       columns: ['KPI', 'Dashboard'],
-    //       rows: [
-    //         ['Low Cash', cellValue(model.liquidity.lowCash)],
-    //         ['High Cash', cellValue(model.liquidity.highCash)],
-    //       ],
-    //     },
+    // Low / High Cash section: hidden Nov 4 (Ankur: "remove for now"), shown again Nov 9 (Ankur, Nov 7 email: "Display please").
+    projection && projection.movements.length
+      ? {
+          title: `Low Cash / High Cash: cash day by day from ${model.asOf} through ${projection.throughDate} (open invoices on due date, open bills on due date, orders on expected delivery; overdue / no date → today). Low ${cellValue(model.liquidity.lowCash)} on ${projection.lowCash?.date ?? ''} · High ${cellValue(model.liquidity.highCash)} on ${projection.highCash?.date ?? ''}`,
+          columns: ['Date', 'Type', 'Reference', 'Customer / Vendor', 'Amount', 'Cash after'],
+          rows: [
+            [model.asOf, 'Cash Today', '', '', '', cellValue(model.liquidity.cashToday)],
+            ...projection.movements.map((m) => [m.date, m.kind, m.ref, m.party, m.amount, m.balance]),
+          ],
+        }
+      : {
+          title: 'Low Cash / High Cash: needs QuickBooks open invoices and bills (sync QuickBooks again)',
+          columns: ['KPI', 'Dashboard'],
+          rows: [
+            ['Low Cash', cellValue(model.liquidity.lowCash)],
+            ['High Cash', cellValue(model.liquidity.highCash)],
+          ],
+        },
     ...historySections,
   ]);
 }
@@ -862,10 +867,17 @@ async function backlogCsv(): Promise<string> {
           ['GP % = Gross Profit ÷ Revenue × 100', '', '', '', '', '', cellValue(b.gpPct.current)],
         ],
       }
-    : {
-        title: 'QuickBooks open sales orders are not in the latest snapshot: sync QuickBooks (Backlog Tires / Revenue show "Sync QuickBooks")',
-        columns: [''],
-        rows: [],
+    : // Before Nov 9 2026: title: 'QuickBooks open sales orders are not in the latest snapshot: sync QuickBooks (Backlog Tires / Revenue show "Sync QuickBooks")'
+      {
+        title: 'QuickBooks open sales orders are not in the latest snapshot: Backlog Tires / Revenue / GP use the ERP firm orders below for now (Ankur, Nov 7)',
+        columns: ['KPI', 'Dashboard'],
+        rows: [
+          ['Backlog Tires', cellValue(b.tires.current)],
+          ['Backlog Revenue', cellValue(b.revenue.current)],
+          ['Gross Profit = ERP Revenue − ERP COGS (TOTAL row below)', cellValue(b.grossProfit.current)],
+          ['GP / Tire', cellValue(b.gpPerTire.current)],
+          ['GP %', cellValue(b.gpPct.current)],
+        ],
       };
 
   const kpis = [['Backlog Tires', b.tires], ['Backlog Revenue', b.revenue], ['Revenue / Tire', b.revenuePerTire], ['Backlog Gross Profit', b.grossProfit], ['GP / Tire', b.gpPerTire], ['GP %', b.gpPct]] as const;

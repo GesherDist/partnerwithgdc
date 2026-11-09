@@ -12,6 +12,10 @@ const Input = React.forwardRef<HTMLInputElement, React.ComponentProps<"input">>(
           className
         )}
         ref={ref}
+        // Browser extensions (autofill / password managers) add attributes such as
+        // fdprocessedid to inputs before React loads, causing a dev hydration warning.
+        // Only this element's own attributes are ignored; children are still checked.
+        suppressHydrationWarning
         {...props}
       />
     )

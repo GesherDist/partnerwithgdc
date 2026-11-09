@@ -42,7 +42,7 @@ import {
 import { deleteInvoice } from '@/features/invoices/actions';
 import type { InvoiceListItem, InvoiceStatus, InvoiceWithItems } from '@/features/invoices/types';
 import { INVOICE_STATUS_LABELS } from '@/features/invoices/types';
-import { INVOICE_PERMISSIONS } from '@/features/invoices/lib/permissions';
+import { INVOICE_PERMISSIONS, INVOICES_READ_ONLY } from '@/features/invoices/lib/permissions';
 import { useAuthStore } from '@/shared/stores/auth.store';
 
 export function InvoicesPageContent() {
@@ -60,10 +60,16 @@ export function InvoicesPageContent() {
   // PERMISSIONS (only check after hydration)
   // ----------------------------------------
 
-  const canCreate = hasMounted && hasPermission(INVOICE_PERMISSIONS.create);
-  const canEdit = hasMounted && hasPermission(INVOICE_PERMISSIONS.edit);
-  const canDelete = hasMounted && hasPermission(INVOICE_PERMISSIONS.delete);
-  const canRecordPayment = hasMounted && hasPermission(INVOICE_PERMISSIONS.recordPayment);
+  // Before Nov 9 2026 (without INVOICES_READ_ONLY):
+  // const canCreate = hasMounted && hasPermission(INVOICE_PERMISSIONS.create);
+  // const canEdit = hasMounted && hasPermission(INVOICE_PERMISSIONS.edit);
+  // const canDelete = hasMounted && hasPermission(INVOICE_PERMISSIONS.delete);
+  // const canRecordPayment = hasMounted && hasPermission(INVOICE_PERMISSIONS.recordPayment);
+  // Read-only: invoices are created in QuickBooks (Ankur, Nov 7 email). View / View PDF stay.
+  const canCreate = !INVOICES_READ_ONLY && hasMounted && hasPermission(INVOICE_PERMISSIONS.create);
+  const canEdit = !INVOICES_READ_ONLY && hasMounted && hasPermission(INVOICE_PERMISSIONS.edit);
+  const canDelete = !INVOICES_READ_ONLY && hasMounted && hasPermission(INVOICE_PERMISSIONS.delete);
+  const canRecordPayment = !INVOICES_READ_ONLY && hasMounted && hasPermission(INVOICE_PERMISSIONS.recordPayment);
 
   // ----------------------------------------
   // STATE
@@ -214,10 +220,10 @@ export function InvoicesPageContent() {
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Page Header */}
+      {/* Page Header (before Nov 9 2026 the description was always "Manage customer invoices and payments.") */}
       <PageHeader
         title="Invoices"
-        description="Manage customer invoices and payments."
+        description={INVOICES_READ_ONLY ? 'View only. Invoices are created in QuickBooks.' : 'Manage customer invoices and payments.'}
         actions={
           <div className="flex items-center gap-2">
             <Button

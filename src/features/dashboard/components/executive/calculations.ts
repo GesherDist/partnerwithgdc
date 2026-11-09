@@ -27,23 +27,29 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
       status: 'live',
     },
     { kpi: 'PY', formula: '= the same, on the date one year ago', source: 'QuickBooks Balance Sheet (past date)', status: 'live' },
-    // Hidden with the Low / High Cash rows (Ankur, Nov 4 call: "remove for now")
-    // {
-    //   kpi: 'Low Cash / High Cash',
-    //   formula: '= lowest / highest projected daily cash balance between today and the Projected Through Date',
-    //   source: 'Cash Today (QuickBooks) moved day by day: + QuickBooks open invoices on their due date, − QuickBooks open bills on their due date, + ERP orders on the books on their expected delivery date (overdue / no date → today). Payroll and other expenses without a bill are not included',
-    //   status: 'live',
-    // },
+    // Hidden Nov 4 with the Low / High Cash rows (Ankur: "remove for now"); shown again Nov 9 (Ankur, Nov 7 email: "Display please")
+    {
+      kpi: 'Low Cash / High Cash',
+      formula: '= lowest / highest projected daily cash balance between today and the Projected Through Date',
+      // Before Nov 9 2026:
+      // source: 'Cash Today (QuickBooks) moved day by day: + QuickBooks open invoices on their due date, − QuickBooks open bills on their due date, + ERP orders on the books on their expected delivery date (overdue / no date → today). Payroll and other expenses without a bill are not included',
+      source: 'Cash Today (QuickBooks) moved day by day: + QuickBooks open invoices on their due date, − QuickBooks open bills on their due date, + open sales orders on their ship / due date, ERP orders for now on their expected delivery date (overdue / no date → today). Payroll and other expenses without a bill are not included',
+      status: 'live',
+    },
     {
       kpi: 'Projected Cash',
       // Before Nov 7 2026:
       // formula: '= Cash Today + QuickBooks open invoices (open balance, in the quarter of the due date; overdue or no due date → current quarter) − QuickBooks open bills (the same, by due date) + orders on the books still to be invoiced (backlog revenue: firm confirmed/processing orders not delivered, tire lines net of discounts, excl. tax), quarter by quarter by expected delivery date (requested delivery, else confirmed ETA, else ETA to US port; none or past → current quarter). Through Date = end of the last quarter (at least 4 quarters)',
-      formula: '= Cash Today + QuickBooks open invoices (open balance, in the quarter of the due date; overdue or no due date → current quarter) − QuickBooks open bills (the same, by due date) + QuickBooks open sales orders (not invoiced yet; product / service lines excl. tax), in the quarter of the ship date, else due date (none or past → current quarter). Quarter by quarter; Through Date = end of the last quarter (at least 4 quarters). Open sales orders come from QuickBooks only (no ERP fallback)',
+      // Before Nov 9 2026:
+      // formula: '= Cash Today + QuickBooks open invoices (open balance, in the quarter of the due date; overdue or no due date → current quarter) − QuickBooks open bills (the same, by due date) + QuickBooks open sales orders (not invoiced yet; product / service lines excl. tax), in the quarter of the ship date, else due date (none or past → current quarter). Quarter by quarter; Through Date = end of the last quarter (at least 4 quarters). Open sales orders come from QuickBooks only (no ERP fallback)',
+      formula: '= Cash Today + QuickBooks open invoices (open balance, in the quarter of the due date; overdue or no due date → current quarter) − QuickBooks open bills (the same, by due date) + open sales orders (not invoiced yet). Quarter by quarter; Through Date = end of the last quarter (at least 4 quarters). Open sales orders: QuickBooks (product / service lines excl. tax, quarter of the ship date, else due date); ERP for now while QuickBooks sales orders cannot be read (see Open Orders below)',
       // Before Nov 6 2026:
       // source: 'QuickBooks cash + QuickBooks open invoices + ERP sales orders (Ankur, Oct 27 + Nov 5 calls; QuickBooks has no estimates, so open orders stay ERP). Payroll and other expenses without a bill not included',
       // Before Nov 7 2026:
       // source: 'QuickBooks cash + QuickBooks open invoices − QuickBooks open bills + ERP open orders (Ankur, Oct 27 + Nov 4 + Nov 5 calls). Payroll and other expenses without a bill not included',
-      source: 'QuickBooks cash + QuickBooks open invoices − QuickBooks open bills + QuickBooks open sales orders (Ankur, Oct 27 + Nov 4 + Nov 5 calls). Payroll and other expenses without a bill not included',
+      // Before Nov 9 2026:
+      // source: 'QuickBooks cash + QuickBooks open invoices − QuickBooks open bills + QuickBooks open sales orders (Ankur, Oct 27 + Nov 4 + Nov 5 calls). Payroll and other expenses without a bill not included',
+      source: 'QuickBooks cash + QuickBooks open invoices − QuickBooks open bills + QuickBooks open sales orders, ERP open orders for now (Ankur, Oct 27 + Nov 4 + Nov 5 calls, Nov 7 email). Payroll and other expenses without a bill not included',
       status: 'live',
     },
     {
@@ -53,7 +59,9 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
       formula: '= Σ QuickBooks open sales orders: not closed / cancelled and not linked to an invoice (an order leaves Open Orders when it is invoiced and is then counted in open invoices, so it is never counted twice). Amount = product / service lines, excl. tax. Each order goes in the quarter of its ship date, else due date (none or past → current quarter)',
       // Before Nov 7 2026:
       // source: 'Today: ERP sales orders (status confirmed / processing). Ankur keeps open sales orders in QuickBooks too (Nov 5 call): this moves to QuickBooks once the QuickBooks transaction type is confirmed (QuickBooks estimates are 0)',
-      source: 'QuickBooks open sales orders (Ankur, Nov 5 call: "on QuickBooks under invoices, the open sales orders"): status not closed / cancelled and not linked to an invoice; amount = product / service lines excl. tax; quarter = ship date, else due date (none or past → current quarter). QuickBooks only: if the sync could not read sales orders, none are added and the dashboard says Sync QuickBooks',
+      // Before Nov 9 2026:
+      // source: 'QuickBooks open sales orders (Ankur, Nov 5 call: "on QuickBooks under invoices, the open sales orders"): status not closed / cancelled and not linked to an invoice; amount = product / service lines excl. tax; quarter = ship date, else due date (none or past → current quarter). QuickBooks only: if the sync could not read sales orders, none are added and the dashboard says Sync QuickBooks',
+      source: 'QuickBooks open sales orders (Ankur, Nov 5 call: "on QuickBooks under invoices, the open sales orders"): status not closed / cancelled and not linked to an invoice; amount = product / service lines excl. tax; quarter = ship date, else due date (none or past → current quarter). ERP fallback (Nov 9 2026, Ankur Nov 7 email: \"temporarily use from ERP although I prefer QuickBooks\"): while QuickBooks sales orders cannot be read, the ERP orders on the books are used: firm confirmed / processing orders not delivered, tire lines net of discounts, excl. tax, commission-only excluded, in the quarter of the expected delivery date (requested delivery, else confirmed ETA, else ETA to US port; none or past → current quarter). An ERP order leaves once it is marked Invoiced in the ERP. The quarter table row says "Open orders (ERP, for now)" when the ERP is used',
       status: 'live',
     },
   ],
@@ -170,10 +178,14 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
     {
       kpi: 'Backlog Tires',
       formula: '= Σ product-line quantities of the QuickBooks open sales orders (not closed / cancelled, not linked to an invoice)',
-      source: 'QuickBooks open sales orders (Ankur, Nov 5 call), last sync; "Sync QuickBooks" when the sync could not read them',
+      // Before Nov 9 2026:
+      // source: 'QuickBooks open sales orders (Ankur, Nov 5 call), last sync; "Sync QuickBooks" when the sync could not read them',
+      source: 'QuickBooks open sales orders (Ankur, Nov 5 call), last sync. While the sync cannot read them: ERP firm orders (confirmed / processing) not delivered yet, tire lines, commission-only excluded, for now (Ankur, Nov 7 email); the cell note says "ERP open orders"',
       status: 'live',
     },
-    { kpi: 'Backlog Revenue', formula: '= Σ product-line amounts (excl. tax) of the same QuickBooks open sales orders', source: 'QuickBooks open sales orders, last sync', status: 'live' },
+    // Before Nov 9 2026:
+    // { kpi: 'Backlog Revenue', formula: '= Σ product-line amounts (excl. tax) of the same QuickBooks open sales orders', source: 'QuickBooks open sales orders, last sync', status: 'live' },
+    { kpi: 'Backlog Revenue', formula: '= Σ product-line amounts (excl. tax) of the same QuickBooks open sales orders (ERP for now: remaining tires × net unit price of the sales order line)', source: 'QuickBooks open sales orders, last sync; ERP sales orders for now when QuickBooks has none', status: 'live' },
     { kpi: 'Revenue / Tire', formula: '= Backlog Revenue ÷ Backlog Tires', source: 'Calculated (QuickBooks)', status: 'live' },
     {
       kpi: 'Backlog GP, GP / Tire, GP %',
@@ -182,7 +194,8 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
       // source: `${ERP_COST} · stays ERP: QuickBooks sales orders have no tire cost`,
       formula:
         '= Backlog Revenue − Backlog Tires × ERP cost per tire (ERP cost per tire = ERP cost of the remaining tires on firm confirmed / processing orders ÷ those tires). GP / Tire = GP ÷ Backlog Tires; GP % = GP ÷ Backlog Revenue × 100',
-      source: `Revenue and tires: QuickBooks open sales orders · cost per tire: ${ERP_COST} (QuickBooks sales orders have no tire cost)`,
+      // Before Nov 9 2026: source: `Revenue and tires: QuickBooks open sales orders · cost per tire: ${ERP_COST} (QuickBooks sales orders have no tire cost)`,
+      source: `Revenue and tires: QuickBooks open sales orders · cost per tire: ${ERP_COST} (QuickBooks sales orders have no tire cost). ERP for now while QuickBooks sales orders cannot be read: GP = ERP backlog revenue − ERP cost of the remaining tires`,
       status: 'live',
     },
     {

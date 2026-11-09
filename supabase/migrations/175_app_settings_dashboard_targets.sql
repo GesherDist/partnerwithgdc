@@ -9,7 +9,7 @@
 --
 -- Adds:
 --   - app_settings: one row per setting key, value as JSON
---   - row 'dashboard_targets' with today's values (so nothing changes until edited)
+--   - row 'dashboard_targets' with Ankur's values ($400,000 / 18%, Nov 7 email)
 --
 -- Safe for existing data: new table only. Read / written by the server
 -- (service role); RLS on with no policies, so browsers cannot read or write it.
@@ -27,7 +27,13 @@ COMMENT ON COLUMN app_settings.value IS 'Setting value as JSON, e.g. {"monthlyRe
 
 ALTER TABLE app_settings ENABLE ROW LEVEL SECURITY;
 
--- Today's hardcoded targets, so the dashboard shows the same values until they are edited
+-- Before Nov 9 2026 (the old hardcoded targets):
+-- INSERT INTO app_settings (key, value)
+-- VALUES ('dashboard_targets', '{"monthlyRevenueTarget": 220000, "marginTargetPct": 30}'::jsonb)
+-- ON CONFLICT (key) DO NOTHING;
+
+-- Ankur's targets (Nov 7 email): $400,000 monthly revenue, 18% margin ("although this could change").
+-- If this migration already ran with the old values, change them in Settings > Dashboard Targets.
 INSERT INTO app_settings (key, value)
-VALUES ('dashboard_targets', '{"monthlyRevenueTarget": 220000, "marginTargetPct": 30}'::jsonb)
+VALUES ('dashboard_targets', '{"monthlyRevenueTarget": 400000, "marginTargetPct": 18}'::jsonb)
 ON CONFLICT (key) DO NOTHING;

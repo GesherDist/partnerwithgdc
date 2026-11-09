@@ -143,7 +143,8 @@ export function DashboardTargetsSettings() {
                 <p className="text-xs text-muted-foreground">
                   {loaded.updatedAt
                     ? `Last saved ${format(new Date(loaded.updatedAt), 'MMM d, yyyy h:mm a')}${loaded.updatedByName ? ` by ${loaded.updatedByName}` : ''}`
-                    : 'Default values ($220,000 / 30%), not saved yet'}
+                    : // Before Nov 9 2026: 'Default values ($220,000 / 30%), not saved yet'
+                      'Default values ($400,000 / 18%), not saved yet'}
                   {!loaded.canEdit && ' · You can view these targets; editing needs the Settings edit permission'}
                 </p>
                 {loaded.canEdit && (

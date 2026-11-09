@@ -17,7 +17,7 @@ import { PdfViewerModal } from '@/shared/components/pdf-viewer/PdfViewerModal';
 import { cn } from '@/shared/lib/utils';
 import { useInvoice } from '../hooks/useInvoice';
 import { pushInvoiceToQuickBooks, getInvoiceCommissionOrders } from '../actions';
-import { INVOICE_PERMISSIONS } from '../lib/permissions';
+import { INVOICE_PERMISSIONS, INVOICES_READ_ONLY } from '../lib/permissions';
 import { useAuthStore } from '@/shared/stores/auth.store';
 import type { BillableCommissionOrder } from '../services/invoice.service';
 import { INVOICE_STATUS_COLORS, INVOICE_STATUS_LABELS, INVOICE_TYPE_LABELS } from '../types';
@@ -42,7 +42,9 @@ export function ViewInvoiceDrawer({
   const [showPdfModal, setShowPdfModal] = useState(false);
   const [isPushingToQbo, setIsPushingToQbo] = useState(false);
   const { hasPermission } = useAuthStore();
-  const mayPushToQbo = hasPermission(INVOICE_PERMISSIONS.pushQbo);
+  // Before Nov 9 2026: const mayPushToQbo = hasPermission(INVOICE_PERMISSIONS.pushQbo);
+  // Hidden: invoices are created in QuickBooks (Ankur, Nov 7 email)
+  const mayPushToQbo = !INVOICES_READ_ONLY && hasPermission(INVOICE_PERMISSIONS.pushQbo);
 
   // Commission invoice: the customer orders the commission is billed for
   const isCommissionInvoice = invoice?.invoiceType === 'commission';

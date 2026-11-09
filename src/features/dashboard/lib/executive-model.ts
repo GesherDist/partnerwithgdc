@@ -59,7 +59,9 @@ export interface CashProjection {
   quarters: CashQuarter[];
   throughDate: string;
   /** QuickBooks open sales orders included, or 'missing' when the snapshot has none (Nov 7 2026) */
-  ordersSource: 'quickbooks' | 'missing';
+  // Before Nov 9 2026: ordersSource: 'quickbooks' | 'missing';
+  // Nov 9 2026: 'erp' = QuickBooks open sales orders not available, ERP orders on the books used for now
+  ordersSource: 'quickbooks' | 'erp' | 'missing';
   /** Backlog orders placed in the current quarter: no expected date / date already passed */
   undatedOrders: number;
   overdueOrders: number;
@@ -160,13 +162,25 @@ const quarterLabel = (start: string) => `Q${Math.floor((Number(start.slice(5, 7)
  * has none, no orders are added and the dashboard says "Sync QuickBooks".
  * Before Nov 7 2026 the ERP orders on the books (erp.backlogOrders) were used.
  */
+// Before Nov 9 2026 (QuickBooks only):
+// export function projectionOrdersOf(
+//   qbo: QboFinancials | null
+// ): { orders: BacklogOrder[]; source: 'quickbooks' | 'missing' } {
+//   const qso = qbo?.periods?.openSalesOrders;
+//   if (!qso) {
+//     // Before Nov 7 2026: return { orders: erp.backlogOrders, source: 'erp' };
+//     return { orders: [], source: 'missing' };
+//   }
+// Nov 9 2026 (Ankur, Nov 7 email: "If we cannot find it from there we can temporarily use from ERP
+// although I prefer QuickBooks"): QuickBooks open sales orders first; when the snapshot has none,
+// the ERP orders on the books (erp.backlogOrders) for now. Pass no erpOrders to get 'missing' as before.
 export function projectionOrdersOf(
-  qbo: QboFinancials | null
-): { orders: BacklogOrder[]; source: 'quickbooks' | 'missing' } {
+  qbo: QboFinancials | null,
+  erpOrders?: BacklogOrder[]
+): { orders: BacklogOrder[]; source: 'quickbooks' | 'erp' | 'missing' } {
   const qso = qbo?.periods?.openSalesOrders;
   if (!qso) {
-    // Before Nov 7 2026: return { orders: erp.backlogOrders, source: 'erp' };
-    return { orders: [], source: 'missing' };
+    return erpOrders ? { orders: erpOrders, source: 'erp' } : { orders: [], source: 'missing' };
   }
   return {
     source: 'quickbooks',
@@ -208,7 +222,8 @@ export function buildCashProjection(
   openInvoices?: QboOpenInvoices | null,
   invoicesAsOf: string | null = null,
   openBills?: QboOpenBills | null,
-  ordersSource: 'quickbooks' | 'missing' = 'missing'
+  // Before Nov 9 2026: ordersSource: 'quickbooks' | 'missing' = 'missing'
+  ordersSource: 'quickbooks' | 'erp' | 'missing' = 'missing'
 ): CashProjection {
   const current = quarterStart(asOf);
   const byQuarter = new Map<string, { inflow: number; receivables: number; invoices: number; payables: number; bills: number; orders: number; tires: number }>();
@@ -627,7 +642,13 @@ export function buildExecutiveModel(
   //   revenue: { current: v(b.revenue), ...histRow((d) => d.backlogRevenue) },
   //   revenuePerTire: { current: b.tires ? v(Math.round((b.revenue / b.tires) * 100) / 100) : none(REASON.noSales), ... },
   const qsoBacklog = q?.openSalesOrders ?? null;
-  const noQboOrders = none('Sync QuickBooks (open sales orders)');
+  // Before Nov 9 2026: const noQboOrders = none('Sync QuickBooks (open sales orders)');
+  // Nov 9 2026 (Ankur, Nov 7 email: "temporarily use from ERP"): without QuickBooks open sales
+  // orders, Backlog uses the ERP firm orders not delivered yet (erp.backlog), as before Nov 7
+  const erpNote = 'ERP open orders (QuickBooks sales orders not available)';
+  const bGpErp = b.cogs === null ? null : Math.round((b.revenue - b.cogs) * 100) / 100;
+  const erpGpCell = (value: number | null) => (bGpErp === null ? none(REASON.noCost) : v(value, bCostNote ?? erpNote));
+  const erpGpHist = bGpErp === null ? { t90Avg: none(REASON.noCost), ytdAvg: none(REASON.noCost), py: none(REASON.noCost) } : histNone;
   // Nov 7 2026: Backlog GP = QuickBooks backlog revenue − QuickBooks backlog tires × ERP cost per
   // tire (ERP backlog cost ÷ ERP backlog tires: the average order-cycle cost of the open orders)
   const erpCostPerTire = b.cogs !== null && b.tires > 0 ? b.cogs / b.tires : null;
@@ -635,12 +656,15 @@ export function buildExecutiveModel(
   const qGpReason = !qsoBacklog ? 'Sync QuickBooks (open sales orders)' : b.tires > 0 ? REASON.noCost : 'No ERP backlog tires to take the cost per tire from';
   const qGpCell = (value: number | null) => (qGp === null ? none(qGpReason) : v(value, bCostNote));
   const gpHistNone = { t90Avg: none(qGpReason), ytdAvg: none(qGpReason), py: none(qGpReason) };
+  // Before Nov 9 2026: tires / revenue / revenuePerTire showed noQboOrders ("Sync QuickBooks") without QuickBooks
   const backlog: ExecutiveDashboardModel['backlog'] = {
-    tires: { current: qsoBacklog ? v(qsoBacklog.tires) : noQboOrders, ...histRow((d) => d.backlogTires) },
-    revenue: { current: qsoBacklog ? v(qsoBacklog.total) : noQboOrders, ...histRow((d) => d.backlogRevenue) },
+    tires: { current: qsoBacklog ? v(qsoBacklog.tires) : v(b.tires, erpNote), ...histRow((d) => d.backlogTires) },
+    revenue: { current: qsoBacklog ? v(qsoBacklog.total) : v(b.revenue, erpNote), ...histRow((d) => d.backlogRevenue) },
     revenuePerTire: {
       current: !qsoBacklog
-        ? noQboOrders
+        ? b.tires
+          ? v(Math.round((b.revenue / b.tires) * 100) / 100, erpNote)
+          : none(REASON.noSales)
         : qsoBacklog.tires
           ? v(Math.round((qsoBacklog.total / qsoBacklog.tires) * 100) / 100)
           : none(REASON.noSales),
@@ -650,15 +674,20 @@ export function buildExecutiveModel(
     // grossProfit: { current: bGp === null ? none(REASON.noCost) : v(bGp, bCostNote), ...(bGp === null ? costNone : histNone) },
     // gpPerTire: { current: bGp === null ? none(REASON.noCost) : v(div(bGp, b.tires) === null ? null : Math.round((bGp / b.tires) * 100) / 100, bCostNote), ... },
     // gpPct: { current: bGp === null ? none(REASON.noCost) : v(div(bGp, b.revenue) === null ? null : Math.round((bGp / b.revenue) * 1000) / 10, bCostNote), ... },
-    grossProfit: { current: qGpCell(qGp), ...(qGp === null ? gpHistNone : histNone) },
-    gpPerTire: {
-      current: qGpCell(qGp === null || !qsoBacklog?.tires ? qGp : Math.round((qGp / qsoBacklog.tires) * 100) / 100),
-      ...(qGp === null ? gpHistNone : histNone),
-    },
-    gpPct: {
-      current: qGpCell(qGp === null || !qsoBacklog?.total ? qGp : Math.round((qGp / qsoBacklog.total) * 1000) / 10),
-      ...(qGp === null ? gpHistNone : histNone),
-    },
+    // Before Nov 9 2026 (QuickBooks only; "Sync QuickBooks" without it):
+    // grossProfit: { current: qGpCell(qGp), ...(qGp === null ? gpHistNone : histNone) },
+    // gpPerTire: { current: qGpCell(qGp === null || !qsoBacklog?.tires ? qGp : Math.round((qGp / qsoBacklog.tires) * 100) / 100), ...(qGp === null ? gpHistNone : histNone) },
+    // gpPct: { current: qGpCell(qGp === null || !qsoBacklog?.total ? qGp : Math.round((qGp / qsoBacklog.total) * 1000) / 10), ...(qGp === null ? gpHistNone : histNone) },
+    // Nov 9 2026: without QuickBooks open sales orders, GP = ERP backlog revenue − ERP backlog cost (as before Nov 7)
+    grossProfit: qsoBacklog
+      ? { current: qGpCell(qGp), ...(qGp === null ? gpHistNone : histNone) }
+      : { current: erpGpCell(bGpErp), ...erpGpHist },
+    gpPerTire: qsoBacklog
+      ? { current: qGpCell(qGp === null || !qsoBacklog.tires ? qGp : Math.round((qGp / qsoBacklog.tires) * 100) / 100), ...(qGp === null ? gpHistNone : histNone) }
+      : { current: erpGpCell(bGpErp === null || !b.tires ? bGpErp : Math.round((bGpErp / b.tires) * 100) / 100), ...erpGpHist },
+    gpPct: qsoBacklog
+      ? { current: qGpCell(qGp === null || !qsoBacklog.total ? qGp : Math.round((qGp / qsoBacklog.total) * 1000) / 10), ...(qGp === null ? gpHistNone : histNone) }
+      : { current: erpGpCell(bGpErp === null || !b.revenue ? bGpErp : Math.round((bGpErp / b.revenue) * 1000) / 10), ...erpGpHist },
   };
 
   // ---------- inventory ----------
@@ -685,7 +714,9 @@ export function buildExecutiveModel(
 
   // Before Nov 6 2026: buildCashProjection(current.cash, erp.backlogOrders, erp.asOf) — orders only
   // Before Nov 7 2026: buildCashProjection(current.cash, erp.backlogOrders, ...) — ERP orders only
-  const projectionOrders = projectionOrdersOf(qbo);
+  // Before Nov 9 2026: const projectionOrders = projectionOrdersOf(qbo);
+  // Nov 9 2026: ERP orders on the books while QuickBooks open sales orders are not available (Ankur, Nov 7 email)
+  const projectionOrders = projectionOrdersOf(qbo, erp.backlogOrders);
   const projection = current ? buildCashProjection(current.cash, projectionOrders.orders, erp.asOf, q?.openInvoices ?? null, qbo?.asOf ?? null, q?.openBills ?? null, projectionOrders.source) : null;
 
   return {
@@ -705,7 +736,8 @@ export function buildExecutiveModel(
       projectedCash: projection
         ? v(
             projection.quarters[projection.quarters.length - 1]!.closing,
-            `Through ${projection.throughDate} · ${projection.openInvoices ? 'open invoices + ' : ''}${projection.ordersSource === 'quickbooks' ? 'open sales orders' : 'open sales orders not synced'}${projection.openBills ? ' − open bills' : ''}`
+            // Before Nov 9 2026: ${projection.ordersSource === 'quickbooks' ? 'open sales orders' : 'open sales orders not synced'}
+            `Through ${projection.throughDate} · ${projection.openInvoices ? 'open invoices + ' : ''}${projection.ordersSource === 'quickbooks' ? 'open sales orders' : projection.ordersSource === 'erp' ? 'ERP open orders (QuickBooks sales orders not available)' : 'open sales orders not synced'}${projection.openBills ? ' − open bills' : ''}`
           )
         : none(qNote),
       projection,

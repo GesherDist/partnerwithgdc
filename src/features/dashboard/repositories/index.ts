@@ -19,9 +19,9 @@ import type { QboFinancials } from '@/modules/integrations/quickbooks/services/q
 import type { UnitsBySKUDataPoint, UnitsBySKUChartData, ProductLegendItem, ChannelPerformanceDataPoint, InventoryByLocation, DashboardStat, MarginDataPoint, RevenueDataPoint, DateRange, CommissionRevenueStats } from '../types';
 
 // Helper to format date as YYYY-MM-DD string
-// Open Orders now come from QuickBooks (Nov 7 2026); kept for the commented ERP query below
-// /** Open Orders = sales orders being worked on (agreed definition, Aug 27 2025) */
-// const OPEN_ORDER_STATUSES = ['confirmed', 'processing'];
+// Open Orders come from QuickBooks (Nov 7 2026); ERP used again for now when QuickBooks has none (Nov 9 2026)
+/** Open Orders = sales orders being worked on (agreed definition, Aug 27 2025) */
+const OPEN_ORDER_STATUSES = ['confirmed', 'processing'];
 
 function formatDateString(date: Date): string {
   const year = date.getFullYear();
@@ -500,7 +500,7 @@ export async function getInventoryByLocation(): Promise<InventoryByLocation[]> {
  * @param _dateRange - Overview date filter (not used by the cards)
  */
 export async function getDashboardStats(_dateRange?: DateRange): Promise<DashboardStat[]> {
-  // Settings > Dashboard Targets (Nov 7 2026; defaults $220,000 / 30%)
+  // Settings > Dashboard Targets (Nov 7 2026; defaults $400,000 / 18% since Nov 9, were $220,000 / 30%)
   const targets = await getDashboardTargets();
   // Only the commented ERP Open Orders query used the database (Nov 7 2026: cards all from QuickBooks)
   // const supabase = createAdminClient();
@@ -544,10 +544,17 @@ export async function getDashboardStats(_dateRange?: DateRange): Promise<Dashboa
   // const lastRevenue = lastMonth.revenue;
   // const ytdNetRevenue = ytd.revenue;
   // const lastYearYtdRevenue = lastYearYtd.revenue;
-  const currentRevenue = toCents(qboPnl?.mtd.salesRevenue);
-  const lastRevenue = toCents(qboPnl?.pm.salesRevenue);
-  const ytdNetRevenue = toCents(qboPnl?.ytd.salesRevenue);
-  const lastYearYtdRevenue = toCents(qboPnl?.py.salesRevenue);
+  // Before Nov 9 2026 (tire sales only, commission excluded):
+  // const currentRevenue = toCents(qboPnl?.mtd.salesRevenue);
+  // const lastRevenue = toCents(qboPnl?.pm.salesRevenue);
+  // const ytdNetRevenue = toCents(qboPnl?.ytd.salesRevenue);
+  // const lastYearYtdRevenue = toCents(qboPnl?.py.salesRevenue);
+  // Revenue cards include commission income (Ankur, Nov 7 email: "yes it can be included"):
+  // QuickBooks P&L Total Income = tire sales + commission. Blended Margin stays on tire sales (below).
+  const currentRevenue = toCents(qboPnl?.mtd.income);
+  const lastRevenue = toCents(qboPnl?.pm.income);
+  const ytdNetRevenue = toCents(qboPnl?.ytd.income);
+  const lastYearYtdRevenue = toCents(qboPnl?.py.income);
   const ytdNetRevenueChange = lastYearYtdRevenue > 0
     ? ((ytdNetRevenue - lastYearYtdRevenue) / lastYearYtdRevenue) * 100
     : 0;
@@ -581,9 +588,13 @@ export async function getDashboardStats(_dateRange?: DateRange): Promise<Dashboa
   // const ytdTotalCost = ytd.cogs;
   // const lastYearYtdTotalRevenue = lastYearYtd.revenue;
   // const lastYearYtdTotalCost = lastYearYtd.cogs;
-  const ytdTotalRevenue = ytdNetRevenue;
+  // Before Nov 9 2026 (when ytdNetRevenue was tire sales):
+  // const ytdTotalRevenue = ytdNetRevenue;
+  // const lastYearYtdTotalRevenue = lastYearYtdRevenue;
+  // Margin stays tire sales only (commission has no COGS), now that the Revenue cards include commission
+  const ytdTotalRevenue = toCents(qboPnl?.ytd.salesRevenue);
   const ytdTotalCost = toCents(qboPnl?.ytd.cogs);
-  const lastYearYtdTotalRevenue = lastYearYtdRevenue;
+  const lastYearYtdTotalRevenue = toCents(qboPnl?.py.salesRevenue);
   const lastYearYtdTotalCost = toCents(qboPnl?.py.cogs);
 
   // ERP Open Orders (replaced Nov 7 2026: Ankur, Nov 5 call — open sales orders come from QuickBooks only)
@@ -604,16 +615,49 @@ export async function getDashboardStats(_dateRange?: DateRange): Promise<Dashboa
   //
   // const openOrdersValue = openOrdersData?.reduce((sum, so) => sum + (so.grand_total || 0), 0) || 0;
 
-  // Nov 7 2026 (Ankur, Nov 5 call): open sales orders from QuickBooks only (not invoiced yet).
-  // No ERP fallback: without QuickBooks sales orders the card shows "—" and "Sync QuickBooks".
+  // Nov 7 2026 (Ankur, Nov 5 call): open sales orders from QuickBooks (not invoiced yet).
+  // Before Nov 9 2026: no ERP fallback (without QuickBooks sales orders the card showed "—" and "Sync QuickBooks").
   const qboOpenSalesOrders = (await loadQboFinancials())?.periods?.openSalesOrders ?? null;
   const lastMonthEndKey = formatDateString(lastMonthEnd);
-  const openOrdersCountShown = qboOpenSalesOrders?.count ?? 0;
-  const lastMonthOpenShown = qboOpenSalesOrders
-    ? qboOpenSalesOrders.orders.filter((o) => o.txnDate && o.txnDate <= lastMonthEndKey).length
-    : 0;
-  // QuickBooks amount is dollars; formatCurrency takes cents
-  const openOrdersValue = Math.round((qboOpenSalesOrders?.total ?? 0) * 100);
+  // Before Nov 9 2026:
+  // const openOrdersCountShown = qboOpenSalesOrders?.count ?? 0;
+  // const lastMonthOpenShown = qboOpenSalesOrders
+  //   ? qboOpenSalesOrders.orders.filter((o) => o.txnDate && o.txnDate <= lastMonthEndKey).length
+  //   : 0;
+  // // QuickBooks amount is dollars; formatCurrency takes cents
+  // const openOrdersValue = Math.round((qboOpenSalesOrders?.total ?? 0) * 100);
+
+  // Nov 9 2026 (Ankur, Nov 7 email: "If we cannot find it from there we can temporarily use from ERP
+  // although I prefer QuickBooks"): QuickBooks first; without it, ERP open orders (confirmed /
+  // processing, not deleted). Commission-only orders are left out (Ankur, Nov 7: unbilled commissions
+  // were "showing as an open sales order"); they are not Gesher sales.
+  let openOrdersSource: 'quickbooks' | 'erp' | 'none' = 'none';
+  let openOrdersCountShown = 0;
+  let lastMonthOpenShown = 0;
+  let openOrdersValue = 0; // cents (formatCurrency takes cents)
+  if (qboOpenSalesOrders) {
+    openOrdersSource = 'quickbooks';
+    openOrdersCountShown = qboOpenSalesOrders.count;
+    lastMonthOpenShown = qboOpenSalesOrders.orders.filter((o) => o.txnDate && o.txnDate <= lastMonthEndKey).length;
+    // QuickBooks amount is dollars
+    openOrdersValue = Math.round(qboOpenSalesOrders.total * 100);
+  } else {
+    const { data: erpOpenOrders, error: erpOpenError } = await createAdminClient()
+      .from('sales_orders')
+      .select('grand_total, order_date')
+      .in('status', OPEN_ORDER_STATUSES)
+      .is('deleted_at', null)
+      .or('is_commission_only.is.null,is_commission_only.eq.false');
+    if (erpOpenError) {
+      console.error('Error fetching ERP open orders:', erpOpenError);
+    } else {
+      openOrdersSource = 'erp';
+      openOrdersCountShown = (erpOpenOrders ?? []).length;
+      lastMonthOpenShown = (erpOpenOrders ?? []).filter((so) => so.order_date && String(so.order_date).slice(0, 10) <= lastMonthEndKey).length;
+      // ERP grand_total is cents (same as the card before Nov 7 2026)
+      openOrdersValue = (erpOpenOrders ?? []).reduce((sum, so) => sum + Number(so.grand_total ?? 0), 0);
+    }
+  }
 
   // Units change calculation
   const ytdUnitsChange = lastYearYtdUnits > 0 ? ((ytdUnits - lastYearYtdUnits) / lastYearYtdUnits) * 100 : 0;
@@ -707,13 +751,20 @@ export async function getDashboardStats(_dateRange?: DateRange): Promise<Dashboa
       id: 'open-orders',
       title: 'Open Orders',
       // Before Nov 7 2026: value: (openOrdersCount || 0).toString(),
-      value: qboOpenSalesOrders ? openOrdersCountShown.toString() : '—',
+      // Before Nov 9 2026: value: qboOpenSalesOrders ? openOrdersCountShown.toString() : '—',
+      value: openOrdersSource !== 'none' ? openOrdersCountShown.toString() : '—',
       change: `${openOrdersChange >= 0 ? '+' : ''}${openOrdersChange}`,
       trend: openOrdersChange <= 0 ? 'down' : 'up',
       icon: 'shopping-cart',
       color: 'bg-orange-500',
       // Before Nov 7 2026: subtitle: formatCurrency(openOrdersValue) + ' value',
-      subtitle: qboOpenSalesOrders ? formatCurrency(openOrdersValue) + ' value' : 'Sync QuickBooks',
+      // Before Nov 9 2026: subtitle: qboOpenSalesOrders ? formatCurrency(openOrdersValue) + ' value' : 'Sync QuickBooks',
+      subtitle:
+        openOrdersSource === 'quickbooks'
+          ? formatCurrency(openOrdersValue) + ' value'
+          : openOrdersSource === 'erp'
+            ? formatCurrency(openOrdersValue) + ' value · ERP (for now)'
+            : 'Sync QuickBooks',
     },
   ];
 

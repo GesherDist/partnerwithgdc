@@ -13,6 +13,9 @@ const Textarea = React.forwardRef<
         className
       )}
       ref={ref}
+      // Browser extensions add attributes such as fdprocessedid to form fields before
+      // React loads (dev hydration warning). Only this element's own attributes are ignored.
+      suppressHydrationWarning
       {...props}
     />
   )

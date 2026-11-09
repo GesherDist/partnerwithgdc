@@ -6,7 +6,7 @@
  * (migration 175, key 'dashboard_targets').
  *
  * Reading never fails: when the table is missing (migration not run yet) or the
- * row is empty, the previous hardcoded values are used ($220,000 / 30%).
+ * row is empty, the default values are used ($400,000 / 18%, Ankur Nov 7; were $220,000 / 30%).
  */
 
 import { db } from '@/shared/lib/supabase/database';
@@ -24,7 +24,10 @@ export interface DashboardTargets {
 const SETTINGS_KEY = 'dashboard_targets';
 
 /** Values used before the targets were editable */
-export const DEFAULT_DASHBOARD_TARGETS = { monthlyRevenueTarget: 220000, marginTargetPct: 30 } as const;
+// Before Nov 9 2026 (the old hardcoded values):
+// export const DEFAULT_DASHBOARD_TARGETS = { monthlyRevenueTarget: 220000, marginTargetPct: 30 } as const;
+// Ankur, Nov 7 email: "Monthly revenue target we can put at $400,000 and margin target at 18% although this could change"
+export const DEFAULT_DASHBOARD_TARGETS = { monthlyRevenueTarget: 400000, marginTargetPct: 18 } as const;
 
 const validNumber = (value: unknown, min: number, max: number): number | null => {
   const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
