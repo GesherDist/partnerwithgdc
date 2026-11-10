@@ -130,17 +130,17 @@ export default async function DashboardPage() {
     // Commission Actual comes from QuickBooks: no P&L in the snapshot yet → "—"
     const noQbo = commission.fromQuickBooks === false;
 
-    // Commission Expected (YTD) card
-    dynamicStats.push({
-      id: 'commission-expected-ytd',
-      title: 'Commission Expected (YTD)',
-      value: noQbo ? '—' : formatCurrency(commission.expectedYTD),
-      change: `${commission.change >= 0 ? '+' : ''}${commission.change.toFixed(1)}%`,
-      trend: commission.trend,
-      icon: 'credit-card',
-      color: 'bg-purple-500',
-      subtitle: noQbo ? 'Sync QuickBooks' : 'vs same period last year',
-    });
+    // Commission Expected (YTD) card: hidden (Ankur, Nov 10 2026: "Commissions expected we can delete")
+    // dynamicStats.push({
+    //   id: 'commission-expected-ytd',
+    //   title: 'Commission Expected (YTD)',
+    //   value: noQbo ? '—' : formatCurrency(commission.expectedYTD),
+    //   change: `${commission.change >= 0 ? '+' : ''}${commission.change.toFixed(1)}%`,
+    //   trend: commission.trend,
+    //   icon: 'credit-card',
+    //   color: 'bg-purple-500',
+    //   subtitle: noQbo ? 'Sync QuickBooks' : 'vs same period last year',
+    // });
 
     // Commission Actual (YTD) card
     dynamicStats.push({
@@ -152,7 +152,8 @@ export default async function DashboardPage() {
       icon: 'dollar-sign',
       color: 'bg-fuchsia-500',
       // ERP subtitle (replaced by QuickBooks, Nov 6 2026): 'Commission invoices to Galileo'
-      subtitle: noQbo ? 'Sync QuickBooks' : 'QuickBooks commission income',
+      // subtitle: noQbo ? 'Sync QuickBooks' : 'QuickBooks commission income',
+      subtitle: noQbo ? 'Sync QuickBooks' : 'QuickBooks commission invoiced',
     });
   }
 

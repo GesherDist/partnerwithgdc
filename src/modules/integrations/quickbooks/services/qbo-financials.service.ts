@@ -199,7 +199,14 @@ export interface QboPeriodFigures {
    * Accrual P&L income and COGS per period, for DSO and DIO (sales / COGS when
    * invoiced). Missing in snapshots taken before Nov 7, 2026 (pnl was Accrual then).
    */
-  accrualPnl?: Record<'pm' | 't90' | 'ytd' | 'py', { income: number; cogs: number }>;
+  // accrualPnl?: Record<'pm' | 't90' | 'ytd' | 'py', { income: number; cogs: number }>;
+  /**
+   * Nov 10 2026: also the commission income per period on Accrual basis.
+   * Commission counts when it is invoiced to Galileo, paid or not (Ankur:
+   * "Commissions actual YTD is $421,331"); the cash P&L only counts it once
+   * paid. `commission` and `mtd` are missing in snapshots before Nov 10 2026.
+   */
+  accrualPnl?: Record<'pm' | 't90' | 'ytd' | 'py', QboAccrualFigures> & { mtd?: QboAccrualFigures };
   /**
    * Units sold per period: Sales by Product/Service Summary (Accrual), product
    * items only (QuickBooks item type Inventory / Non-inventory; Service items
@@ -280,6 +287,14 @@ export interface QboUnitsSold {
 }
 
 /** One P&L column: QuickBooks section totals (fallback: mapped account categories) */
+/** Accrual P&L figures kept per period (DSO / DIO, Commission Actual) */
+export interface QboAccrualFigures {
+  income: number;
+  cogs: number;
+  /** Commission income accounts, Accrual. Missing before Nov 10 2026 */
+  commission?: number;
+}
+
 export interface QboPnlFigures {
   /** Total Income (tire sales + commission) */
   income: number;
@@ -961,6 +976,13 @@ async function buildPeriodFigures(
       return null as unknown as Report;
     })
   );
+  // Commission Actual MTD on Accrual basis (Nov 10 2026). Optional: kept apart
+  // from accrualJobs so a failure here never drops the DSO / DIO figures.
+  const accrualMtdJob = () =>
+    fetchReport(access, 'ProfitAndLoss', { start_date: periods.mtd.from, end_date: periods.mtd.to, accounting_method: 'Accrual' }).catch((error) => {
+      console.error('[QboFinancials] Accrual P&L (MTD) failed:', error);
+      return null as unknown as Report;
+    });
   const cashJobs = cashRanges.map(([, r]) => () =>
     fetchReport(access, 'CashFlow', { start_date: r.from, end_date: r.to })
   );
@@ -978,21 +1000,38 @@ async function buildPeriodFigures(
   );
 
   // One queue for every report so QuickBooks never sees more than 3 parallel calls
-  const all = await limited<Report>([...pnlJobs, ...cashJobs, ...balanceJobs, ...unitJobs, ...accrualJobs], 3);
+  // const all = await limited<Report>([...pnlJobs, ...cashJobs, ...balanceJobs, ...unitJobs, ...accrualJobs], 3);
+  const all = await limited<Report>([...pnlJobs, ...cashJobs, ...balanceJobs, ...unitJobs, ...accrualJobs, accrualMtdJob], 3);
   const pnls = all.slice(0, pnlJobs.length);
   const cashFlows = all.slice(pnlJobs.length, pnlJobs.length + cashJobs.length);
   const balanceSheets = all.slice(pnlJobs.length + cashJobs.length, pnlJobs.length + cashJobs.length + balanceJobs.length);
   const unitsStart = pnlJobs.length + cashJobs.length + balanceJobs.length;
   const itemSales = all.slice(unitsStart, unitsStart + unitJobs.length);
-  const accrualPnls = all.slice(unitsStart + unitJobs.length);
-  const accrualPnl = accrualPnls.every(Boolean)
-    ? (Object.fromEntries(
-        accrualRanges.map(([key], i) => {
-          const f = pnlFigures(accrualPnls[i]!, mappingOf);
-          return [key, { income: f.income, cogs: f.cogs }];
-        })
-      ) as Record<'pm' | 't90' | 'ytd' | 'py', { income: number; cogs: number }>)
-    : undefined;
+  // const accrualPnls = all.slice(unitsStart + unitJobs.length);
+  // const accrualPnl = accrualPnls.every(Boolean)
+  //   ? (Object.fromEntries(
+  //       accrualRanges.map(([key], i) => {
+  //         const f = pnlFigures(accrualPnls[i]!, mappingOf);
+  //         return [key, { income: f.income, cogs: f.cogs }];
+  //       })
+  //     ) as Record<'pm' | 't90' | 'ytd' | 'py', { income: number; cogs: number }>)
+  //   : undefined;
+  const accrualPnls = all.slice(unitsStart + unitJobs.length, unitsStart + unitJobs.length + accrualJobs.length);
+  const accrualMtdReport = all[unitsStart + unitJobs.length + accrualJobs.length];
+  const accrualOf = (report: Report): QboAccrualFigures => {
+    const f = pnlFigures(report, mappingOf);
+    return { income: f.income, cogs: f.cogs, commission: f.commission };
+  };
+  const accrualPnl: QboPeriodFigures['accrualPnl'] =
+    accrualPnls.every(Boolean)
+      ? {
+          ...(Object.fromEntries(accrualRanges.map(([key], i) => [key, accrualOf(accrualPnls[i]!)])) as Record<
+            'pm' | 't90' | 'ytd' | 'py',
+            QboAccrualFigures
+          >),
+          ...(accrualMtdReport ? { mtd: accrualOf(accrualMtdReport) } : {}),
+        }
+      : undefined;
   const itemTypes = await fetchItemTypes(access).catch((error) => {
     console.error('[QboFinancials] Item types failed:', error);
     return new Map<string, string>();

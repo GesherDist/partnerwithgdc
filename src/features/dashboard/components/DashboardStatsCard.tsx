@@ -99,7 +99,8 @@ const CALCULATION_FORMULAS: Record<string, { title: string; formula: string; not
     title: 'Commission Actual (YTD) Calculation',
     // ERP formula (replaced by QuickBooks, Nov 6 2026):
     // formula: 'Commission Actual = Σ line totals of commission invoices to Galileo (not draft/cancelled)\n\nFiltered by: invoices.invoice_date (Jan 1 to today)\nInvoice type: Commission',
-    formula: 'Commission Actual = QuickBooks Profit and Loss income accounts named "commission", Jan 1 to the last sync',
+    // formula: 'Commission Actual = QuickBooks Profit and Loss income accounts named "commission", Jan 1 to the last sync',
+    formula: 'Commission Actual = QuickBooks Profit and Loss (Accrual basis) income accounts named "commission", Jan 1 to the last sync\n\nAccrual: a commission invoice to Galileo counts when it is invoiced, paid or not (the rest of the P&L stays on Cash basis)',
     notes: 'Commission billed to Galileo (kept out of tire revenue and margin). Same as Executive › Profitability › Commission Billed. Compared to the same period last year.',
   },
 };

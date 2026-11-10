@@ -723,7 +723,8 @@ async function commissionTableCsv(): Promise<string> {
     rows.push(['TOTAL (ERP reference)', '', '', '', dollars(mine.reduce((s, l) => s + l.amount, 0))]);
     rows.push(['Dashboard (QuickBooks, last sync)', '', '', '', cellValue(model.commission.billed[k])]);
     return {
-      title: `Commission Billed – ${rangeTitle(PERIOD_LABEL[k], p[k])}: ERP commission invoices to Galileo for reference (dashboard uses QuickBooks commission income accounts)`,
+      // title: `Commission Billed – ${rangeTitle(PERIOD_LABEL[k], p[k])}: ERP commission invoices to Galileo for reference (dashboard uses QuickBooks commission income accounts)`,
+      title: `Commission Billed – ${rangeTitle(PERIOD_LABEL[k], p[k])}: ERP commission invoices to Galileo for reference (dashboard uses QuickBooks commission income accounts, Accrual)`,
       columns: ['Invoice #', 'Invoice Date', 'Status', 'Description', 'Amount'],
       rows,
     };

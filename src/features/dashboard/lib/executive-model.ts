@@ -10,6 +10,7 @@ import type { BacklogOrder, ErpExecutiveFigures, SupplyCycle } from '../services
 import type { DailySnapshot } from '../services/executive-history.service';
 import type { QboBalances, QboFinancials, QboOpenBills, QboOpenInvoices } from '@/modules/integrations/quickbooks/services/qbo-financials.service';
 import { addYears } from './periods';
+import { qboCommission } from './commission';
 // PeriodKey: used by the commented ERP rows -- import { type PeriodKey } from './periods';
 
 export interface Cell {
@@ -568,8 +569,12 @@ export function buildExecutiveModel(
   const commissionBilled = {} as Record<Cols4, Cell>;
   for (const c of cols4) {
     // Commission billed = QuickBooks commission income accounts (Nov 6 2026)
-    const pl = q?.pnl?.[c];
-    commissionBilled[c] = pl ? v(pl.commission) : none(qNote);
+    // const pl = q?.pnl?.[c];
+    // commissionBilled[c] = pl ? v(pl.commission) : none(qNote);
+    // Nov 10 2026: Accrual basis (counted when invoiced, paid or not); Cash
+    // figure for snapshots synced before Nov 10
+    const billed = qboCommission(q, c);
+    commissionBilled[c] = billed ? v(billed.amount) : none(qNote);
     // ERP commission invoices (replaced by QuickBooks):
     // const amount = erp.commission[c as PeriodKey];
     // const s = erp.sales[c as PeriodKey];

@@ -498,7 +498,8 @@ export function ProfitabilityTables() {
           <SpecTable
             id="2.1b"
             title="Commission Revenue"
-            description={`Commission Billed = QuickBooks income accounts named "commission" (P&L, last sync). Delivered, not billed yet (ERP): ${
+            // description={`Commission Billed = QuickBooks income accounts named "commission" (P&L, last sync). Delivered, not billed yet (ERP): ${
+            description={`Commission Billed = QuickBooks income accounts named "commission" (P&L, Accrual: counted when invoiced, last sync). Delivered, not billed yet (ERP): ${
               m.commission.unbilled.value === null ? '—' : formatValue(m.commission.unbilled.value, 'money')
             } on ${m.commission.unbilledOrders} order${m.commission.unbilledOrders === 1 ? '' : 's'}.`}
             columns={C4}

@@ -148,8 +148,10 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
   '2.1b': [
     {
       kpi: 'Commission Billed',
-      formula: '= Σ line totals of commission invoices to Galileo (not draft/cancelled) dated in the period',
-      source: 'ERP commission invoices · kept out of Revenue, COGS and Gross Profit (Ankur, Sep 8 / Sep 25)',
+      // formula: '= Σ line totals of commission invoices to Galileo (not draft/cancelled) dated in the period',
+      // source: 'ERP commission invoices · kept out of Revenue, COGS and Gross Profit (Ankur, Sep 8 / Sep 25)',
+      formula: '= QuickBooks P&L income accounts named "commission", Accrual basis (counted when invoiced, paid or not)',
+      source: 'QuickBooks (last sync) · Accrual so unpaid commission invoices count (Ankur, Nov 10 2026) · kept out of tire Revenue, COGS and Gross Profit',
       status: 'live',
     },
     {

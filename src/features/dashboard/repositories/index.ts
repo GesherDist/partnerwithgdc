@@ -13,6 +13,7 @@ import { loadRecognizedSales, loadUnbilledDeliveredCommissionOrders /* , summari
 import { getPeriods } from '../lib/periods';
 import { erpChannelIndex, resolveChannel } from '../lib/channel';
 import { getDashboardTargets } from '../services/dashboard-targets.service';
+import { qboCommission } from '../lib/commission';
 // ERP / QuickBooks split of the Revenue Trend (replaced: all months from QuickBooks, Nov 6 2026)
 // import { revenueSourceOf } from '../lib/revenue-history';
 import type { QboFinancials } from '@/modules/integrations/quickbooks/services/qbo-financials.service';
@@ -1089,12 +1090,18 @@ export async function getCommissionRevenue(): Promise<CommissionRevenueStats> {
   //       0
   //     );
   // Commission Actual: QuickBooks commission income accounts (P&L, last sync, Nov 6 2026)
-  const qboPnl = (await loadQboFinancials())?.periods?.pnl ?? null;
+  // const qboPnl = (await loadQboFinancials())?.periods?.pnl ?? null;
+  const qboPeriods = (await loadQboFinancials())?.periods ?? null;
+  const qboPnl = qboPeriods?.pnl ?? null;
   // ERP commission invoices (replaced by QuickBooks):
   // const actualCents = billedIn(periods.ytd.from, periods.ytd.to);
   // const lastYearCents = billedIn(periods.py.from, periods.py.to);
-  const actualCents = Math.round((qboPnl?.ytd.commission ?? 0) * 100);
-  const lastYearCents = Math.round((qboPnl?.py.commission ?? 0) * 100);
+  // Cash basis (until Nov 10 2026): an unpaid commission invoice counted as $0
+  // const actualCents = Math.round((qboPnl?.ytd.commission ?? 0) * 100);
+  // const lastYearCents = Math.round((qboPnl?.py.commission ?? 0) * 100);
+  // Accrual basis (Nov 10 2026): every commission invoice, paid or not
+  const actualCents = Math.round((qboCommission(qboPeriods, 'ytd')?.amount ?? 0) * 100);
+  const lastYearCents = Math.round((qboCommission(qboPeriods, 'py')?.amount ?? 0) * 100);
   const unbilledCents = unbilledOrders.reduce((sum, so) => sum + Number(so.commission_amount ?? 0), 0);
 
   const actualYTD = actualCents / 100;
