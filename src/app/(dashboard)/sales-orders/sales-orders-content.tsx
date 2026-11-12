@@ -305,6 +305,9 @@ export function SalesOrdersPageContent() {
       const result = await cancelSalesOrder(orderToCancel.id, cancelReason || undefined);
       if (result.success) {
         toast.success(`Order ${orderToCancel.orderNumber} cancelled`);
+        if (result.warning) {
+          toast.warning(result.warning, { duration: 10000 });
+        }
         refetchOrders();
       } else {
         toast.error(result.error || 'Failed to cancel order');
@@ -446,6 +449,7 @@ export function SalesOrdersPageContent() {
         open={isViewDrawerOpen}
         onClose={handleViewDrawerClose}
         onEdit={handleEdit}
+        onOrderChanged={() => refetchOrders()}
       />
 
       {/* Edit Sales Order Drawer */}

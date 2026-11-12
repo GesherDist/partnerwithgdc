@@ -25,6 +25,7 @@ import type {
   CreateSalesOrderItemDTO,
   UpdateSalesOrderCommissionDTO,
 } from '../types';
+import { ORDER_STATUS_TRANSITIONS } from '../types';
 import { db } from '@/shared/lib/supabase/database';
 import { auditService } from '@/shared/lib/audit';
 import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
@@ -39,6 +40,8 @@ export interface ActionResult<T = unknown> {
   data?: T;
   error?: string;
   errors?: Record<string, string[]>;
+  /** Done, but something needs a look (shown as a warning toast) */
+  warning?: string;
 }
 
 // ============================================
@@ -417,6 +420,8 @@ export async function updateSalesOrderFromDTO(
     items: CreateSalesOrderItemDTO[];
     customerNotes: string | null;
     internalNotes: string | null;
+    /** Typed in the form; saved when it differs from the current number (Nov 11 2026) */
+    orderNumber?: string | null;
   }
 ): Promise<ActionResult<SalesOrderWithItems>> {
   const auth = await authorize('orders.edit');
@@ -425,7 +430,23 @@ export async function updateSalesOrderFromDTO(
   }
 
   // Extract items and header data
-  const { items, ...headerData } = dto;
+  // const { items, ...headerData } = dto;
+  // orderNumber is saved separately below (the header update ignores it)
+  const { items, orderNumber, ...headerData } = dto;
+
+  // New order number typed in the form: check it before saving anything, so a
+  // taken number does not leave the order half-saved (Ankur, Nov 11 2026)
+  let newOrderNumber: string | null = null;
+  if (orderNumber && orderNumber.trim() !== '') {
+    const current = await salesOrderService.getById(orderId);
+    if (current.success && current.data && current.data.orderNumber !== orderNumber.trim()) {
+      const check = await salesOrderService.validateNewOrderNumber(orderId, orderNumber);
+      if (!check.ok) {
+        return { success: false, error: check.error, errors: { orderNumber: [check.error] } };
+      }
+      newOrderNumber = check.orderNumber;
+    }
+  }
 
   // Update header fields
   const headerResult = await salesOrderService.update(orderId, headerData, auth.user.id);
@@ -434,7 +455,25 @@ export async function updateSalesOrderFromDTO(
   }
 
   // Update items
-  const itemsResult = await salesOrderService.updateItems(orderId, items, auth.user.id);
+  // const itemsResult = await salesOrderService.updateItems(orderId, items, auth.user.id);
+  let itemsResult = await salesOrderService.updateItems(orderId, items, auth.user.id);
+
+  // Then the number, and return the order with it
+  if (itemsResult.success && newOrderNumber) {
+    const numberResult = await salesOrderService.changeOrderNumber(orderId, newOrderNumber, auth.user.id);
+    if (!numberResult.success) {
+      revalidatePath('/sales-orders');
+      return {
+        success: false,
+        error: `Order saved, but the number was not changed: ${numberResult.error ?? 'unknown error'}`,
+        errors: numberResult.errors,
+      };
+    }
+    const refreshed = await salesOrderService.getById(orderId);
+    if (refreshed.success && refreshed.data) {
+      itemsResult = refreshed;
+    }
+  }
 
   if (itemsResult.success) {
     revalidatePath('/sales-orders');
@@ -443,6 +482,33 @@ export async function updateSalesOrderFromDTO(
   }
 
   return itemsResult;
+}
+
+/**
+ * Change only the sales order number, in any status except cancelled
+ * (Ankur, Nov 11 2026). Used by the "Change Number" button on orders that
+ * can no longer be fully edited (confirmed, processing, shipped, delivered,
+ * invoiced).
+ */
+export async function changeSalesOrderNumber(
+  orderId: string,
+  orderNumber: string
+): Promise<ActionResult<SalesOrder>> {
+  const auth = await authorize('orders.edit');
+  if (!auth.ok) {
+    return auth.result;
+  }
+
+  const result = await salesOrderService.changeOrderNumber(orderId, orderNumber, auth.user.id);
+
+  if (result.success) {
+    revalidatePath('/sales-orders');
+    revalidatePath(`/sales-orders/${orderId}`);
+    revalidatePath('/api/sales-orders');
+    revalidatePath('/operations');
+  }
+
+  return result;
 }
 
 /**
@@ -1578,17 +1644,48 @@ export async function cancelSalesOrder(
 
   const salesOrder = soResult.data;
 
-  // Only deallocate if order was confirmed and has warehouse
-  if (salesOrder.status === 'confirmed' && salesOrder.warehouseId) {
-    await deallocateInventoryForSalesOrder(salesOrder, auth.user.id);
+  // // Only deallocate if order was confirmed and has warehouse
+  // if (salesOrder.status === 'confirmed' && salesOrder.warehouseId) {
+  //   await deallocateInventoryForSalesOrder(salesOrder, auth.user.id);
+  // }
+  //
+  // (Old, before Nov 12 2026: allocations stayed "allocated" on a cancelled
+  // order, so their warehouse / dealer stock stayed reserved and their PO stayed
+  // sold - MWI C-SO2600038. Stock was also released before checking that the
+  // order may be cancelled at all.)
+
+  // Shipped / delivered / invoiced / cancelled orders cannot be cancelled:
+  // check first, so no stock is released for a cancel that is then refused
+  if (!ORDER_STATUS_TRANSITIONS[salesOrder.status]?.includes('cancelled')) {
+    return { success: false, error: `Cannot cancel order in ${salesOrder.status} status` };
   }
 
-  const result = await salesOrderService.cancel(id, reason, auth.user.id);
+  // 1. Release every open allocation: its own warehouse / dealer stock, and its PO
+  const { releaseAllocationsForCancelledOrder } = await import('../services/fulfillment-orchestration.service');
+  const release = await releaseAllocationsForCancelledOrder(id);
+  if (!release.success) {
+    return { success: false, error: release.error || 'Could not release the order allocations' };
+  }
+
+  // 2. Lines without any allocation: old way, as before (confirmed orders with a warehouse)
+  if (salesOrder.status === 'confirmed' && salesOrder.warehouseId) {
+    const linesWithoutAllocations = salesOrder.items.filter((item) => !release.itemIdsWithAllocations.has(item.id));
+    if (linesWithoutAllocations.length > 0) {
+      await deallocateInventoryForSalesOrder({ ...salesOrder, items: linesWithoutAllocations }, auth.user.id);
+    }
+  }
+
+  const result: ActionResult<SalesOrder> = await salesOrderService.cancel(id, reason, auth.user.id);
 
   if (result.success) {
     revalidatePath('/sales-orders');
     revalidatePath(`/sales-orders/${id}`);
     revalidatePath('/inventory');
+    revalidatePath('/purchase-orders');
+    revalidatePath('/operations');
+    if (release.warnings.length > 0) {
+      result.warning = `Order cancelled, but check the inventory: ${release.warnings.join('; ')}`;
+    }
   }
 
   return result;

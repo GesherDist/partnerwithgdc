@@ -47,6 +47,13 @@ import type {
 } from '../types';
 import { getDateRangeFromPreset, DATE_RANGE_LABELS } from '../types';
 import type { DashboardTab, OverviewSection } from '../lib/dashboard-tabs';
+// Nov 12 2026: Cash / Accrual toggle (Ankur, Nov 11 email)
+import { PnlBasisContext, PnlBasisToggle } from './PnlBasisToggle';
+import { getPnlBasisOptions } from '../actions/executive-dashboard.actions';
+import { isPnlBasis, type PnlBasis } from '../lib/pnl-basis';
+
+/** Remembered per viewer (browser storage; Cash when not available) */
+const BASIS_STORAGE_KEY = 'gdc.dashboard.pnlBasis';
 
 // ============================================
 // TYPES
@@ -102,8 +109,16 @@ export function DashboardContent({
   const [marginData, setMarginData] = useState<MarginDataPoint[]>(initialMarginData);
   const [revenueData, setRevenueData] = useState<RevenueDataPoint[]>(initialRevenueData);
 
+  // Cash / Accrual toggle (Nov 12 2026). The page opens on Cash (the server-rendered
+  // figures); a remembered Accrual choice is applied once the snapshot is known to have it.
+  const [basis, setBasis] = useState<PnlBasis>('Cash');
+  const [basisAvailable, setBasisAvailable] = useState<Record<PnlBasis, boolean>>({ Cash: true, Accrual: false });
+  const basisRef = useRef<PnlBasis>('Cash');
+  basisRef.current = basis;
+
   // Fetch data when date range changes (only the sections the user may see)
-  const fetchData = useCallback(async (dateRange: DateRange) => {
+  // const fetchData = useCallback(async (dateRange: DateRange) => {
+  const fetchData = useCallback(async (dateRange: DateRange, pnlBasis: PnlBasis = basisRef.current) => {
     setIsLoading(true);
     const allowed = (section: OverviewSection) => overviewSections.includes(section);
     const skipped = Promise.resolve({ success: false, data: undefined });
@@ -118,12 +133,15 @@ export function DashboardContent({
         revenueResult,
         commissionResult,
       ] = await Promise.all([
-        allowed('kpis') ? getDashboardStatsData(dateRange) : skipped,
+        // allowed('kpis') ? getDashboardStatsData(dateRange) : skipped,
+        allowed('kpis') ? getDashboardStatsData(dateRange, pnlBasis) : skipped,
         allowed('unitsBySku') ? getUnitsBySKUData(dateRange) : skipped,
         allowed('channel') ? getChannelPerformanceData(dateRange) : skipped,
         allowed('inventory') ? getInventoryByLocationData() : skipped, // Inventory doesn't need date filter
-        allowed('margin') ? getMarginAnalysisData(dateRange) : skipped,
-        allowed('revenueTrend') ? getRevenueTrendData(dateRange) : skipped,
+        // allowed('margin') ? getMarginAnalysisData(dateRange) : skipped,
+        // allowed('revenueTrend') ? getRevenueTrendData(dateRange) : skipped,
+        allowed('margin') ? getMarginAnalysisData(dateRange, pnlBasis) : skipped,
+        allowed('revenueTrend') ? getRevenueTrendData(dateRange, pnlBasis) : skipped,
         allowed('kpis') ? getCommissionStatsData() : skipped, // Commission is always YTD
       ]);
 
@@ -221,6 +239,55 @@ export function DashboardContent({
     return () => window.removeEventListener(QBO_FINANCIALS_UPDATED_EVENT, onUpdated);
   }, [overviewSections, fetchData]);
 
+  // Which bases the QuickBooks snapshot has (again after every QuickBooks refresh)
+  const usesOverviewPnl = ['kpis', 'revenueTrend', 'margin'].some((s) => overviewSections.includes(s as OverviewSection));
+  const applyBasis = useCallback(
+    (next: PnlBasis, refetchOverview: boolean) => {
+      setBasis(next);
+      basisRef.current = next;
+      if (refetchOverview) {
+        void fetchData(dateRangeRef.current, next);
+      }
+    },
+    [fetchData]
+  );
+  useEffect(() => {
+    let active = true;
+    const loadOptions = async () => {
+      const result = await getPnlBasisOptions().catch(() => null);
+      if (!active || !result?.success) {
+        return;
+      }
+      const available = result.data.available;
+      setBasisAvailable({ Cash: true, Accrual: available.Accrual });
+      let saved: unknown = null;
+      try {
+        saved = window.localStorage.getItem(BASIS_STORAGE_KEY);
+      } catch {
+        // storage blocked: stay on Cash
+      }
+      const wanted: PnlBasis = isPnlBasis(saved) && available[saved] ? saved : 'Cash';
+      if (wanted !== basisRef.current) {
+        applyBasis(wanted, usesOverviewPnl);
+      }
+    };
+    void loadOptions();
+    window.addEventListener(QBO_FINANCIALS_UPDATED_EVENT, loadOptions);
+    return () => {
+      active = false;
+      window.removeEventListener(QBO_FINANCIALS_UPDATED_EVENT, loadOptions);
+    };
+  }, [applyBasis, usesOverviewPnl]);
+
+  const handleBasisChange = (next: PnlBasis) => {
+    try {
+      window.localStorage.setItem(BASIS_STORAGE_KEY, next);
+    } catch {
+      // storage blocked: the choice lasts for this visit only
+    }
+    applyBasis(next, usesOverviewPnl);
+  };
+
   // Handle date range change
   const handleDateRangeChange = (preset: DateRangePreset, customRange?: DateRange) => {
     setDatePreset(preset);
@@ -248,18 +315,31 @@ export function DashboardContent({
   }
 
   return (
+    <PnlBasisContext.Provider value={basis}>
     <div className="space-y-6">
       {/* Header with Date Filter (the date range applies to the Overview tab) */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <DashboardHeader />
-        {canView('overview') && (
+        {/* {canView('overview') && (
           <DateRangeFilter
             value={datePreset}
             onChange={handleDateRangeChange}
             onRefresh={handleRefresh}
             isLoading={isLoading}
           />
-        )}
+        )} */}
+        {/* Nov 12 2026: Cash / Accrual toggle for every tab, next to the date filter */}
+        <div className="flex flex-wrap items-center gap-3">
+          <PnlBasisToggle value={basis} onChange={handleBasisChange} available={basisAvailable} disabled={isLoading} />
+          {canView('overview') && (
+            <DateRangeFilter
+              value={datePreset}
+              onChange={handleDateRangeChange}
+              onRefresh={handleRefresh}
+              isLoading={isLoading}
+            />
+          )}
+        </div>
       </div>
 
       {/* Tab Navigation: Financial Metrics first (QuickBooks numbers, Oct 27 call), one permission per tab */}
@@ -312,5 +392,6 @@ export function DashboardContent({
         )}
       </Tabs>
     </div>
+    </PnlBasisContext.Provider>
   );
 }

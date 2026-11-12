@@ -335,7 +335,10 @@ export function AllocationManager({
                               variant="ghost"
                               size="sm"
                               onClick={() => handleEdit(allocation)}
-                              disabled={allocation.status === 'fulfilled'}
+                              // disabled={allocation.status === 'fulfilled'}
+                              // Cancelled: stock already released; editing would reserve it again (Nov 12 2026)
+                              disabled={allocation.status === 'fulfilled' || allocation.status === 'cancelled'}
+                              title={allocation.status === 'cancelled' ? 'Cancelled allocation: add a new allocation instead' : undefined}
                             >
                               <Edit2 className="h-4 w-4" />
                             </Button>

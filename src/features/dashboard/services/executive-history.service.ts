@@ -59,11 +59,13 @@ export async function saveDailySnapshot(
 }
 
 /**
- * Daily rows for the averages (YTD and T90, whichever starts first) plus the
- * prior-year date. Empty when migration 163 is not applied.
+ * Daily rows for the averages (YTD, T90 and the last 12 months, whichever starts
+ * first) plus the prior-year date. Empty when migration 163 is not applied.
  */
 export async function loadDailyHistory(asOf: string): Promise<DailySnapshot[]> {
-  const from = [`${asOf.slice(0, 4)}-01-01`, addDays(asOf, -89)].sort()[0]!;
+  // const from = [`${asOf.slice(0, 4)}-01-01`, addDays(asOf, -89)].sort()[0]!;
+  // Nov 12 2026: also the last 12 months, for the Backlog T12M average (table 3.1)
+  const from = [`${asOf.slice(0, 4)}-01-01`, addDays(asOf, -89), addDays(addYears(asOf, -1), 1)].sort()[0]!;
   const pyDate = addYears(asOf, -1);
   const { data, error } = await db
     .from(TABLE)

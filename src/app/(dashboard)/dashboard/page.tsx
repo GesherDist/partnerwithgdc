@@ -33,7 +33,8 @@ import {
   // Types
   getDateRangeFromPreset,
 } from '@/features/dashboard';
-import { getCurrentUser, hasPermission, isOperationsRoleName } from '@/shared/lib/auth';
+// import { getCurrentUser, hasPermission, isOperationsRoleName } from '@/shared/lib/auth';
+import { getCurrentUser, hasPermission, canSeeDashboard, homePageFor } from '@/shared/lib/auth';
 import { allowedDashboardTabs, allowedOverviewSections } from '@/features/dashboard/lib/dashboard-tabs';
 
 // ============================================
@@ -77,13 +78,20 @@ export default async function DashboardPage() {
 
   // Server-side module permission check (for non-supplier users)
   // If no permission for dashboard, redirect to no-permission page
-  if (!hasPermission(user, 'dashboard.view_module')) {
-    redirect('/no-permission');
-  }
-
-  // Operations users work from the Operations page
-  if (isOperationsRoleName(user.role?.name)) {
-    redirect('/operations');
+  // if (!hasPermission(user, 'dashboard.view_module')) {
+  //   redirect('/no-permission');
+  // }
+  //
+  // // Operations users work from the Operations page
+  // if (isOperationsRoleName(user.role?.name)) {
+  //   redirect('/operations');
+  // }
+  // (Old, before Nov 11 2026: the role NAME "Operations Manager" always went to
+  // /operations, even with dashboard permissions, so management saw nothing.)
+  // Now by permission only: no dashboard module or no dashboard tab → the
+  // next page the user may open (Operations first), else /no-permission.
+  if (!canSeeDashboard(user)) {
+    redirect(homePageFor(user).href);
   }
 
   // Tabs this user may open (one permission per tab)

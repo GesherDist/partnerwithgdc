@@ -14,6 +14,7 @@ import { getPeriods } from '../lib/periods';
 import { erpChannelIndex, resolveChannel } from '../lib/channel';
 import { getDashboardTargets } from '../services/dashboard-targets.service';
 import { qboCommission } from '../lib/commission';
+import { withPnlBasis, type PnlBasis } from '../lib/pnl-basis';
 // ERP / QuickBooks split of the Revenue Trend (replaced: all months from QuickBooks, Nov 6 2026)
 // import { revenueSourceOf } from '../lib/revenue-history';
 import type { QboFinancials } from '@/modules/integrations/quickbooks/services/qbo-financials.service';
@@ -500,7 +501,9 @@ export async function getInventoryByLocation(): Promise<InventoryByLocation[]> {
  * Cards are always MTD + YTD (Ankur, Oct 27 call); the date filter only drives the charts.
  * @param _dateRange - Overview date filter (not used by the cards)
  */
-export async function getDashboardStats(_dateRange?: DateRange): Promise<DashboardStat[]> {
+// export async function getDashboardStats(_dateRange?: DateRange): Promise<DashboardStat[]> {
+// Nov 12 2026: basis = Cash / Accrual toggle (Revenue and Blended Margin cards)
+export async function getDashboardStats(_dateRange?: DateRange, basis: PnlBasis = 'Cash'): Promise<DashboardStat[]> {
   // Settings > Dashboard Targets (Nov 7 2026; defaults $400,000 / 18% since Nov 9, were $220,000 / 30%)
   const targets = await getDashboardTargets();
   // Only the commented ERP Open Orders query used the database (Nov 7 2026: cards all from QuickBooks)
@@ -538,7 +541,8 @@ export async function getDashboardStats(_dateRange?: DateRange): Promise<Dashboa
   // Revenue and Blended Margin: QuickBooks P&L at the last sync (Ankur, Nov 5
   // call: financials from QuickBooks). Revenue = Total Income − commission
   // accounts (tire sales). Units, Open Orders stay ERP (not in QuickBooks).
-  const qboPnl = (await loadQboFinancials())?.periods?.pnl ?? null;
+  // const qboPnl = (await loadQboFinancials())?.periods?.pnl ?? null;
+  const qboPnl = (await loadQboFinancials(basis))?.periods?.pnl ?? null;
   const toCents = (amount: number | undefined) => Math.round((amount ?? 0) * 100);
   // ERP recognized revenue (replaced by the QuickBooks P&L, Nov 6 2026):
   // const currentRevenue = current.revenue;
@@ -777,7 +781,8 @@ export async function getDashboardStats(_dateRange?: DateRange): Promise<Dashboa
  * Calculates monthly margin % based on selling price vs cost
  * @param dateRange - Optional date range filter. Defaults to last 6 months if not provided.
  */
-export async function getMarginAnalysis(dateRange?: DateRange): Promise<MarginDataPoint[]> {
+// export async function getMarginAnalysis(dateRange?: DateRange): Promise<MarginDataPoint[]> {
+export async function getMarginAnalysis(dateRange?: DateRange, basis: PnlBasis = 'Cash'): Promise<MarginDataPoint[]> {
   // Settings > Dashboard Targets (Nov 7 2026; default 30%)
   const marginTarget = (await getDashboardTargets()).marginTargetPct;
   // Use provided date range or default to last 6 months
@@ -856,7 +861,8 @@ export async function getMarginAnalysis(dateRange?: DateRange): Promise<MarginDa
   }
 
   // Blended margin per month: QuickBooks P&L tire sales and COGS (last sync)
-  const qboMonths = await loadQboMonths();
+  // const qboMonths = await loadQboMonths();
+  const qboMonths = await loadQboMonths(basis);
   for (const [monthKey, values] of Object.entries(monthlyData)) {
     const qm = qboMonths.get(monthKey);
     if (qm && qm.cogs !== null && monthKey >= startDate.slice(0, 7) && monthKey <= endDate.slice(0, 7)) {
@@ -905,7 +911,8 @@ export async function getMarginAnalysis(dateRange?: DateRange): Promise<MarginDa
  * Shows revenue, target, and the same month one year earlier
  * @param dateRange - Optional date range filter (default: last 8 months)
  */
-export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDataPoint[]> {
+// export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDataPoint[]> {
+export async function getRevenueTrend(dateRange?: DateRange, basis: PnlBasis = 'Cash'): Promise<RevenueDataPoint[]> {
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
   // Determine date range - if provided, use it; otherwise use last 8 months
@@ -980,7 +987,8 @@ export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDat
 
   // Every month: QuickBooks P&L tire sales of the month (commission accounts
   // excluded), from the last sync; the current month is the P&L month to date.
-  const qboRevenue = await loadQboMonths();
+  // const qboRevenue = await loadQboMonths();
+  const qboRevenue = await loadQboMonths(basis);
   const lastYearKey = (key: string) => `${Number(key.slice(0, 4)) - 1}${key.slice(4)}`;
   // ERP / QuickBooks split (replaced, Nov 6 2026):
   // const sourceOf = (key: string) => (revenueSourceOf(key) === 'quickbooks' && qboRevenue.has(key) ? 'quickbooks' : 'erp');
@@ -1012,8 +1020,17 @@ export async function getRevenueTrend(dateRange?: DateRange): Promise<RevenueDat
   });
 }
 
-/** Latest QuickBooks snapshot; null when not connected or not synced */
-async function loadQboFinancials(): Promise<QboFinancials | null> {
+/**
+ * Latest QuickBooks snapshot; null when not connected or not synced.
+ * Nov 12 2026: P&L figures on `basis` (Cash / Accrual toggle); Cash = as before.
+ */
+// async function loadQboFinancials(): Promise<QboFinancials | null> {
+async function loadQboFinancials(basis: PnlBasis = 'Cash'): Promise<QboFinancials | null> {
+  const financials = await loadStoredQboFinancials();
+  return financials ? withPnlBasis(financials, basis).financials : null;
+}
+
+async function loadStoredQboFinancials(): Promise<QboFinancials | null> {
   try {
     const [{ getConnectionByProvider }, { getLatestSnapshot }] = await Promise.all([
       import('@/modules/integrations/core'),
@@ -1036,8 +1053,10 @@ async function loadQboFinancials(): Promise<QboFinancials | null> {
  * from the latest snapshot: 24 complete months plus the current month to date.
  * COGS is null for months of snapshots taken before Nov 6, 2026. Empty when not connected.
  */
-async function loadQboMonths(): Promise<Map<string, { revenue: number; cogs: number | null }>> {
-  const financials = await loadQboFinancials();
+// async function loadQboMonths(): Promise<Map<string, { revenue: number; cogs: number | null }>> {
+//   const financials = await loadQboFinancials();
+async function loadQboMonths(basis: PnlBasis = 'Cash'): Promise<Map<string, { revenue: number; cogs: number | null }>> {
+  const financials = await loadQboFinancials(basis);
   const months = new Map<string, { revenue: number; cogs: number | null }>(
     (financials?.revenueHistory ?? []).map((m) => [m.month, { revenue: m.revenue, cogs: m.cogs ?? null }])
   );

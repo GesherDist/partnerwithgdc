@@ -19,6 +19,8 @@ import { Badge } from '@/shared/components/ui/badge';
 import { Button } from '@/shared/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/shared/components/ui/table';
 import { useAuthStore } from '@/shared/stores';
+import { usePnlBasis } from '../PnlBasisToggle';
+import { storedBasis } from '../../lib/pnl-basis';
 
 import {
   ensureFreshQuickBooksFinancials,
@@ -222,6 +224,12 @@ export function QuickBooksFinancials() {
   };
 
   const f = view?.financials ?? null;
+  // Nov 12 2026: OPEX by month on the basis chosen in the dashboard header
+  const basis = usePnlBasis();
+  const opexShownOf = (fin: QboFinancials) =>
+    basis === 'Accrual' && fin.opexAccrual
+      ? { financials: { ...fin, opex: fin.opexAccrual }, basis: 'Accrual' as const }
+      : { financials: fin, basis: storedBasis(fin) };
 
   return (
     <Card>
@@ -313,8 +321,14 @@ export function QuickBooksFinancials() {
 
             {/* Item 8 */}
             <div className="space-y-2">
-              <p className="text-sm font-medium">OPEX by month (groups from the chart of accounts)</p>
-              <OpexTable f={f} />
+              {/* <p className="text-sm font-medium">OPEX by month (groups from the chart of accounts)</p>
+              <OpexTable f={f} /> */}
+              {/* Nov 12 2026: follows the Cash / Accrual toggle */}
+              <p className="text-sm font-medium">
+                OPEX by month (groups from the chart of accounts, {opexShownOf(f).basis} basis
+                {basis === 'Accrual' && !f.opexAccrual ? '; Accrual by month arrives with the next QuickBooks sync' : ''})
+              </p>
+              <OpexTable f={opexShownOf(f).financials} />
             </div>
           </>
         )}

@@ -9,7 +9,8 @@ import { redirect } from 'next/navigation';
 import { PageHeader } from '@/shared/components/layout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { isOperationsRoleName } from '@/shared/lib/auth';
+// import { isOperationsRoleName } from '@/shared/lib/auth';
+import { getCurrentUser, homePageFor } from '@/shared/lib/auth';
 import { getMyProfile } from '@/features/auth/actions/profile';
 import { ProfileDetailsForm } from '@/features/auth/components/ProfileDetailsForm';
 import { ChangePasswordForm } from '@/features/auth/components/ChangePasswordForm';
@@ -37,9 +38,11 @@ export default async function ProfilePage() {
   const fullName = `${profile.firstName} ${profile.lastName}`.trim();
   const initials = `${profile.firstName.charAt(0)}${profile.lastName.charAt(0)}`.toUpperCase() || profile.email.slice(0, 2).toUpperCase();
   const isActive = profile.status === 'active';
-  const home = isOperationsRoleName(profile.roleName)
-    ? { label: 'Operations', href: '/operations' }
-    : { label: 'Dashboard', href: '/dashboard' };
+  // const home = isOperationsRoleName(profile.roleName)
+  //   ? { label: 'Operations', href: '/operations' }
+  //   : { label: 'Dashboard', href: '/dashboard' };
+  // Nov 11 2026: breadcrumb home by permission, same as the login redirect
+  const home = homePageFor(await getCurrentUser());
 
   return (
     <div className="space-y-6">

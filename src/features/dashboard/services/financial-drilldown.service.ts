@@ -36,7 +36,9 @@ import {
 } from './recognized-sales.service';
 import { dollars, toCsv, type Cell } from './overview-drilldown.service';
 import { buildExecutiveModel, cashQuarterOf, invoiceQuarterOf, projectionOrdersOf, type ExecutiveDashboardModel } from '../lib/executive-model';
-import { addDays, addYears, getPeriods, monthEnd, monthStart } from '../lib/periods';
+// import { addDays, addYears, getPeriods, monthEnd, monthStart } from '../lib/periods';
+import { addDays, addYears, getPeriods, monthEnd, monthStart, trailingMonths } from '../lib/periods';
+import { withPnlBasis, type PnlBasis } from '../lib/pnl-basis';
 import type { CsvExport, TableDrillDown } from '../lib/drilldown';
 
 interface Section {
@@ -55,7 +57,9 @@ function sectionsCsv(sections: Section[]): string {
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const cellValue = (cell: { value: number | null; note?: string }) => (cell.value === null ? cell.note ?? '' : cell.value);
 
-async function loadContext(): Promise<{ qbo: QboFinancials; model: ExecutiveDashboardModel; erp: ErpExecutiveFigures; history: DailySnapshot[] }> {
+// async function loadContext(): Promise<{ qbo: QboFinancials; model: ExecutiveDashboardModel; erp: ErpExecutiveFigures; history: DailySnapshot[] }> {
+// Nov 12 2026: basis = Cash / Accrual toggle; qbo and model carry the P&L figures of that basis
+async function loadContext(basis: PnlBasis = 'Cash'): Promise<{ qbo: QboFinancials; model: ExecutiveDashboardModel; erp: ErpExecutiveFigures; history: DailySnapshot[] }> {
   const connection = await getConnectionByProvider('quickbooks');
   if (!connection || connection.status !== 'connected' || !connection.external_account_id) {
     throw new Error('QuickBooks is not connected');
@@ -66,7 +70,9 @@ async function loadContext(): Promise<{ qbo: QboFinancials; model: ExecutiveDash
   }
   // Same daily history as the dashboard (T90 / YTD averages of backlog and inventory units)
   const history = await loadDailyHistory(erp.asOf).catch(() => [] as DailySnapshot[]);
-  return { qbo: snapshot.financials, model: buildExecutiveModel(erp, snapshot.financials, true, history), erp, history };
+  // return { qbo: snapshot.financials, model: buildExecutiveModel(erp, snapshot.financials, true, history), erp, history };
+  const qbo = withPnlBasis(snapshot.financials, basis).financials;
+  return { qbo, model: buildExecutiveModel(erp, qbo, true, history), erp, history };
 }
 
 /** Daily snapshot values behind a T90 / YTD average or the PY value (executive-model histRow) */
@@ -214,10 +220,11 @@ async function accountsByDate(qboAccess: Awaited<ReturnType<typeof access>>, poi
 
 // ---------- 1.1 Liquidity ----------
 
-async function liquidityCsv(): Promise<string> {
+// async function liquidityCsv(): Promise<string> { (before Nov 12 2026: no basis)
+async function liquidityCsv(basis: PnlBasis = 'Cash'): Promise<string> {
   // erp: ERP orders on the books, used again Nov 9 2026 while QuickBooks open sales orders are not available
   // Before Nov 9 2026: const { qbo, model /* , erp */ } = await loadContext();
-  const { qbo, model, erp } = await loadContext();
+  const { qbo, model, erp } = await loadContext(basis);
   const qboAccess = await access();
   const pyDate = qbo.periods?.priorYearDate ?? addYears(qbo.asOf, -1);
   const [today, py] = await Promise.all([fetchAccountBalances(qboAccess, qbo.asOf), fetchAccountBalances(qboAccess, pyDate)]);
@@ -242,12 +249,32 @@ async function liquidityCsv(): Promise<string> {
     ? [
         {
           title: `Projected Cash by quarter: Cash Today + QuickBooks open invoices (by due date) − QuickBooks open bills (by due date) + orders on the books still to be invoiced (through ${projection.throughDate})${openInvoices ? '' : ' · open invoices not in this snapshot, sync QuickBooks again'}`,
-          columns: ['Quarter', 'From', 'To', 'Opening Cash', 'Open Invoices (QuickBooks)', 'Invoices', 'Open Bills (QuickBooks, paid out)', 'Bills', 'Orders on the books', 'Orders', 'Tires', 'Projected Cash (quarter end)'],
+          // columns: ['Quarter', 'From', 'To', 'Opening Cash', 'Open Invoices (QuickBooks)', 'Invoices', 'Open Bills (QuickBooks, paid out)', 'Bills', 'Orders on the books', 'Orders', 'Tires', 'Projected Cash (quarter end)'],
+          // Nov 12 2026: OPEX (YTD run rate) column
+          columns: ['Quarter', 'From', 'To', 'Opening Cash', 'Open Invoices (QuickBooks)', 'Invoices', 'Open Bills (QuickBooks, paid out)', 'Bills', 'Orders on the books', 'Orders', 'Tires', 'OPEX (YTD run rate, paid out)', 'Projected Cash (quarter end)'],
           rows: [
-            ...projection.quarters.map((q) => [q.label, q.start, q.end, q.opening, q.receivables, q.invoices, -q.payables, q.bills, q.inflow, q.orders, q.tires, q.closing]),
-            ['Dashboard (Projected Cash)', '', '', '', '', '', '', '', '', '', '', cellValue(model.liquidity.projectedCash)],
+            // ...projection.quarters.map((q) => [q.label, q.start, q.end, q.opening, q.receivables, q.invoices, -q.payables, q.bills, q.inflow, q.orders, q.tires, q.closing]),
+            ...projection.quarters.map((q) => [q.label, q.start, q.end, q.opening, q.receivables, q.invoices, -q.payables, q.bills, q.inflow, q.orders, q.tires, -q.opex, q.closing]),
+            ['Dashboard (Projected Cash)', '', '', '', '', '', '', '', '', '', '', '', cellValue(model.liquidity.projectedCash)],
           ],
         },
+        // Nov 12 2026 (Ankur, Nov 11 email): how the OPEX in Projected Cash is worked out
+        ...(projection.opex
+          ? [
+              {
+                title: `OPEX in Projected Cash: ((YTD OPEX ÷ months) × 12) ÷ 4 a quarter (${projection.opex.basis} basis, last sync); the current month counts only the days after ${model.asOf}`,
+                columns: ['Step', 'Value'],
+                rows: [
+                  ['YTD OPEX (QuickBooks P&L, accounts mapped to OPEX)', projection.opex.ytd],
+                  ['Months (current month number)', projection.opex.months],
+                  ['OPEX per month = YTD OPEX ÷ months', projection.opex.monthly],
+                  ['Annual OPEX = per month × 12', round2(projection.opex.monthly * 12)],
+                  ['OPEX per full quarter = annual ÷ 4', round2(projection.opex.monthly * 3)],
+                  ...projection.quarters.map((q) => [`${q.label} OPEX in Projected Cash`, q.opex] as Cell[]),
+                ],
+              } as Section,
+            ]
+          : []),
         ...(openInvoices
           ? projection.quarters
               .filter((q) => q.invoices > 0)
@@ -333,7 +360,8 @@ async function liquidityCsv(): Promise<string> {
     // Low / High Cash section: hidden Nov 4 (Ankur: "remove for now"), shown again Nov 9 (Ankur, Nov 7 email: "Display please").
     projection && projection.movements.length
       ? {
-          title: `Low Cash / High Cash: cash day by day from ${model.asOf} through ${projection.throughDate} (open invoices on due date, open bills on due date, orders on expected delivery; overdue / no date → today). Low ${cellValue(model.liquidity.lowCash)} on ${projection.lowCash?.date ?? ''} · High ${cellValue(model.liquidity.highCash)} on ${projection.highCash?.date ?? ''}`,
+          // Nov 12 2026: + OPEX at the YTD run rate on each month-end
+          title: `Low Cash / High Cash: cash day by day from ${model.asOf} through ${projection.throughDate} (open invoices on due date, open bills on due date, orders on expected delivery; overdue / no date → today${projection.opex ? '; OPEX at the YTD run rate on each month-end' : ''}). Low ${cellValue(model.liquidity.lowCash)} on ${projection.lowCash?.date ?? ''} · High ${cellValue(model.liquidity.highCash)} on ${projection.highCash?.date ?? ''}`,
           columns: ['Date', 'Type', 'Reference', 'Customer / Vendor', 'Amount', 'Cash after'],
           rows: [
             [model.asOf, 'Cash Today', '', '', '', cellValue(model.liquidity.cashToday)],
@@ -354,8 +382,9 @@ async function liquidityCsv(): Promise<string> {
 
 // ---------- 1.2 Working Capital Position ----------
 
-async function workingCapitalCsv(): Promise<string> {
-  const { qbo, model } = await loadContext();
+// async function workingCapitalCsv(): Promise<string> { (before Nov 12 2026: no basis)
+async function workingCapitalCsv(basis: PnlBasis = 'Cash'): Promise<string> {
+  const { qbo, model } = await loadContext(basis);
   const qboAccess = await access();
   const [accounts, invoices, bills] = await Promise.all([
     fetchAccountBalances(qboAccess, qbo.asOf),
@@ -408,8 +437,9 @@ async function workingCapitalCsv(): Promise<string> {
 
 // ---------- 1.3 Working Capital Efficiency ----------
 
-async function efficiencyCsv(): Promise<string> {
-  const { qbo, model } = await loadContext();
+// async function efficiencyCsv(): Promise<string> { (before Nov 12 2026: no basis)
+async function efficiencyCsv(basis: PnlBasis = 'Cash'): Promise<string> {
+  const { qbo, model } = await loadContext(basis);
   const qboAccess = await access();
   const periods = getPeriods(model.asOf);
   // Credit purchases are summed by QuickBooks for the sync date's periods
@@ -508,8 +538,9 @@ async function efficiencyCsv(): Promise<string> {
 
 // ---------- 1.4 Cash Generation ----------
 
-async function cashGenerationCsv(): Promise<string> {
-  const { qbo, model } = await loadContext();
+// async function cashGenerationCsv(): Promise<string> { (before Nov 12 2026: no basis)
+async function cashGenerationCsv(basis: PnlBasis = 'Cash'): Promise<string> {
+  const { qbo, model } = await loadContext(basis);
   const qboAccess = await access();
   const p = getPeriods(qbo.asOf);
   const keys = ['mtd', 't90', 'ytd', 'py'] as const;
@@ -614,9 +645,15 @@ function salesSection(label: string, r: Range, s: PeriodSales, dashboard: { reve
 }
 
 /** One section per range: QuickBooks OPEX accounts, TOTAL, then the dashboard value */
-async function opexSections(ranges: Array<{ label: string; range: Range; dashboard: Cell }>): Promise<{ sections: Section[]; totals: number[] }> {
+// async function opexSections(ranges: Array<{ label: string; range: Range; dashboard: Cell }>): Promise<{ sections: Section[]; totals: number[] }> {
+// Nov 12 2026: accountingMethod = basis of the table (Cash / Accrual toggle)
+async function opexSections(
+  ranges: Array<{ label: string; range: Range; dashboard: Cell }>,
+  accountingMethod: PnlBasis = 'Cash'
+): Promise<{ sections: Section[]; totals: number[] }> {
   const qboAccess = await access();
-  const reports = await Promise.all(ranges.map((r) => fetchOpexAccounts(qboAccess, r.range.from, r.range.to)));
+  // const reports = await Promise.all(ranges.map((r) => fetchOpexAccounts(qboAccess, r.range.from, r.range.to)));
+  const reports = await Promise.all(ranges.map((r) => fetchOpexAccounts(qboAccess, r.range.from, r.range.to, accountingMethod)));
   const totals = reports.map((accounts) => round2(accounts.reduce((s, a) => s + a.amount, 0)));
   const sections = ranges.map((r, i): Section => {
     const accounts = [...reports[i]!].sort((a, b) => a.group.localeCompare(b.group) || a.name.localeCompare(b.name));
@@ -633,14 +670,16 @@ async function opexSections(ranges: Array<{ label: string; range: Range; dashboa
 
 // ---------- 2.1 Profitability ----------
 
-async function profitabilityCsv(): Promise<string> {
-  const { qbo, model } = await loadContext();
+// async function profitabilityCsv(): Promise<string> { (before Nov 12 2026: no basis)
+async function profitabilityCsv(basis: PnlBasis = 'Cash'): Promise<string> {
+  const { qbo, model } = await loadContext(basis);
   const p = getPeriods(model.asOf);
   const qp = getPeriods(qbo.asOf);
   const pf = model.profitability;
   const sales = await loadRecognizedSales();
   const perPeriod = PERIOD_KEYS.map((k) => salesInRange(sales, p[k]));
-  const opex = await opexSections(PERIOD_KEYS.map((k) => ({ label: PERIOD_LABEL[k], range: qp[k], dashboard: cellValue(pf.opex[k]) })));
+  // const opex = await opexSections(PERIOD_KEYS.map((k) => ({ label: PERIOD_LABEL[k], range: qp[k], dashboard: cellValue(pf.opex[k]) })));
+  const opex = await opexSections(PERIOD_KEYS.map((k) => ({ label: PERIOD_LABEL[k], range: qp[k], dashboard: cellValue(pf.opex[k]) })), basis);
 
   // How each number in the table is built: Revenue − COGS = GP, GP − OPEX = OP
   const build: Cell[][] = PERIOD_KEYS.map((k, i) => {
@@ -683,8 +722,9 @@ async function profitabilityCsv(): Promise<string> {
 
 // ---------- 2.1b Commission Revenue ----------
 
-async function commissionTableCsv(): Promise<string> {
-  const { model } = await loadContext();
+// async function commissionTableCsv(): Promise<string> { (before Nov 12 2026: no basis)
+async function commissionTableCsv(basis: PnlBasis = 'Cash'): Promise<string> {
+  const { model } = await loadContext(basis);
   const { p, from } = periodFlags(model.asOf);
   const [invoicesRes, unbilledRes] = await Promise.all([
     db
@@ -754,33 +794,69 @@ async function commissionTableCsv(): Promise<string> {
 
 // ---------- 2.3 OPEX Run Rate ----------
 
-async function opexRunRateCsv(): Promise<string> {
-  const { qbo, model } = await loadContext();
+// Before Nov 12 2026 (Current Month Est. / T90 Avg / PY):
+// async function opexRunRateCsvBeforeNov12(): Promise<string> {
+//   const { qbo, model } = await loadContext();
+//   const qp = getPeriods(qbo.asOf);
+//   const t90py = { from: addYears(qp.t90.from, -1), to: addYears(qp.t90.to, -1) };
+//   const rr = model.opexRunRate;
+//   const opex = await opexSections([
+//     { label: 'MTD actual', range: qp.mtd, dashboard: '' },
+//     { label: 'T90', range: qp.t90, dashboard: '' },
+//     { label: 'PY T90 (same 90 days last year)', range: t90py, dashboard: '' },
+//   ]);
+//   const [mtd, t90, py] = opex.totals as [number, number, number];
+//   return sectionsCsv([
+//     {
+//       title: 'Table 2.3 as shown',
+//       columns: ['KPI', 'Current Month Est.', 'T90 Avg', 'PY'],
+//       rows: [
+//         ['OPEX / Month', cellValue(rr.monthly.current), cellValue(rr.monthly.t90), cellValue(rr.monthly.py)],
+//         ['Annualized OPEX', cellValue(rr.annualized.current), cellValue(rr.annualized.t90), cellValue(rr.annualized.py)],
+//       ],
+//     },
+//     {
+//       title: 'Calculation (totals of the sections below)',
+//       columns: ['Column', 'OPEX total', 'OPEX / Month', 'Annualized OPEX', 'Formula'],
+//       rows: [
+//         ['Current Month Est.', mtd, cellValue(rr.monthly.current), cellValue(rr.annualized.current), 'MTD actual + forecast for the rest of the month (forecast pending)'],
+//         ['T90 Avg', t90, round2(t90 / 3), round2((t90 / 3) * 12), 'T90 OPEX ÷ 3 months; annualized = monthly × 12'],
+//         ['PY', py, round2(py / 3), round2((py / 3) * 12), 'Same 90 days last year ÷ 3; annualized = monthly × 12'],
+//       ],
+//     },
+//     ...opex.sections.map((s) => ({ ...s, rows: s.rows.filter((r) => r[0] !== 'Dashboard (last sync)') })),
+//   ]);
+// }
+
+// Nov 12 2026 (Ankur, Nov 11 email): Previous Month / T90 Average / YTD, no PY
+// async function opexRunRateCsv(): Promise<string> { (before Nov 12 2026: no basis)
+async function opexRunRateCsv(basis: PnlBasis = 'Cash'): Promise<string> {
+  const { qbo, model } = await loadContext(basis);
   const qp = getPeriods(qbo.asOf);
-  const t90py = { from: addYears(qp.t90.from, -1), to: addYears(qp.t90.to, -1) };
   const rr = model.opexRunRate;
+  const ytdMonths = Number(qbo.asOf.slice(5, 7));
   const opex = await opexSections([
-    { label: 'MTD actual', range: qp.mtd, dashboard: '' },
+    { label: 'Previous Month', range: qp.pm, dashboard: '' },
     { label: 'T90', range: qp.t90, dashboard: '' },
-    { label: 'PY T90 (same 90 days last year)', range: t90py, dashboard: '' },
-  ]);
-  const [mtd, t90, py] = opex.totals as [number, number, number];
+    { label: 'YTD', range: qp.ytd, dashboard: '' },
+  ], basis);
+  const [pm, t90, ytd] = opex.totals as [number, number, number];
   return sectionsCsv([
     {
       title: 'Table 2.3 as shown',
-      columns: ['KPI', 'Current Month Est.', 'T90 Avg', 'PY'],
+      columns: ['KPI', 'Previous Month', 'T90 Average', 'YTD'],
       rows: [
-        ['OPEX / Month', cellValue(rr.monthly.current), cellValue(rr.monthly.t90), cellValue(rr.monthly.py)],
-        ['Annualized OPEX', cellValue(rr.annualized.current), cellValue(rr.annualized.t90), cellValue(rr.annualized.py)],
+        ['OPEX / Month', cellValue(rr.monthly.pm), cellValue(rr.monthly.t90), cellValue(rr.monthly.ytd)],
+        ['Annualized OPEX', cellValue(rr.annualized.pm), cellValue(rr.annualized.t90), cellValue(rr.annualized.ytd)],
       ],
     },
     {
       title: 'Calculation (totals of the sections below)',
       columns: ['Column', 'OPEX total', 'OPEX / Month', 'Annualized OPEX', 'Formula'],
       rows: [
-        ['Current Month Est.', mtd, cellValue(rr.monthly.current), cellValue(rr.annualized.current), 'MTD actual + forecast for the rest of the month (forecast pending)'],
-        ['T90 Avg', t90, round2(t90 / 3), round2((t90 / 3) * 12), 'T90 OPEX ÷ 3 months; annualized = monthly × 12'],
-        ['PY', py, round2(py / 3), round2((py / 3) * 12), 'Same 90 days last year ÷ 3; annualized = monthly × 12'],
+        ['Previous Month', pm, round2(pm), round2(pm * 12), 'Last full month OPEX; annualized = monthly × 12'],
+        ['T90 Average', t90, round2(t90 / 3), round2((t90 / 3) * 12), 'T90 OPEX ÷ 3 months; annualized = monthly × 12'],
+        ['YTD', ytd, round2(ytd / ytdMonths), round2((ytd / ytdMonths) * 12), `YTD OPEX ÷ ${ytdMonths} (current month number); annualized = monthly × 12`],
       ],
     },
     ...opex.sections.map((s) => ({ ...s, rows: s.rows.filter((r) => r[0] !== 'Dashboard (last sync)') })),
@@ -792,8 +868,9 @@ async function opexRunRateCsv(): Promise<string> {
 type BacklogItem = { id: string; product_id: string | null; sku: string | null; quantity: number | null; customer_qty: number | null; line_total: number | null; unit_cost: number | null; products: { item_type: string | null; base_cost: number | null } | { item_type: string | null; base_cost: number | null }[] | null };
 type BacklogOrder = { order_number: string; order_date: string | null; status: string; order_series: string | null; is_commission_only: boolean | null; customer_po_number: string | null; customers: { name: string | null } | { name: string | null }[] | null; sales_order_items: BacklogItem[] | null };
 
-async function backlogCsv(): Promise<string> {
-  const { model, history, qbo } = await loadContext();
+// async function backlogCsv(): Promise<string> { (before Nov 12 2026: no basis)
+async function backlogCsv(basis: PnlBasis = 'Cash'): Promise<string> {
+  const { model, history, qbo } = await loadContext(basis);
   const [soRes, sales, cycleCost] = await Promise.all([
     db
       .from('sales_orders')
@@ -883,10 +960,17 @@ async function backlogCsv(): Promise<string> {
 
   const kpis = [['Backlog Tires', b.tires], ['Backlog Revenue', b.revenue], ['Revenue / Tire', b.revenuePerTire], ['Backlog Gross Profit', b.grossProfit], ['GP / Tire', b.gpPerTire], ['GP %', b.gpPct]] as const;
   return sectionsCsv([
+    // Before Nov 12 2026:
+    // {
+    //   title: 'Table 3.1 as shown (T90 / YTD averages come from the daily snapshots)',
+    //   columns: ['KPI', 'Current', 'T90 Avg', 'YTD Avg', 'PY'],
+    //   rows: kpis.map(([label, c]) => [label, cellValue(c.current), cellValue(c.t90Avg), cellValue(c.ytdAvg), cellValue(c.py)]),
+    // },
+    // Nov 12 2026 (Ankur, Nov 11 email): Current / T3M / T12M, no PY
     {
-      title: 'Table 3.1 as shown (T90 / YTD averages come from the daily snapshots)',
-      columns: ['KPI', 'Current', 'T90 Avg', 'YTD Avg', 'PY'],
-      rows: kpis.map(([label, c]) => [label, cellValue(c.current), cellValue(c.t90Avg), cellValue(c.ytdAvg), cellValue(c.py)]),
+      title: 'Table 3.1 as shown (T3M / T12M averages come from the daily snapshots)',
+      columns: ['KPI', 'Current', 'T3M', 'T12M'],
+      rows: kpis.map(([label, c]) => [label, cellValue(c.current), cellValue(c.t3m), cellValue(c.t12m)]),
     },
     qboSection,
     {
@@ -896,12 +980,46 @@ async function backlogCsv(): Promise<string> {
       columns: ['SO #', 'Customer', 'Customer PO', 'Status', 'Order Date', 'Order Series', 'SKU', 'Tires', 'Unit Price (net)', 'Revenue', 'Cost per Tire', 'Cost Source', 'COGS', 'Gross Profit'],
       rows,
     },
-    ...historySections(history, model.asOf, [
+    // Before Nov 12 2026 (T90 / YTD / PY):
+    // ...historySections(history, model.asOf, [
+    //   ['Backlog Tires', (d) => d.backlogTires, b.tires],
+    //   ['Backlog Revenue', (d) => d.backlogRevenue, b.revenue],
+    //   ['Revenue / Tire', (d) => (d.backlogTires ? d.backlogRevenue / d.backlogTires : null), b.revenuePerTire],
+    // ]),
+    ...backlogHistorySections(history, model.asOf, [
       ['Backlog Tires', (d) => d.backlogTires, b.tires],
       ['Backlog Revenue', (d) => d.backlogRevenue, b.revenue],
       ['Revenue / Tire', (d) => (d.backlogTires ? d.backlogRevenue / d.backlogTires : null), b.revenuePerTire],
     ]),
   ]);
+}
+
+/** Nov 12 2026: T3M and T12M sections (average of daily snapshots) for the Backlog KPIs */
+function backlogHistorySections(
+  history: DailySnapshot[],
+  asOf: string,
+  kpis: Array<[string, (d: DailySnapshot) => number | null, { t3m: { value: number | null; note?: string }; t12m: { value: number | null; note?: string } }]>
+): Section[] {
+  const ranges = [
+    { label: 'T3M', range: trailingMonths(asOf, 3), key: 't3m' as const },
+    { label: 'T12M', range: trailingMonths(asOf, 12), key: 't12m' as const },
+  ];
+  return kpis.flatMap(([label, pick, cells]) =>
+    ranges.map(({ label: col, range, key }): Section => {
+      const values = history
+        .filter((d) => d.date >= range.from && d.date <= asOf)
+        .map((d) => ({ date: d.date, value: pick(d) }))
+        .filter((x): x is { date: string; value: number } => x.value !== null && Number.isFinite(x.value));
+      const rows: Cell[][] = values.map((x) => [x.date, round2(x.value)]);
+      if (rows.length === 0) {
+        rows.push(['No daily snapshots in this period']);
+      } else {
+        rows.push([`AVERAGE = sum ÷ ${values.length} days (of ${range.days})`, round2(values.reduce((s, x) => s + x.value, 0) / values.length)]);
+      }
+      rows.push(['Dashboard', cellValue(cells[key])]);
+      return { title: `${label} – ${col} (${range.from} to ${asOf}): average of daily snapshots`, columns: ['Snapshot Date', 'Value'], rows };
+    })
+  );
 }
 
 /** T90 Avg, YTD Avg and PY sections for each daily-snapshot KPI */
@@ -923,8 +1041,9 @@ function historySections(
 type One<T> = T | T[] | null;
 const one = <T,>(x: One<T>): T | null => (Array.isArray(x) ? x[0] ?? null : x);
 
-async function incomingSupplyCsv(): Promise<string> {
-  const { model } = await loadContext();
+// async function incomingSupplyCsv(): Promise<string> { (before Nov 12 2026: no basis)
+async function incomingSupplyCsv(basis: PnlBasis = 'Cash'): Promise<string> {
+  const { model } = await loadContext(basis);
   const asOf = model.asOf;
   const [productsRes, poRes, shipRes, soRes] = await Promise.all([
     db.from('products').select('id, sku, name, item_type'),
@@ -1075,8 +1194,9 @@ async function incomingSupplyCsv(): Promise<string> {
 
 // ---------- 4.2 Current Inventory ----------
 
-async function currentInventoryCsv(): Promise<string> {
-  const { qbo, model, erp, history } = await loadContext();
+// async function currentInventoryCsv(): Promise<string> { (before Nov 12 2026: no basis)
+async function currentInventoryCsv(basis: PnlBasis = 'Cash'): Promise<string> {
+  const { qbo, model, erp, history } = await loadContext(basis);
   const qboAccess = await access();
   const asOf = model.asOf;
   const [accounts, invRes, sales] = await Promise.all([
@@ -1193,8 +1313,11 @@ const FILE: Record<TableDrillDown, string> = {
   'table-4.2': 'current-inventory',
 };
 
-export async function buildTableDrillDown(kind: TableDrillDown): Promise<CsvExport> {
-  const builders: Record<TableDrillDown, () => Promise<string>> = {
+// export async function buildTableDrillDown(kind: TableDrillDown): Promise<CsvExport> {
+//   const builders: Record<TableDrillDown, () => Promise<string>> = {
+// Nov 12 2026: basis = Cash / Accrual toggle
+export async function buildTableDrillDown(kind: TableDrillDown, basis: PnlBasis = 'Cash'): Promise<CsvExport> {
+  const builders: Record<TableDrillDown, (basis: PnlBasis) => Promise<string>> = {
     'table-1.1': liquidityCsv,
     'table-1.2': workingCapitalCsv,
     'table-1.3': efficiencyCsv,
@@ -1206,7 +1329,8 @@ export async function buildTableDrillDown(kind: TableDrillDown): Promise<CsvExpo
     'table-4.1': incomingSupplyCsv,
     'table-4.2': currentInventoryCsv,
   };
-  const csv = await builders[kind]();
+  // const csv = await builders[kind]();
+  const csv = await builders[kind](basis);
   const today = new Date().toISOString().slice(0, 10);
   return { filename: `${FILE[kind]}-${today}.csv`, csv };
 }

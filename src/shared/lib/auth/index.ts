@@ -7,6 +7,7 @@
 export { getAppUserByAuthId } from './get-app-user';
 export { getCachedProfile, setCachedProfile, clearCachedProfile } from './profile-cache';
 export { refreshProfileCache } from './actions';
+export { homePageFor, canSeeDashboard } from './home-path';
 
 // Permission checking utilities
 export {

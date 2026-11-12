@@ -42,6 +42,21 @@ export function addYears(iso: string, years: number): string {
   return toIso(new Date(Date.UTC(y + years, m - 1, Math.min(d, last))));
 }
 
+/** Same day N months earlier/later (day clamped to the month's last day, e.g. May 31 − 3 → Feb 28) */
+export function addMonths(iso: string, months: number): string {
+  const [y, m, d] = iso.split('-').map(Number) as [number, number, number];
+  const last = new Date(Date.UTC(y, m - 1 + months + 1, 0)).getUTCDate();
+  return toIso(new Date(Date.UTC(y, m - 1 + months, Math.min(d, last))));
+}
+
+/**
+ * Nov 12 2026 (Ankur, Nov 11 email): trailing N months ending on the as-of date,
+ * e.g. T3M on Nov 12 = Aug 13 → Nov 12, T12M = Nov 13 last year → Nov 12
+ */
+export function trailingMonths(asOf: string, months: number): DateRange {
+  return range(addDays(addMonths(asOf, -months), 1), asOf);
+}
+
 export function daysBetween(from: string, to: string): number {
   return Math.round((toDate(to).getTime() - toDate(from).getTime()) / 86_400_000);
 }

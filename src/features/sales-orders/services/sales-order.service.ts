@@ -408,6 +408,83 @@ export const salesOrderService = {
   },
 
   /**
+   * Check a new order number before saving: trimmed, 1-50 characters, and not
+   * used by another open order. Returns the trimmed number, or an error.
+   */
+  async validateNewOrderNumber(
+    id: string,
+    orderNumber: string | null | undefined
+  ): Promise<{ ok: true; orderNumber: string } | { ok: false; error: string }> {
+    const value = (orderNumber ?? '').trim();
+    if (!value) {
+      return { ok: false, error: 'Sales order number cannot be empty.' };
+    }
+    if (value.length > 50) {
+      return { ok: false, error: 'Sales order number can be at most 50 characters.' };
+    }
+    const other = await salesOrderRepository.findByOrderNumber(value);
+    if (other && other.id !== id) {
+      return { ok: false, error: `Sales order number "${value}" is already used by another order.` };
+    }
+    return { ok: true, orderNumber: value };
+  },
+
+  /**
+   * Change the sales order number by hand, in any status except cancelled
+   * (Ankur, Nov 11 2026: "unable to edit Sales Order numbers manually").
+   * Only the number changes; items, allocations, POs, shipments and invoices
+   * link by id and stay attached. Numbers already copied elsewhere keep the
+   * old number: auto-created PO numbers, and the "so_number" field on
+   * QuickBooks invoices (which must then use the new number).
+   */
+  async changeOrderNumber(id: string, orderNumber: string, userId?: string): Promise<ServiceResult<SalesOrder>> {
+    try {
+      const existing = await salesOrderRepository.findById(id);
+      if (!existing) {
+        return { success: false, error: 'Sales order not found' };
+      }
+      if (existing.status === 'cancelled') {
+        return { success: false, error: 'The number of a cancelled order cannot be changed.' };
+      }
+
+      const check = await this.validateNewOrderNumber(id, orderNumber);
+      if (!check.ok) {
+        return { success: false, error: check.error, errors: { orderNumber: [check.error] } };
+      }
+      if (check.orderNumber === existing.orderNumber) {
+        return { success: true, data: existing };
+      }
+
+      const order = await salesOrderRepository.updateOrderNumber(id, check.orderNumber, userId);
+
+      auditService.log({
+        action: 'update',
+        module: 'sales_orders',
+        entityType: 'SalesOrder',
+        entityId: order.id,
+        oldData: { orderNumber: existing.orderNumber },
+        newData: { orderNumber: order.orderNumber },
+        userId,
+        description: `Sales order number changed: ${existing.orderNumber} → ${order.orderNumber}`,
+      }).catch((err) => {
+        console.error('Failed to log sales order number change audit:', err);
+      });
+
+      // Pipedrive purchase history shows the order number
+      refreshPipedrivePurchaseHistoryAfterEdit([existing.customerId], [existing.status]);
+
+      return { success: true, data: order };
+    } catch (error) {
+      if (error instanceof Error && error.message === 'ORDER_NUMBER_TAKEN') {
+        const message = `Sales order number "${orderNumber.trim()}" is already used by another order.`;
+        return { success: false, error: message, errors: { orderNumber: [message] } };
+      }
+      console.error('SalesOrderService.changeOrderNumber error:', error);
+      return { success: false, error: 'Failed to change sales order number' };
+    }
+  },
+
+  /**
    * Change line prices on a confirmed / processing order (Ankur, Nov 4 2026):
    * unit price, discount and tax only. Product and quantity stay locked
    * because allocations, pick tickets and inventory depend on them. Draft and

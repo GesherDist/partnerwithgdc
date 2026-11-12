@@ -483,6 +483,10 @@ export async function updateAllocationQuantity(
         error: 'Allocation not found',
       };
     }
+    // A cancelled allocation already released its stock (same rule as updateAllocationDetails)
+    if (currentAllocation.status === 'cancelled') {
+      return { success: false, error: 'This allocation was cancelled. Add a new allocation instead.' };
+    }
 
     const oldQuantity = currentAllocation.quantity;
 
@@ -634,6 +638,12 @@ export async function updateAllocationDetails(params: {
     const { data: current, error: fetchError } = await getAllocationById(params.allocationId);
     if (fetchError || !current) {
       return { success: false, error: 'Allocation not found' };
+    }
+    // A cancelled allocation already released its stock; editing it would
+    // reserve stock again for an allocation that stays cancelled (Nov 12 2026:
+    // MWI C-SO2600038 reserved 48 x 38" this way)
+    if (current.status === 'cancelled') {
+      return { success: false, error: 'This allocation was cancelled. Add a new allocation instead.' };
     }
 
     const c = params.changes;
@@ -958,6 +968,111 @@ async function removeItemFromPickTickets(
     }
   }
   return changed;
+}
+
+// ============================================
+// ORDER CANCELLATION
+// ============================================
+
+/**
+ * Release every open allocation of a sales order that is being cancelled
+ * (Nov 12 2026). Before, cancelling an order left its allocations
+ * "allocated": warehouse and dealer stock stayed reserved and the PO stayed
+ * sold to the cancelled order.
+ *
+ * Each open allocation (not cancelled, not fulfilled) releases its own
+ * reservation (GDC warehouse or dealer location; Manufacturer and Dealer
+ * Fulfillment reserve nothing), is marked cancelled (kept for history, like
+ * the other cancelled allocations) and frees its PO when no other allocation
+ * of the order uses it. A failure never blocks the cancel (cancelling always
+ * worked before): it is returned in `warnings` so the user can check that
+ * stock, and the allocation is still marked cancelled when its release
+ * failed because nothing was reserved (older data).
+ *
+ * `itemIdsWithAllocations`: order lines that have any allocation row (any
+ * status). Their stock is handled here, so the caller must not also release
+ * it the old way (by the order's warehouse).
+ */
+export async function releaseAllocationsForCancelledOrder(salesOrderId: string): Promise<{
+  success: boolean;
+  error?: string;
+  released: number;
+  warnings: string[];
+  itemIdsWithAllocations: Set<string>;
+}> {
+  const warnings: string[] = [];
+  const itemIdsWithAllocations = new Set<string>();
+  const { data, error } = await db
+    .from('fulfillment_allocations')
+    .select(
+      'id, status, quantity, fulfillment_source, location_id, dealer_location_id, purchase_order_id, sales_order_item_id, sales_order_items!inner (sales_order_id, product_id)'
+    )
+    .eq('sales_order_items.sales_order_id', salesOrderId);
+  if (error) {
+    return { success: false, error: `Could not load the order's allocations: ${error.message}`, released: 0, warnings, itemIdsWithAllocations };
+  }
+
+  type Row = {
+    id: string;
+    status: string;
+    quantity: number;
+    fulfillment_source: FulfillmentSource;
+    location_id: string | null;
+    dealer_location_id: string | null;
+    purchase_order_id: string | null;
+    sales_order_item_id: string;
+    sales_order_items: { product_id: string | null } | Array<{ product_id: string | null }> | null;
+  };
+  const rows = (data ?? []) as unknown as Row[];
+  rows.forEach((row) => itemIdsWithAllocations.add(row.sales_order_item_id));
+
+  let released = 0;
+  for (const row of rows) {
+    if (row.status === 'cancelled' || row.status === 'fulfilled') {
+      continue;
+    }
+    const item = Array.isArray(row.sales_order_items) ? row.sales_order_items[0] : row.sales_order_items;
+    const productId = item?.product_id;
+    if (!productId) {
+      continue;
+    }
+
+    const release = await deallocateInventoryForAllocation({
+      fulfillmentSource: row.fulfillment_source,
+      quantity: row.quantity,
+      productId,
+      locationId: row.location_id || undefined,
+      dealerLocationId: row.dealer_location_id || undefined,
+    });
+    if (!release.success) {
+      // Usually older data with nothing reserved there; the allocation is
+      // still cancelled below, and the user is told to check that stock
+      warnings.push(`${row.quantity} tires: stock not released (${release.error || 'unknown error'})`);
+    }
+
+    const { error: statusError } = await updateAllocation({ id: row.id, status: 'cancelled' });
+    if (statusError) {
+      // Put the reservation back so stock and allocation stay in step
+      if (release.success) {
+        await allocateInventoryForAllocation({
+          fulfillmentSource: row.fulfillment_source,
+          quantity: release.released ?? row.quantity,
+          productId,
+          locationId: row.location_id || undefined,
+          dealerLocationId: row.dealer_location_id || undefined,
+        });
+      }
+      warnings.push(`${row.quantity} tires: allocation could not be cancelled (${statusError.message})`);
+      continue;
+    }
+
+    if (row.fulfillment_source === 'direct' && row.purchase_order_id) {
+      await unlinkPurchaseOrderIfUnused(row.purchase_order_id, row.sales_order_item_id);
+    }
+    released++;
+  }
+
+  return { success: true, released, warnings, itemIdsWithAllocations };
 }
 
 // ============================================

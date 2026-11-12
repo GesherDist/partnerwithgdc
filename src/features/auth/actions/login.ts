@@ -9,7 +9,8 @@
 
 import { redirect } from 'next/navigation';
 import { createClient } from '@/shared/lib/supabase/server';
-import { getAppUserByAuthId, isOperationsRoleName } from '@/shared/lib/auth';
+// import { getAppUserByAuthId, isOperationsRoleName } from '@/shared/lib/auth';
+import { getAppUserByAuthId, homePageFor } from '@/shared/lib/auth';
 import { setCachedProfile } from '@/shared/lib/auth/profile-cache';
 import { loginSchema, type LoginFormData } from '../lib/schemas';
 
@@ -82,11 +83,14 @@ export async function loginAction(data: LoginFormData): Promise<LoginResult | vo
       await setCachedProfile(appUser);
 
       // Check if user is a supplier - redirect to supplier portal
-      if (appUser.supplierId) {
-        redirectUrl = '/supplier-portal';
-      } else if (isOperationsRoleName(appUser.role?.name)) {
-        redirectUrl = '/operations';
-      }
+      // if (appUser.supplierId) {
+      //   redirectUrl = '/supplier-portal';
+      // } else if (isOperationsRoleName(appUser.role?.name)) {
+      //   redirectUrl = '/operations';
+      // }
+      // Nov 11 2026: by permission, not role name (supplier → supplier portal,
+      // dashboard with a tab → dashboard, else the next page they may open)
+      redirectUrl = homePageFor(appUser).href;
     }
   }
 

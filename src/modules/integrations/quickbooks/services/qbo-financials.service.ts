@@ -158,6 +158,12 @@ export interface QboFinancials {
    * Performance chart. Missing in snapshots taken before Nov 7, 2026.
    */
   salesByCustomerMonth?: QboCustomerSalesMonth[] | null;
+  /**
+   * Nov 12 2026 (Cash / Accrual toggle): revenueHistory and opex.months read on
+   * Accrual basis. Missing in snapshots before Nov 12 2026 or when the report failed.
+   */
+  revenueHistoryAccrual?: QboRevenueMonth[] | null;
+  opexAccrual?: { months: OpexMonth[] } | null;
 }
 
 export interface QboBalances {
@@ -171,6 +177,11 @@ export interface QboBalances {
 export interface QboPeriodFigures {
   /** OPEX per period, plus the prior-year T90 for the run-rate PY column */
   opex: Record<PeriodKey | 't90py', number>;
+  /**
+   * Nov 12 2026: never stored. Set by the dashboard's Cash / Accrual toggle when
+   * `opex` holds Accrual figures: the stored Cash OPEX (Projected Cash stays Cash).
+   */
+  opexCash?: Record<PeriodKey | 't90py', number>;
   /** Net cash from operating activities per period */
   operatingCashFlow: Record<'mtd' | 't90' | 'ytd' | 'py', number>;
   /** Net cash from investing activities per period (negative = money spent, e.g. CapEx) */
@@ -293,6 +304,13 @@ export interface QboAccrualFigures {
   cogs: number;
   /** Commission income accounts, Accrual. Missing before Nov 10 2026 */
   commission?: number;
+  /**
+   * Nov 12 2026 (Cash / Accrual toggle, Ankur's Nov 11 email): the whole Accrual
+   * P&L of the period (same report, no extra QuickBooks call). Missing before Nov 12 2026.
+   */
+  pnl?: QboPnlFigures;
+  /** Accounts mapped to OPEX, Accrual (same rule as QboPeriodFigures.opex). Missing before Nov 12 2026 */
+  opex?: number;
 }
 
 export interface QboPnlFigures {
@@ -1018,9 +1036,14 @@ async function buildPeriodFigures(
   //   : undefined;
   const accrualPnls = all.slice(unitsStart + unitJobs.length, unitsStart + unitJobs.length + accrualJobs.length);
   const accrualMtdReport = all[unitsStart + unitJobs.length + accrualJobs.length];
+  // const accrualOf = (report: Report): QboAccrualFigures => {
+  //   const f = pnlFigures(report, mappingOf);
+  //   return { income: f.income, cogs: f.cogs, commission: f.commission };
+  // };
+  // Nov 12 2026: also the whole Accrual P&L and OPEX, for the Cash / Accrual toggle
   const accrualOf = (report: Report): QboAccrualFigures => {
     const f = pnlFigures(report, mappingOf);
-    return { income: f.income, cogs: f.cogs, commission: f.commission };
+    return { income: f.income, cogs: f.cogs, commission: f.commission, pnl: f, opex: round2(totalsByCategory(report, mappingOf).opex) };
   };
   const accrualPnl: QboPeriodFigures['accrualPnl'] =
     accrualPnls.every(Boolean)
@@ -1328,6 +1351,34 @@ export async function buildFinancials(access: QboAccess): Promise<QboFinancials>
     console.error('[QboFinancials] Revenue history failed:', error);
   }
 
+  // Nov 12 2026 (Cash / Accrual toggle): OPEX by month and revenue history on Accrual basis.
+  // Optional, never breaks the main figures (the toggle then keeps Cash for these).
+  let opexAccrual: { months: OpexMonth[] } | null = null;
+  try {
+    const accrualOpexPnl = await fetchReport(access, 'ProfitAndLoss', {
+      start_date: opexFrom,
+      end_date: today,
+      summarize_column_by: 'Month',
+      accounting_method: 'Accrual',
+    });
+    opexAccrual = { months: opexByMonth(accrualOpexPnl, (id, name) => categoryOf(id, name)) };
+  } catch (error) {
+    console.error('[QboFinancials] Accrual OPEX by month failed:', error);
+  }
+  let revenueHistoryAccrual: QboRevenueMonth[] | null = null;
+  try {
+    const historyFrom = monthStart(today, REVENUE_HISTORY_MONTHS);
+    const historyPnl = await fetchReport(access, 'ProfitAndLoss', {
+      start_date: historyFrom,
+      end_date: monthEnd(lastMonth),
+      summarize_column_by: 'Month',
+      accounting_method: 'Accrual',
+    });
+    revenueHistoryAccrual = revenueByMonth(historyPnl, historyFrom.slice(0, 7), (id) => mapping.get(id));
+  } catch (error) {
+    console.error('[QboFinancials] Accrual revenue history failed:', error);
+  }
+
   // Tires sold per month by product (Units by SKU chart, Nov 7 2026): optional, never breaks the main figures
   let unitsByMonth: QboUnitsMonth[] | null = null;
   try {
@@ -1370,6 +1421,8 @@ export async function buildFinancials(access: QboAccess): Promise<QboFinancials>
     revenueHistory,
     ...(unitsByMonth ? { unitsByMonth } : {}),
     ...(salesByCustomerMonth ? { salesByCustomerMonth } : {}),
+    ...(revenueHistoryAccrual ? { revenueHistoryAccrual } : {}),
+    ...(opexAccrual ? { opexAccrual } : {}),
   };
 }
 
@@ -1577,10 +1630,18 @@ export interface QboOpexAccount {
 }
 
 /** Profit and Loss accounts mapped to OPEX for a period (same as the OPEX figures) */
-export async function fetchOpexAccounts(access: QboAccess, from: string, to: string): Promise<QboOpexAccount[]> {
+// export async function fetchOpexAccounts(access: QboAccess, from: string, to: string): Promise<QboOpexAccount[]> {
+// Nov 12 2026: optional basis for the Cash / Accrual toggle (default unchanged)
+export async function fetchOpexAccounts(
+  access: QboAccess,
+  from: string,
+  to: string,
+  accountingMethod: 'Cash' | 'Accrual' = PNL_ACCOUNTING_METHOD
+): Promise<QboOpexAccount[]> {
   const [mapping, report] = await Promise.all([
     loadAccountMapping(access.realmId),
-    fetchReport(access, 'ProfitAndLoss', { start_date: from, end_date: to, accounting_method: PNL_ACCOUNTING_METHOD }),
+    // fetchReport(access, 'ProfitAndLoss', { start_date: from, end_date: to, accounting_method: PNL_ACCOUNTING_METHOD }),
+    fetchReport(access, 'ProfitAndLoss', { start_date: from, end_date: to, accounting_method: accountingMethod }),
   ]);
   const out: QboOpexAccount[] = [];
   for (const row of accountRows(report.Rows?.Row)) {

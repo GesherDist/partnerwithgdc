@@ -64,6 +64,7 @@ import {
 } from '@/shared/components/ui/select';
 import { ConfirmAllocationsModal } from './ConfirmAllocationsModal';
 import { EditOrderPricesDialog } from './EditOrderPricesDialog';
+import { OrderNumberInlineEdit } from './OrderNumberInlineEdit';
 import { MarkInvoicedDialog, INVOICEABLE_ORDER_STATUSES } from './MarkInvoicedDialog';
 import { PRICE_EDITABLE_ORDER_STATUSES } from '../types';
 import { toast } from 'sonner';
@@ -80,6 +81,8 @@ interface ViewSalesOrderDrawerProps {
   open: boolean;
   onClose: () => void;
   onEdit?: (order: SalesOrderWithItems) => void;
+  /** Called after the order number changed, so the list can show the new number */
+  onOrderChanged?: () => void;
 }
 
 // ============================================
@@ -176,6 +179,7 @@ export function ViewSalesOrderDrawer({
   open,
   onClose,
   onEdit,
+  onOrderChanged,
 }: ViewSalesOrderDrawerProps) {
   const { hasPermission } = useAuthStore();
 
@@ -422,6 +426,9 @@ const handleReleaseHold = async () => {
         const result = await cancelSalesOrder(order.id, cancelReason || undefined);
         if (result.success) {
           toast.success(`Order ${order.orderNumber} cancelled`);
+          if (result.warning) {
+            toast.warning(result.warning, { duration: 10000 });
+          }
           setShowCancelDialog(false);
           setCancelReason('');
           fetchOrder(); // Refresh order data
@@ -466,6 +473,8 @@ const handleReleaseHold = async () => {
   const canEdit = order && ['draft', 'pending'].includes(order.status) && canEditPermission;
   // Confirmed / processing orders: only line prices can change
   const canEditPrices = order && PRICE_EDITABLE_ORDER_STATUSES.includes(order.status) && canEditPermission;
+  // Order number: pencil next to it, any status except cancelled (Ankur, Nov 11 2026)
+  const canChangeNumber = Boolean(order && order.status !== 'cancelled' && canEditPermission);
   // Can confirm draft or pending orders
   const canConfirm = order && ['draft', 'pending'].includes(order.status) && canEditPermission;
   // Can cancel any order except delivered/invoiced/cancelled
@@ -578,7 +587,18 @@ const handleReleaseHold = async () => {
                   <div className="grid grid-cols-2 gap-4">
                     <InfoItem
                       label="Order Number"
-                      value={order.orderNumber}
+                      // value={order.orderNumber}
+                      value={
+                        <OrderNumberInlineEdit
+                          orderId={order.id}
+                          orderNumber={order.orderNumber}
+                          canEdit={canChangeNumber}
+                          onSaved={() => {
+                            fetchOrder();
+                            onOrderChanged?.();
+                          }}
+                        />
+                      }
                       icon={<FileText className="h-4 w-4" />}
                     />
                     <InfoItem

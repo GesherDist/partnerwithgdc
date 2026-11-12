@@ -16,6 +16,7 @@ import {
   type RecognizedSales,
 } from './recognized-sales.service';
 import { getRevenueTrend } from '../repositories';
+import type { PnlBasis } from '../lib/pnl-basis';
 import type { DateRange, RevenueDataPoint } from '../types';
 import type { CsvExport, OverviewDrillDown } from '../lib/drilldown';
 import { getConnectionByProvider } from '@/modules/integrations/core';
@@ -93,8 +94,11 @@ function revenueCsv(sales: RecognizedSales, from: string, to: string, label?: st
  * month's lines with TOTAL and the chart value. Sections are separated by a
  * blank line, a title row and a header row (same layout as the executive exports).
  */
-async function revenueTrendCsv(span: { from: string; to: string }, dateRange?: DateRange): Promise<string> {
-  const [sales, chart] = await Promise.all([loadRecognizedSales(), getRevenueTrend(dateRange)]);
+// async function revenueTrendCsv(span: { from: string; to: string }, dateRange?: DateRange): Promise<string> {
+//   const [sales, chart] = await Promise.all([loadRecognizedSales(), getRevenueTrend(dateRange)]);
+// Nov 12 2026: basis = Cash / Accrual toggle (same figures as the chart)
+async function revenueTrendCsv(span: { from: string; to: string }, dateRange?: DateRange, basis: PnlBasis = 'Cash'): Promise<string> {
+  const [sales, chart] = await Promise.all([loadRecognizedSales(), getRevenueTrend(dateRange, basis)]);
   const shiftYear = (iso: string, years: number) => `${Number(iso.slice(0, 4)) + years}${iso.slice(4)}`;
   // shift: years added to a line's date to find its chart month (last year's June sits under this year's June)
   const years = [
@@ -428,7 +432,8 @@ const QBO_NOTE: Partial<Record<OverviewDrillDown, string>> = {
   channel: 'Chart = QuickBooks tire sales by customer (invoices + sales receipts − credit memos, product lines), channel from QuickBooks Customer Type, else ERP customer by name, else UNASSIGNED; last sync. ERP rows below are for reference only.',
 };
 
-export async function buildOverviewDrillDown(kind: OverviewDrillDown, dateRange?: DateRange): Promise<CsvExport> {
+// export async function buildOverviewDrillDown(kind: OverviewDrillDown, dateRange?: DateRange): Promise<CsvExport> {
+export async function buildOverviewDrillDown(kind: OverviewDrillDown, dateRange?: DateRange, basis: PnlBasis = 'Cash'): Promise<CsvExport> {
   const r = ranges(dateRange);
   let csv: string;
   let span: { from: string; to: string } | null;
@@ -462,7 +467,8 @@ export async function buildOverviewDrillDown(kind: OverviewDrillDown, dateRange?
       break;
     case 'revenue-trend':
       span = r.chart;
-      csv = await revenueTrendCsv(span, dateRange);
+      // csv = await revenueTrendCsv(span, dateRange);
+      csv = await revenueTrendCsv(span, dateRange, basis);
       break;
     case 'units-by-sku':
       span = r.chart;

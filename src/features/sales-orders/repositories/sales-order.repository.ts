@@ -609,6 +609,35 @@ class SalesOrderRepositoryImpl {
   }
 
   /**
+   * Change only the order number (Ankur, Nov 11 2026). Everything else that
+   * belongs to the order (items, allocations, POs, shipments, invoices) links
+   * by id, so it stays attached. Throws 'ORDER_NUMBER_TAKEN' when another
+   * open order already has the number (unique index on order_number).
+   */
+  async updateOrderNumber(id: string, orderNumber: string, userId?: string): Promise<SalesOrder> {
+    const { data: result, error } = await db
+      .from('sales_orders')
+      .update({
+        order_number: orderNumber,
+        updated_by: userId || null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .is('deleted_at', null)
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === '23505') {
+        throw new Error('ORDER_NUMBER_TAKEN');
+      }
+      throw new Error(`Failed to change sales order number: ${error.message}`);
+    }
+
+    return this.mapToSalesOrder(result as DbSalesOrder);
+  }
+
+  /**
    * Update order status
    */
   async updateStatus(

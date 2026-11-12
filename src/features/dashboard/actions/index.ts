@@ -18,6 +18,7 @@ import {
   type OverviewSection,
 } from '../lib/dashboard-tabs';
 import type { UnitsBySKUChartData, ChannelPerformanceDataPoint, InventoryByLocation, DashboardStat, MarginDataPoint, RevenueDataPoint, DateRange, CommissionRevenueStats } from '../types';
+import { isPnlBasis, type PnlBasis } from '../lib/pnl-basis';
 
 // ============================================
 // UNITS BY SKU
@@ -113,13 +114,16 @@ export async function getInventoryByLocationData(): Promise<ActionResult<Invento
 /**
  * Get dashboard KPI stats
  */
-export async function getDashboardStatsData(dateRange?: DateRange): Promise<ActionResult<DashboardStat[]>> {
+// export async function getDashboardStatsData(dateRange?: DateRange): Promise<ActionResult<DashboardStat[]>> {
+// Nov 12 2026: basis = Cash / Accrual toggle (anything else = Cash)
+export async function getDashboardStatsData(dateRange?: DateRange, basis?: PnlBasis): Promise<ActionResult<DashboardStat[]>> {
   const denied = await requireOverviewSection('kpis');
   if (denied) {
     return denied;
   }
 
-  const data = await dashboardRepo.getDashboardStats(dateRange);
+  // const data = await dashboardRepo.getDashboardStats(dateRange);
+  const data = await dashboardRepo.getDashboardStats(dateRange, isPnlBasis(basis) ? basis : 'Cash');
 
   return {
     success: true,
@@ -134,13 +138,15 @@ export async function getDashboardStatsData(dateRange?: DateRange): Promise<Acti
 /**
  * Get margin analysis data for last 6 months
  */
-export async function getMarginAnalysisData(dateRange?: DateRange): Promise<ActionResult<MarginDataPoint[]>> {
+// export async function getMarginAnalysisData(dateRange?: DateRange): Promise<ActionResult<MarginDataPoint[]>> {
+export async function getMarginAnalysisData(dateRange?: DateRange, basis?: PnlBasis): Promise<ActionResult<MarginDataPoint[]>> {
   const denied = await requireOverviewSection('margin');
   if (denied) {
     return denied;
   }
 
-  const data = await dashboardRepo.getMarginAnalysis(dateRange);
+  // const data = await dashboardRepo.getMarginAnalysis(dateRange);
+  const data = await dashboardRepo.getMarginAnalysis(dateRange, isPnlBasis(basis) ? basis : 'Cash');
 
   return {
     success: true,
@@ -155,13 +161,15 @@ export async function getMarginAnalysisData(dateRange?: DateRange): Promise<Acti
 /**
  * Get revenue trend data for last 8 months
  */
-export async function getRevenueTrendData(dateRange?: DateRange): Promise<ActionResult<RevenueDataPoint[]>> {
+// export async function getRevenueTrendData(dateRange?: DateRange): Promise<ActionResult<RevenueDataPoint[]>> {
+export async function getRevenueTrendData(dateRange?: DateRange, basis?: PnlBasis): Promise<ActionResult<RevenueDataPoint[]>> {
   const denied = await requireOverviewSection('revenueTrend');
   if (denied) {
     return denied;
   }
 
-  const data = await dashboardRepo.getRevenueTrend(dateRange);
+  // const data = await dashboardRepo.getRevenueTrend(dateRange);
+  const data = await dashboardRepo.getRevenueTrend(dateRange, isPnlBasis(basis) ? basis : 'Cash');
 
   return {
     success: true,
@@ -202,7 +210,9 @@ export async function getCommissionStatsData(): Promise<ActionResult<CommissionR
  */
 export async function getOverviewDrillDownCsv(
   kind: OverviewDrillDown,
-  dateRange?: DateRange
+  dateRange?: DateRange,
+  // Nov 12 2026: Cash / Accrual toggle (anything else = Cash)
+  basis?: PnlBasis
 ): Promise<ActionResult<CsvExport>> {
   if (!OVERVIEW_DRILLDOWNS.includes(kind)) {
     return { success: false, error: 'Unknown export' };
@@ -213,7 +223,8 @@ export async function getOverviewDrillDownCsv(
   }
 
   try {
-    return { success: true, data: await buildOverviewDrillDown(kind, dateRange) };
+    // return { success: true, data: await buildOverviewDrillDown(kind, dateRange) };
+    return { success: true, data: await buildOverviewDrillDown(kind, dateRange, isPnlBasis(basis) ? basis : 'Cash') };
   } catch (error) {
     console.error('getOverviewDrillDownCsv error:', error);
     return { success: false, error: 'Failed to build the export' };

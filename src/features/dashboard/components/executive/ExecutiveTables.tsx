@@ -16,6 +16,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Popover, PopoverContent, PopoverTrigger } from '@/shared/components/ui/popover';
 
 import { getExecutiveDashboard } from '../../actions/executive-dashboard.actions';
+import { usePnlBasis } from '../PnlBasisToggle';
+import type { PnlBasis } from '../../lib/pnl-basis';
 import type { CashProjection, Cell, ExecutiveDashboardModel } from '../../lib/executive-model';
 import { executiveTabModel, type ExecutiveDashboardView, type ExecutiveTab } from '../../lib/dashboard-tabs';
 import { CALCULATIONS, type CalcStatus } from './calculations';
@@ -78,26 +80,46 @@ function CalculationMethod({ tableId }: { tableId: string }) {
 // DATA (one request shared by the three tabs)
 // ============================================
 
-let pending: Promise<ExecutiveDashboardView | string> | null = null;
+// let pending: Promise<ExecutiveDashboardView | string> | null = null;
+//
+// function loadOnce(): Promise<ExecutiveDashboardView | string> {
+//   if (!pending) {
+//     pending = getExecutiveDashboard()
+//       .then((r) => (r.success ? r.data : r.error))
+//       .catch(() => 'Failed to load the executive dashboard');
+//     // Fresh data on the next visit
+//     setTimeout(() => {
+//       pending = null;
+//     }, 60_000);
+//   }
+//   return pending;
+// }
+// Nov 12 2026: one request per P&L basis (Cash / Accrual toggle)
+const pendingByBasis = new Map<PnlBasis, Promise<ExecutiveDashboardView | string>>();
 
-function loadOnce(): Promise<ExecutiveDashboardView | string> {
+function loadOnce(basis: PnlBasis): Promise<ExecutiveDashboardView | string> {
+  let pending = pendingByBasis.get(basis);
   if (!pending) {
-    pending = getExecutiveDashboard()
+    pending = getExecutiveDashboard(basis)
       .then((r) => (r.success ? r.data : r.error))
       .catch(() => 'Failed to load the executive dashboard');
+    pendingByBasis.set(basis, pending);
     // Fresh data on the next visit
     setTimeout(() => {
-      pending = null;
+      pendingByBasis.delete(basis);
     }, 60_000);
   }
   return pending;
 }
 
 function useExecutiveDashboard() {
+  const basis = usePnlBasis();
   const [state, setState] = useState<ExecutiveDashboardView | string | null>(null);
   useEffect(() => {
     let active = true;
-    loadOnce().then((r) => {
+    // Loading state while the other basis is fetched
+    setState(null);
+    loadOnce(basis).then((r) => {
       if (!active) {
         return;
       }
@@ -110,15 +132,18 @@ function useExecutiveDashboard() {
     });
     // QuickBooks figures were refreshed (automatic or "Sync now"): reload
     const onUpdated = () => {
-      pending = null;
-      loadOnce().then((r) => active && setState(r));
+      // pending = null;
+      // loadOnce().then((r) => active && setState(r));
+      pendingByBasis.clear();
+      loadOnce(basis).then((r) => active && setState(r));
     };
     window.addEventListener(QBO_FINANCIALS_UPDATED_EVENT, onUpdated);
     return () => {
       active = false;
       window.removeEventListener(QBO_FINANCIALS_UPDATED_EVENT, onUpdated);
     };
-  }, []);
+  // }, []);
+  }, [basis]);
   return state;
 }
 
@@ -296,6 +321,12 @@ const AVG = [
   { key: 'ytdAvg', label: 'YTD Avg' },
   { key: 'py', label: 'PY' },
 ];
+// Nov 12 2026 (Ankur, Nov 11 email): Backlog columns Current / T3M / T12M, no PY (Inventory keeps AVG)
+const BACKLOG_COLS = [
+  { key: 'current', label: 'Current' },
+  { key: 't3m', label: 'T3M' },
+  { key: 't12m', label: 'T12M' },
+];
 
 // ============================================
 // PROJECTED CASH BY QUARTER (Ankur, Oct 27 call)
@@ -333,6 +364,10 @@ function ProjectedCashByQuarter({ projection }: { projection: CashProjection | n
       value: (q) => money(q.inflow),
     },
     { label: 'Orders / Tires', value: (q) => `${q.orders} / ${q.tires.toLocaleString('en-US')}` },
+    // Nov 12 2026 (Ankur, Nov 11 email): OPEX at the YTD run rate
+    ...(projection.opex
+      ? [{ label: '− OPEX (YTD run rate)', value: (q: CashProjection['quarters'][number]) => money(-q.opex) }]
+      : []),
     { label: 'Projected Cash (quarter end)', value: (q) => money(q.closing), bold: true },
   ];
   const placed = projection.undatedOrders + projection.overdueOrders;
@@ -356,6 +391,9 @@ function ProjectedCashByQuarter({ projection }: { projection: CashProjection | n
           {inv && inv.overdue > 0 && ` · ${money(inv.overdue)} overdue invoices are in the current quarter`}
           {projection.openBills && projection.openBills.overdue > 0 && ` · ${money(projection.openBills.overdue)} overdue bills are in the current quarter`}
           {placed > 0 && ` · ${placed} order(s) with no or a past delivery date are in the current quarter`}
+          {/* Nov 12 2026 */}
+          {projection.opex &&
+            ` · OPEX: YTD ${money(projection.opex.ytd)} ÷ ${projection.opex.months} months = ${money(projection.opex.monthly)} a month (${projection.opex.basis} basis), ${money(projection.opex.monthly * 3)} a full quarter; the current quarter counts only the days left`}
         </CardDescription>
       </CardHeader>
       <CardContent className="overflow-x-auto">
@@ -509,10 +547,17 @@ export function ProfitabilityTables() {
             <SpecTable
               id="2.3"
               title="OPEX Run Rate"
+              // columns={[
+              //   { key: 'current', label: 'Current Month Est.' },
+              //   { key: 't90', label: 'T90 Avg' },
+              //   { key: 'py', label: 'PY' },
+              // ]}
+              // Nov 12 2026 (Ankur, Nov 11 email): Previous Month / T90 Average / YTD, no PY
+              description="QuickBooks Profit and Loss, accounts mapped to OPEX (last sync). Previous Month = last full month; T90 Average = last 90 days ÷ 3; YTD = YTD OPEX ÷ current month number. Annualized = monthly × 12."
               columns={[
-                { key: 'current', label: 'Current Month Est.' },
-                { key: 't90', label: 'T90 Avg' },
-                { key: 'py', label: 'PY' },
+                { key: 'pm', label: 'Previous Month' },
+                { key: 't90', label: 'T90 Average' },
+                { key: 'ytd', label: 'YTD' },
               ]}
               rows={[
                 { label: 'OPEX / Month', format: 'money', cells: m.opexRunRate.monthly },
@@ -522,8 +567,10 @@ export function ProfitabilityTables() {
             <SpecTable
               id="3.1"
               title="Backlog Summary"
-              description="Firm sales orders (confirmed or processing), tires not delivered yet. Commission-only orders excluded."
-              columns={AVG}
+              // description="Firm sales orders (confirmed or processing), tires not delivered yet. Commission-only orders excluded."
+              // columns={AVG}
+              description="Firm sales orders (confirmed or processing), tires not delivered yet. Commission-only orders excluded. T3M / T12M = average of the daily backlog over the last 3 / 12 months."
+              columns={BACKLOG_COLS}
               rows={[
                 { label: 'Backlog Tires', format: 'count', cells: m.backlog.tires },
                 { label: 'Backlog Revenue', format: 'money', cells: m.backlog.revenue },

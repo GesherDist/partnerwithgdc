@@ -14,6 +14,7 @@ import { getLatestSnapshot } from '@/modules/integrations/quickbooks/services/qb
 import { buildErpExecutiveFigures } from '../services/executive-erp.service';
 import { loadDailyHistory, saveDailySnapshot } from '../services/executive-history.service';
 import { buildExecutiveModel } from '../lib/executive-model';
+import { availableBases, isPnlBasis, withPnlBasis, type PnlBasis } from '../lib/pnl-basis';
 import { buildTableDrillDown } from '../services/financial-drilldown.service';
 import { TABLE_DRILLDOWNS, type CsvExport, type TableDrillDown } from '../lib/drilldown';
 import {
@@ -24,7 +25,9 @@ import {
   type ExecutiveDashboardView,
 } from '../lib/dashboard-tabs';
 
-export async function getExecutiveDashboard(): Promise<
+// export async function getExecutiveDashboard(): Promise<
+// Nov 12 2026: basis = Cash / Accrual toggle (anything else = Cash)
+export async function getExecutiveDashboard(basis?: PnlBasis): Promise<
   { success: true; data: ExecutiveDashboardView } | { success: false; error: string }
 > {
   const user = await getCurrentUser();
@@ -57,10 +60,35 @@ export async function getExecutiveDashboard(): Promise<
       return [];
     });
 
-    return { success: true, data: pickExecutiveTabs(buildExecutiveModel(erp, qbo, connected, history), tabs) };
+    // return { success: true, data: pickExecutiveTabs(buildExecutiveModel(erp, qbo, connected, history), tabs) };
+    // The daily snapshot above keeps the stored figures; only the P&L shown follows the toggle
+    const shown = qbo ? withPnlBasis(qbo, isPnlBasis(basis) ? basis : 'Cash') : null;
+    return { success: true, data: pickExecutiveTabs(buildExecutiveModel(erp, shown?.financials ?? null, connected, history), tabs) };
   } catch (error) {
     console.error('[ExecutiveDashboard] Failed:', error);
     return { success: false, error: 'Failed to load the executive dashboard' };
+  }
+}
+
+/**
+ * Nov 12 2026: which P&L bases the latest QuickBooks snapshot can show, for the
+ * Cash / Accrual toggle (Accrual figures arrive with the first sync after Nov 12 2026).
+ */
+export async function getPnlBasisOptions(): Promise<
+  { success: true; data: { connected: boolean; available: Record<PnlBasis, boolean> } } | { success: false; error: string }
+> {
+  const user = await getCurrentUser();
+  if (!user) {
+    return { success: false, error: 'Authentication required' };
+  }
+  try {
+    const connection = await getConnectionByProvider('quickbooks');
+    const connected = Boolean(connection && connection.status === 'connected' && connection.external_account_id);
+    const snapshot = connected ? await getLatestSnapshot(connection!.external_account_id!) : { financials: null };
+    return { success: true, data: { connected, available: availableBases(snapshot.financials) } };
+  } catch (error) {
+    console.error('[ExecutiveDashboard] Basis options failed:', error);
+    return { success: false, error: 'Failed to load the QuickBooks snapshot' };
   }
 }
 
@@ -69,7 +97,9 @@ export async function getExecutiveDashboard(): Promise<
  * icon). Needs the permission of the tab the table is on.
  */
 export async function getTableDrillDownCsv(
-  kind: TableDrillDown
+  kind: TableDrillDown,
+  // Nov 12 2026: Cash / Accrual toggle (anything else = Cash)
+  basis?: PnlBasis
 ): Promise<{ success: true; data: CsvExport } | { success: false; error: string }> {
   const user = await getCurrentUser();
   if (!user) {
@@ -84,7 +114,8 @@ export async function getTableDrillDownCsv(
   }
 
   try {
-    return { success: true, data: await buildTableDrillDown(kind) };
+    // return { success: true, data: await buildTableDrillDown(kind) };
+    return { success: true, data: await buildTableDrillDown(kind, isPnlBasis(basis) ? basis : 'Cash') };
   } catch (error) {
     console.error('[ExecutiveDashboard] Export failed:', error);
     const message = error instanceof Error ? error.message : '';

@@ -9,7 +9,8 @@
 import type { BacklogOrder, ErpExecutiveFigures, SupplyCycle } from '../services/executive-erp.service';
 import type { DailySnapshot } from '../services/executive-history.service';
 import type { QboBalances, QboFinancials, QboOpenBills, QboOpenInvoices } from '@/modules/integrations/quickbooks/services/qbo-financials.service';
-import { addYears } from './periods';
+// import { addYears } from './periods';
+import { addYears, trailingMonths } from './periods';
 import { qboCommission } from './commission';
 // PeriodKey: used by the commented ERP rows -- import { type PeriodKey } from './periods';
 
@@ -51,9 +52,26 @@ export interface CashQuarter {
   payables: number;
   /** Number of those bills */
   bills: number;
+  /**
+   * Nov 12 2026 (Ankur, Nov 11 email): OPEX paid out in the quarter at the YTD run
+   * rate, ((YTD OPEX / months) x 12) / 4. Current quarter: only the days left
+   * after today. 0 without QuickBooks OPEX.
+   */
+  opex: number;
   closing: number;
   orders: number;
   tires: number;
+}
+
+/** Nov 12 2026: OPEX run rate used by Projected Cash (null = not in the snapshot) */
+export interface ProjectionOpex {
+  /** YTD OPEX / months: one month of OPEX */
+  monthly: number;
+  ytd: number;
+  /** Current month number of the QuickBooks as-of date (Nov = 11) */
+  months: number;
+  /** Basis of the YTD OPEX (Cash whenever the snapshot has it) */
+  basis: 'Cash' | 'Accrual';
 }
 
 export interface CashProjection {
@@ -79,11 +97,15 @@ export interface CashProjection {
   highCash: { value: number; date: string } | null;
   /** The day-by-day cash movements behind Low / High Cash */
   movements: CashMovement[];
+  /** Nov 12 2026: OPEX run rate taken off each quarter (null = not included) */
+  opex?: ProjectionOpex | null;
 }
 
 export interface CashMovement {
   date: string;
-  kind: 'Invoice' | 'Bill' | 'Order';
+  // kind: 'Invoice' | 'Bill' | 'Order';
+  // Nov 12 2026: 'OPEX' = one month of OPEX at the YTD run rate, on the month-end
+  kind: 'Invoice' | 'Bill' | 'Order' | 'OPEX';
   ref: string;
   party: string;
   amount: number;
@@ -92,6 +114,9 @@ export interface CashMovement {
 }
 type EffCols = 'pm' | 't90' | 'ytd' | 'py';
 type AvgCols = 'current' | 't90Avg' | 'ytdAvg' | 'py';
+/** Nov 12 2026 (Ankur, Nov 11 email): Backlog columns Current / T3M / T12M, no PY */
+type BacklogCols = 'current' | 't3m' | 't12m';
+type BacklogKey = 'tires' | 'revenue' | 'revenuePerTire' | 'grossProfit' | 'gpPerTire' | 'gpPct';
 
 export interface ExecutiveDashboardModel {
   asOf: string;
@@ -124,8 +149,11 @@ export interface ExecutiveDashboardModel {
   cashGeneration: Record<'ocf' | 'capex' | 'fcf', Record<Cols4, Cell>>;
   profitability: Record<'revenue' | 'cogs' | 'grossProfit' | 'opex' | 'operatingProfit' | 'netIncome', Record<Cols4, Cell & { pct?: number | null }>>;
   perTire: Record<'tiresSold' | 'revenue' | 'cogs' | 'grossProfit' | 'opex' | 'operatingProfit', Record<Cols4, Cell>>;
-  opexRunRate: Record<'monthly' | 'annualized', Record<'current' | 't90' | 'py', Cell>>;
-  backlog: Record<'tires' | 'revenue' | 'revenuePerTire' | 'grossProfit' | 'gpPerTire' | 'gpPct', Record<AvgCols, Cell>>;
+  // opexRunRate: Record<'monthly' | 'annualized', Record<'current' | 't90' | 'py', Cell>>;
+  // Nov 12 2026 (Ankur, Nov 11 email): Previous Month / T90 Average / YTD, no PY
+  opexRunRate: Record<'monthly' | 'annualized', Record<'pm' | 't90' | 'ytd', Cell>>;
+  // backlog: Record<'tires' | 'revenue' | 'revenuePerTire' | 'grossProfit' | 'gpPerTire' | 'gpPct', Record<AvgCols, Cell>>;
+  backlog: Record<BacklogKey, Record<BacklogCols, Cell>>;
   /** Commission from Galileo, reported apart from tire revenue and gross profit */
   commission: { billed: Record<Cols4, Cell>; unbilled: Cell; unbilledOrders: number };
   supply: Array<SupplyCycle & { containers: Cell }>;
@@ -216,6 +244,36 @@ export function invoiceQuarterOf(dueDate: string | null, asOf: string): string {
  * through the quarter of the last expected order / invoice due date.
  * Without open invoices (older snapshot) it is Cash Today + orders, as before.
  */
+/**
+ * Nov 12 2026: OPEX at the run rate, one amount per month-end from the day after
+ * `asOf` through `through` (a quarter end). The current month is prorated by the
+ * days left after today (e.g. Nov 12: 18 of 30 days); later months are whole.
+ */
+export function opexByMonthEnd(monthly: number, asOf: string, through: string): Array<{ date: string; amount: number; ref: string }> {
+  const out: Array<{ date: string; amount: number; ref: string }> = [];
+  if (!(monthly > 0)) {
+    return out;
+  }
+  const [y0, m0] = asOf.split('-').map(Number) as [number, number];
+  for (let i = 0; i < 120; i++) {
+    const start = new Date(Date.UTC(y0, m0 - 1 + i, 1));
+    const end = new Date(Date.UTC(y0, m0 + i, 0));
+    const endIso = end.toISOString().slice(0, 10);
+    if (start.toISOString().slice(0, 10) > through) {
+      break;
+    }
+    const daysInMonth = end.getUTCDate();
+    const daysLeft = i === 0 ? daysInMonth - Number(asOf.slice(8, 10)) : daysInMonth;
+    if (daysLeft <= 0) {
+      continue;
+    }
+    const amount = Math.round(monthly * (daysLeft / daysInMonth) * 100) / 100;
+    const label = endIso.slice(0, 7);
+    out.push({ date: endIso, amount, ref: i === 0 ? `${label} (${daysLeft} of ${daysInMonth} days)` : label });
+  }
+  return out;
+}
+
 export function buildCashProjection(
   cashToday: number,
   orders: BacklogOrder[],
@@ -224,7 +282,9 @@ export function buildCashProjection(
   invoicesAsOf: string | null = null,
   openBills?: QboOpenBills | null,
   // Before Nov 9 2026: ordersSource: 'quickbooks' | 'missing' = 'missing'
-  ordersSource: 'quickbooks' | 'erp' | 'missing' = 'missing'
+  ordersSource: 'quickbooks' | 'erp' | 'missing' = 'missing',
+  // Nov 12 2026 (Ankur, Nov 11 email): OPEX at the YTD run rate; null = not included (as before)
+  opexRunRate: ProjectionOpex | null = null
 ): CashProjection {
   const current = quarterStart(asOf);
   const byQuarter = new Map<string, { inflow: number; receivables: number; invoices: number; payables: number; bills: number; orders: number; tires: number }>();
@@ -256,14 +316,26 @@ export function buildCashProjection(
     last = q > last ? q : last;
   }
 
+  // Nov 12 2026: OPEX per month-end from tomorrow (Ankur: ((YTD OPEX / months) x 12) / 4 a quarter,
+  // i.e. one month x 3). The current month counts only its days after today.
+  const quarterStarts: string[] = [];
+  for (let q = current, i = 0; i < 4 || q <= last; q = nextQuarter(q), i++) {
+    quarterStarts.push(q);
+  }
+  const opexMonths = opexRunRate ? opexByMonthEnd(opexRunRate.monthly, asOf, quarterEnd(quarterStarts[quarterStarts.length - 1]!)) : [];
+  const opexIn = (start: string, end: string) => opexMonths.filter((m) => m.date >= start && m.date <= end).reduce((n, m) => n + m.amount, 0);
+
   const quarters: CashQuarter[] = [];
   let opening = cashToday;
-  for (let q = current, i = 0; i < 4 || q <= last; q = nextQuarter(q), i++) {
+  // for (let q = current, i = 0; i < 4 || q <= last; q = nextQuarter(q), i++) {
+  for (const q of quarterStarts) {
     const row = rowOf(q);
     const inflow = Math.round(row.inflow * 100) / 100;
     const receivables = Math.round(row.receivables * 100) / 100;
     const payables = Math.round(row.payables * 100) / 100;
-    const closing = Math.round((opening + receivables + inflow - payables) * 100) / 100;
+    // const closing = Math.round((opening + receivables + inflow - payables) * 100) / 100;
+    const opex = Math.round(opexIn(q, quarterEnd(q)) * 100) / 100;
+    const closing = Math.round((opening + receivables + inflow - payables - opex) * 100) / 100;
     quarters.push({
       label: quarterLabel(q),
       start: q,
@@ -274,6 +346,7 @@ export function buildCashProjection(
       invoices: row.invoices,
       payables,
       bills: row.bills,
+      opex,
       closing,
       orders: row.orders,
       tires: row.tires,
@@ -288,6 +361,8 @@ export function buildCashProjection(
     ...(openInvoices?.invoices ?? []).map((i) => ({ date: onDate(i.dueDate), kind: 'Invoice' as const, ref: i.doc, party: i.customer, amount: i.balance })),
     ...(openBills?.bills ?? []).map((b) => ({ date: onDate(b.dueDate), kind: 'Bill' as const, ref: b.doc, party: b.vendor, amount: -b.balance })),
     ...orders.map((o) => ({ date: onDate(o.expectedDate), kind: 'Order' as const, ref: o.order, party: '', amount: o.revenue })),
+    // Nov 12 2026: OPEX at the YTD run rate, one movement per month-end
+    ...opexMonths.map((m) => ({ date: m.date, kind: 'OPEX' as const, ref: m.ref, party: '', amount: -m.amount })),
   ].sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind));
   const movements: CashMovement[] = [];
   let balance = cashToday;
@@ -321,6 +396,7 @@ export function buildCashProjection(
     lowCash: daily ? low : null,
     highCash: daily ? high : null,
     movements: daily ? movements : [],
+    opex: opexRunRate,
   };
 }
 
@@ -589,19 +665,35 @@ export function buildExecutiveModel(
   };
 
   // ---------- OPEX run rate ----------
-  const monthlyT90 = q ? q.opex.t90 / 3 : null;
-  const monthlyPy = q ? q.opex.t90py / 3 : null;
+  // Before Nov 12 2026 (Current Month Est. / T90 Avg / PY):
+  // const monthlyT90 = q ? q.opex.t90 / 3 : null;
+  // const monthlyPy = q ? q.opex.t90py / 3 : null;
+  // const opexRunRate: ExecutiveDashboardModel['opexRunRate'] = {
+  //   monthly: {
+  //     current: q ? none(`${REASON.noForecast} · MTD actual ${Math.round(q.opex.mtd).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}`) : none(qNote),
+  //     t90: q ? v(Math.round(monthlyT90! * 100) / 100) : none(qNote),
+  //     py: q ? v(Math.round(monthlyPy! * 100) / 100) : none(qNote),
+  //   },
+  //   annualized: {
+  //     current: q ? none(REASON.noForecast) : none(qNote),
+  //     t90: q ? v(Math.round(monthlyT90! * 12 * 100) / 100) : none(qNote),
+  //     py: q ? v(Math.round(monthlyPy! * 12 * 100) / 100) : none(qNote),
+  //   },
+  // };
+  // Nov 12 2026, Ankur's Nov 11 email:
+  //   Previous Month = last full calendar month's OPEX
+  //   T90 Average    = T90 OPEX ÷ 3
+  //   YTD            = YTD OPEX ÷ current month number (Nov = 11)
+  //   Annualized     = monthly × 12
+  const opexYtdMonths = qbo ? Number(qbo.asOf.slice(5, 7)) : 0;
+  const opexMonthly = q
+    ? { pm: q.opex.pm, t90: q.opex.t90 / 3, ytd: opexYtdMonths > 0 ? q.opex.ytd / opexYtdMonths : null }
+    : null;
+  const rr = (x: number | null | undefined, times = 1): Cell =>
+    !q ? none(qNote) : x === null || x === undefined || !Number.isFinite(x) ? none(REASON.noQuickBooks) : v(Math.round(x * times * 100) / 100);
   const opexRunRate: ExecutiveDashboardModel['opexRunRate'] = {
-    monthly: {
-      current: q ? none(`${REASON.noForecast} · MTD actual ${Math.round(q.opex.mtd).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}`) : none(qNote),
-      t90: q ? v(Math.round(monthlyT90! * 100) / 100) : none(qNote),
-      py: q ? v(Math.round(monthlyPy! * 100) / 100) : none(qNote),
-    },
-    annualized: {
-      current: q ? none(REASON.noForecast) : none(qNote),
-      t90: q ? v(Math.round(monthlyT90! * 12 * 100) / 100) : none(qNote),
-      py: q ? v(Math.round(monthlyPy! * 12 * 100) / 100) : none(qNote),
-    },
+    monthly: { pm: rr(opexMonthly?.pm), t90: rr(opexMonthly?.t90), ytd: rr(opexMonthly?.ytd) },
+    annualized: { pm: rr(opexMonthly?.pm, 12), t90: rr(opexMonthly?.t90, 12), ytd: rr(opexMonthly?.ytd, 12) },
   };
 
   // ---------- daily history (backlog / inventory units, migration 163) ----------
@@ -662,7 +754,10 @@ export function buildExecutiveModel(
   const qGpCell = (value: number | null) => (qGp === null ? none(qGpReason) : v(value, bCostNote));
   const gpHistNone = { t90Avg: none(qGpReason), ytdAvg: none(qGpReason), py: none(qGpReason) };
   // Before Nov 9 2026: tires / revenue / revenuePerTire showed noQboOrders ("Sync QuickBooks") without QuickBooks
-  const backlog: ExecutiveDashboardModel['backlog'] = {
+  // Before Nov 12 2026 this object was the table (Current / T90 Avg / YTD Avg / PY); now its
+  // Current column and its "no history" notes are reused below for Current / T3M / T12M
+  // const backlog: ExecutiveDashboardModel['backlog'] = {
+  const backlogAvg: Record<BacklogKey, Record<AvgCols, Cell>> = {
     tires: { current: qsoBacklog ? v(qsoBacklog.tires) : v(b.tires, erpNote), ...histRow((d) => d.backlogTires) },
     revenue: { current: qsoBacklog ? v(qsoBacklog.total) : v(b.revenue, erpNote), ...histRow((d) => d.backlogRevenue) },
     revenuePerTire: {
@@ -694,6 +789,25 @@ export function buildExecutiveModel(
       ? { current: qGpCell(qGp === null || !qsoBacklog.total ? qGp : Math.round((qGp / qsoBacklog.total) * 1000) / 10), ...(qGp === null ? gpHistNone : histNone) }
       : { current: erpGpCell(bGpErp === null || !b.revenue ? bGpErp : Math.round((bGpErp / b.revenue) * 1000) / 10), ...erpGpHist },
   };
+  // Nov 12 2026 (Ankur, Nov 11 email): Current / T3M / T12M, no PY.
+  // T3M / T12M = average of the daily backlog snapshots over the last 3 / 12 months
+  // (same method as the T90 / YTD averages before). Gross profit rows have no daily
+  // history, so they keep the note the T90 column showed.
+  const t3m = trailingMonths(erp.asOf, 3);
+  const t12m = trailingMonths(erp.asOf, 12);
+  const backlogHist = (pick: (d: DailySnapshot) => number | null) => ({
+    t3m: histAvg(pick, t3m.from, t3m.days),
+    t12m: histAvg(pick, t12m.from, t12m.days),
+  });
+  const noBacklogHist = (row: Record<AvgCols, Cell>) => ({ t3m: row.t90Avg, t12m: row.t90Avg });
+  const backlog: ExecutiveDashboardModel['backlog'] = {
+    tires: { current: backlogAvg.tires.current, ...backlogHist((d) => d.backlogTires) },
+    revenue: { current: backlogAvg.revenue.current, ...backlogHist((d) => d.backlogRevenue) },
+    revenuePerTire: { current: backlogAvg.revenuePerTire.current, ...backlogHist(perTireOf((d) => d.backlogRevenue, (d) => d.backlogTires)) },
+    grossProfit: { current: backlogAvg.grossProfit.current, ...noBacklogHist(backlogAvg.grossProfit) },
+    gpPerTire: { current: backlogAvg.gpPerTire.current, ...noBacklogHist(backlogAvg.gpPerTire) },
+    gpPct: { current: backlogAvg.gpPct.current, ...noBacklogHist(backlogAvg.gpPct) },
+  };
 
   // ---------- inventory ----------
   const inv = erp.inventory;
@@ -722,7 +836,23 @@ export function buildExecutiveModel(
   // Before Nov 9 2026: const projectionOrders = projectionOrdersOf(qbo);
   // Nov 9 2026: ERP orders on the books while QuickBooks open sales orders are not available (Ankur, Nov 7 email)
   const projectionOrders = projectionOrdersOf(qbo, erp.backlogOrders);
-  const projection = current ? buildCashProjection(current.cash, projectionOrders.orders, erp.asOf, q?.openInvoices ?? null, qbo?.asOf ?? null, q?.openBills ?? null, projectionOrders.source) : null;
+  // const projection = current ? buildCashProjection(current.cash, projectionOrders.orders, erp.asOf, q?.openInvoices ?? null, qbo?.asOf ?? null, q?.openBills ?? null, projectionOrders.source) : null;
+  // Nov 12 2026 (Ankur, Nov 11 email): minus OPEX at the YTD run rate, YTD OPEX / current month number
+  // (same as OPEX Run Rate > YTD). Cash basis whatever the P&L toggle shows (cash projection).
+  const projectionOpexYtd = q ? q.opexCash?.ytd ?? q.opex.ytd : null;
+  const projectionOpexMonths = qbo ? Number(qbo.asOf.slice(5, 7)) : 0;
+  const projectionOpex: ProjectionOpex | null =
+    q && projectionOpexYtd !== null && Number.isFinite(projectionOpexYtd) && projectionOpexMonths > 0
+      ? {
+          monthly: Math.round((projectionOpexYtd / projectionOpexMonths) * 100) / 100,
+          ytd: projectionOpexYtd,
+          months: projectionOpexMonths,
+          basis: q.opexCash ? 'Cash' : q.pnlBasis ?? 'Accrual',
+        }
+      : null;
+  const projection = current
+    ? buildCashProjection(current.cash, projectionOrders.orders, erp.asOf, q?.openInvoices ?? null, qbo?.asOf ?? null, q?.openBills ?? null, projectionOrders.source, projectionOpex)
+    : null;
 
   return {
     asOf: erp.asOf,
@@ -742,7 +872,8 @@ export function buildExecutiveModel(
         ? v(
             projection.quarters[projection.quarters.length - 1]!.closing,
             // Before Nov 9 2026: ${projection.ordersSource === 'quickbooks' ? 'open sales orders' : 'open sales orders not synced'}
-            `Through ${projection.throughDate} · ${projection.openInvoices ? 'open invoices + ' : ''}${projection.ordersSource === 'quickbooks' ? 'open sales orders' : projection.ordersSource === 'erp' ? 'ERP open orders (QuickBooks sales orders not available)' : 'open sales orders not synced'}${projection.openBills ? ' − open bills' : ''}`
+            // `Through ${projection.throughDate} · ${projection.openInvoices ? 'open invoices + ' : ''}${projection.ordersSource === 'quickbooks' ? 'open sales orders' : projection.ordersSource === 'erp' ? 'ERP open orders (QuickBooks sales orders not available)' : 'open sales orders not synced'}${projection.openBills ? ' − open bills' : ''}`
+            `Through ${projection.throughDate} · ${projection.openInvoices ? 'open invoices + ' : ''}${projection.ordersSource === 'quickbooks' ? 'open sales orders' : projection.ordersSource === 'erp' ? 'ERP open orders (QuickBooks sales orders not available)' : 'open sales orders not synced'}${projection.openBills ? ' − open bills' : ''}${projection.opex ? ' − OPEX (YTD run rate)' : ''}`
           )
         : none(qNote),
       projection,

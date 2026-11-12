@@ -21,6 +21,8 @@ import { getOverviewDrillDownCsv } from '../actions';
 import { getTableDrillDownCsv } from '../actions/executive-dashboard.actions';
 import { parseCsvSections, type CsvExport, type CsvSection, type OverviewDrillDown, type TableDrillDown } from '../lib/drilldown';
 import type { DateRange } from '../types';
+import { usePnlBasis } from './PnlBasisToggle';
+import type { PnlBasis } from '../lib/pnl-basis';
 
 interface DrillDownButtonProps {
   /** Overview card/chart (uses the date filter) or executive table */
@@ -30,10 +32,15 @@ interface DrillDownButtonProps {
   label: string;
 }
 
-async function fetchCsv(kind: DrillDownButtonProps['kind'], dateRange?: DateRange): Promise<CsvExport | null> {
+// async function fetchCsv(kind: DrillDownButtonProps['kind'], dateRange?: DateRange): Promise<CsvExport | null> {
+//   const result: { success: boolean; data?: CsvExport; error?: string } = kind.startsWith('table-')
+//     ? await getTableDrillDownCsv(kind as TableDrillDown)
+//     : await getOverviewDrillDownCsv(kind as OverviewDrillDown, dateRange);
+// Nov 12 2026: same P&L basis as the figure (Cash / Accrual toggle)
+async function fetchCsv(kind: DrillDownButtonProps['kind'], dateRange?: DateRange, basis: PnlBasis = 'Cash'): Promise<CsvExport | null> {
   const result: { success: boolean; data?: CsvExport; error?: string } = kind.startsWith('table-')
-    ? await getTableDrillDownCsv(kind as TableDrillDown)
-    : await getOverviewDrillDownCsv(kind as OverviewDrillDown, dateRange);
+    ? await getTableDrillDownCsv(kind as TableDrillDown, basis)
+    : await getOverviewDrillDownCsv(kind as OverviewDrillDown, dateRange, basis);
   if (!result.success || !result.data) {
     toast.error(result.error || 'Failed to load the data');
     return null;
@@ -53,13 +60,15 @@ function saveCsv(data: CsvExport) {
 }
 
 export function DrillDownButton({ kind, dateRange, label }: DrillDownButtonProps) {
+  const basis = usePnlBasis();
   const [loading, setLoading] = useState(false);
   const [view, setView] = useState<CsvExport | null>(null);
 
   const run = async (then: (data: CsvExport) => void) => {
     setLoading(true);
     try {
-      const data = await fetchCsv(kind, dateRange);
+      // const data = await fetchCsv(kind, dateRange);
+      const data = await fetchCsv(kind, dateRange, basis);
       if (data) {
         then(data);
       }
