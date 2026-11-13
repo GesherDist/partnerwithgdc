@@ -41,6 +41,8 @@ import type {
   PlatinumDealerInventoryFilters,
 } from '@/features/platinum-dealers/types';
 import { DEALER_PERMISSIONS } from '../lib/permissions';
+// Audit log: who changed an allocation (Nov 12 2026)
+import '@/features/sales-orders/lib/audit-actor.server';
 
 // ============================================
 // TYPES
@@ -50,6 +52,8 @@ interface ActionResult<T = void> {
   success: boolean;
   data?: T;
   error?: string;
+  /** Extra note for the user after a successful save */
+  message?: string;
 }
 
 // ============================================
@@ -852,9 +856,36 @@ export async function updateAllocationStatusAction(params: {
     return denied;
   }
   try {
-    const { updateAllocation } = await import(
+    const { updateAllocation, getAllocationById } = await import(
       '@/features/sales-orders/repositories/fulfillment-allocations.repository'
     );
+
+    // A cancelled allocation already released its stock; reviving it here
+    // would mark it active without reserving any inventory (same rule as
+    // updateAllocationStatus in sales orders, Nov 12 2026)
+    const { data: current } = await getAllocationById(params.allocationId);
+    if (current?.status === 'cancelled' && params.status !== 'cancelled') {
+      return { success: false, error: 'This allocation was cancelled. Add a new allocation instead.' };
+    }
+
+    // Cancelled: release the dealer stock / PO too, not only the status
+    // (Nov 12 2026, Bug C: before, only the status changed and stock stayed reserved)
+    if (params.status === 'cancelled') {
+      const { cancelAllocationAndRelease } = await import(
+        '@/features/sales-orders/services/fulfillment-orchestration.service'
+      );
+      const cancelled = await cancelAllocationAndRelease(params.allocationId);
+      if (!cancelled.success) {
+        return { success: false, error: cancelled.error || 'Failed to cancel allocation' };
+      }
+      return {
+        success: true,
+        data: cancelled.data,
+        ...(cancelled.warnings.length > 0
+          ? { message: `Allocation cancelled, but check the inventory: ${cancelled.warnings.join('; ')}` }
+          : {}),
+      };
+    }
 
     const { data, error } = await updateAllocation({
       id: params.allocationId,

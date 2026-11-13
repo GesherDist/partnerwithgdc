@@ -35,7 +35,11 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
       // source: 'Cash Today (QuickBooks) moved day by day: + QuickBooks open invoices on their due date, − QuickBooks open bills on their due date, + ERP orders on the books on their expected delivery date (overdue / no date → today). Payroll and other expenses without a bill are not included',
       // Before Nov 12 2026:
       // source: 'Cash Today (QuickBooks) moved day by day: + QuickBooks open invoices on their due date, − QuickBooks open bills on their due date, + open sales orders on their ship / due date, ERP orders for now on their expected delivery date (overdue / no date → today). Payroll and other expenses without a bill are not included',
-      source: 'Cash Today (QuickBooks) moved day by day: + QuickBooks open invoices on their due date, − QuickBooks open bills on their due date, + open sales orders on their ship / due date, ERP orders for now on their expected delivery date (overdue / no date → today), − OPEX at the YTD run rate on each month-end (current month: days left only; Ankur, Nov 11 email)',
+      // Before Nov 13 2026 (ERP orders on the expected delivery date):
+      // source: 'Cash Today (QuickBooks) moved day by day: + QuickBooks open invoices on their due date, − QuickBooks open bills on their due date, + open sales orders on their ship / due date, ERP orders for now on their expected delivery date (overdue / no date → today), − OPEX at the YTD run rate on each month-end (current month: days left only; Ankur, Nov 11 email)',
+      // Before Nov 13 2026 (no supplier POs):
+      // source: 'Cash Today (QuickBooks) moved day by day: + QuickBooks open invoices on their due date, − QuickBooks open bills on their due date, + open sales orders on their ship / due date, ERP orders for now on their expected delivery date + 30 days (customers pay net 30 after delivery, Ankur Nov 12 email; overdue / no date → today + 30), − OPEX at the YTD run rate on each month-end (current month: days left only; Ankur, Nov 11 email)',
+      source: 'Cash Today (QuickBooks) moved day by day: + QuickBooks open invoices on their due date, − QuickBooks open bills on their due date, + open sales orders on their ship / due date, ERP orders for now on their expected delivery date + 30 days (customers pay net 30 after delivery, Ankur Nov 12 email; overdue / no date → today + 30), − supplier POs not delivered yet (no QuickBooks bill yet) on expected delivery + 45 days (Galileo is paid net 45 after delivery, Ankur Nov 12 email) − OPEX at the YTD run rate on each month-end (current month: days left only; Ankur, Nov 11 email)',
       status: 'live',
     },
     {
@@ -46,7 +50,11 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
       // formula: '= Cash Today + QuickBooks open invoices (open balance, in the quarter of the due date; overdue or no due date → current quarter) − QuickBooks open bills (the same, by due date) + QuickBooks open sales orders (not invoiced yet; product / service lines excl. tax), in the quarter of the ship date, else due date (none or past → current quarter). Quarter by quarter; Through Date = end of the last quarter (at least 4 quarters). Open sales orders come from QuickBooks only (no ERP fallback)',
       // Before Nov 12 2026 (no OPEX):
       // formula: '= Cash Today + QuickBooks open invoices (open balance, in the quarter of the due date; overdue or no due date → current quarter) − QuickBooks open bills (the same, by due date) + open sales orders (not invoiced yet). Quarter by quarter; Through Date = end of the last quarter (at least 4 quarters). Open sales orders: QuickBooks (product / service lines excl. tax, quarter of the ship date, else due date); ERP for now while QuickBooks sales orders cannot be read (see Open Orders below)',
-      formula: '= Cash Today + QuickBooks open invoices (open balance, in the quarter of the due date; overdue or no due date → current quarter) − QuickBooks open bills (the same, by due date) + open sales orders (not invoiced yet) − OPEX at the YTD run rate: ((YTD OPEX ÷ current month number) × 12) ÷ 4 a quarter (Ankur, Nov 11 email; current quarter: days left only). Quarter by quarter; Through Date = end of the last quarter (at least 4 quarters). Open sales orders: QuickBooks (product / service lines excl. tax, quarter of the ship date, else due date); ERP for now while QuickBooks sales orders cannot be read (see Open Orders below)',
+      // Before Nov 13 2026 (YTD OPEX ÷ current month number):
+      // formula: '= Cash Today + QuickBooks open invoices (open balance, in the quarter of the due date; overdue or no due date → current quarter) − QuickBooks open bills (the same, by due date) + open sales orders (not invoiced yet) − OPEX at the YTD run rate: ((YTD OPEX ÷ current month number) × 12) ÷ 4 a quarter (Ankur, Nov 11 email; current quarter: days left only). Quarter by quarter; Through Date = end of the last quarter (at least 4 quarters). Open sales orders: QuickBooks (product / service lines excl. tax, quarter of the ship date, else due date); ERP for now while QuickBooks sales orders cannot be read (see Open Orders below)',
+      // Before Nov 13 2026 (no supplier POs):
+      // formula: '= Cash Today + QuickBooks open invoices (open balance, in the quarter of the due date; overdue or no due date → current quarter) − QuickBooks open bills (the same, by due date) + open sales orders (not invoiced yet) − OPEX at the YTD run rate: ((OPEX of the completed months ÷ number of completed months, e.g. Jan–Oct ÷ 10) × 12) ÷ 4 a quarter (Ankur, Nov 11 + Nov 12 emails; January: month to date; current quarter: days left only). Quarter by quarter; Through Date = end of the last quarter (at least 4 quarters). Open sales orders: QuickBooks (product / service lines excl. tax, quarter of the ship date, else due date); ERP for now while QuickBooks sales orders cannot be read (see Open Orders below)',
+      formula: '= Cash Today + QuickBooks open invoices (open balance, in the quarter of the due date; overdue or no due date → current quarter) − QuickBooks open bills (the same, by due date) + open sales orders (not invoiced yet) − supplier POs not delivered yet (their bill is not in QuickBooks yet; (qty ordered − qty received) × unit price, in the quarter of expected delivery + 45 days, Ankur Nov 12 email; a PO whose number is on a QuickBooks open bill is left out, commission-only loads left out) − OPEX at the YTD run rate: ((OPEX of the completed months ÷ number of completed months, e.g. Jan–Oct ÷ 10) × 12) ÷ 4 a quarter (Ankur, Nov 11 + Nov 12 emails; January: month to date; current quarter: days left only). Quarter by quarter; Through Date = end of the last quarter (at least 4 quarters). Open sales orders: QuickBooks (product / service lines excl. tax, quarter of the ship date, else due date); ERP for now while QuickBooks sales orders cannot be read (see Open Orders below)',
       // Before Nov 6 2026:
       // source: 'QuickBooks cash + QuickBooks open invoices + ERP sales orders (Ankur, Oct 27 + Nov 5 calls; QuickBooks has no estimates, so open orders stay ERP). Payroll and other expenses without a bill not included',
       // Before Nov 7 2026:
@@ -67,7 +75,9 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
       // source: 'Today: ERP sales orders (status confirmed / processing). Ankur keeps open sales orders in QuickBooks too (Nov 5 call): this moves to QuickBooks once the QuickBooks transaction type is confirmed (QuickBooks estimates are 0)',
       // Before Nov 9 2026:
       // source: 'QuickBooks open sales orders (Ankur, Nov 5 call: "on QuickBooks under invoices, the open sales orders"): status not closed / cancelled and not linked to an invoice; amount = product / service lines excl. tax; quarter = ship date, else due date (none or past → current quarter). QuickBooks only: if the sync could not read sales orders, none are added and the dashboard says Sync QuickBooks',
-      source: 'QuickBooks open sales orders (Ankur, Nov 5 call: "on QuickBooks under invoices, the open sales orders"): status not closed / cancelled and not linked to an invoice; amount = product / service lines excl. tax; quarter = ship date, else due date (none or past → current quarter). ERP fallback (Nov 9 2026, Ankur Nov 7 email: \"temporarily use from ERP although I prefer QuickBooks\"): while QuickBooks sales orders cannot be read, the ERP orders on the books are used: firm confirmed / processing orders not delivered, tire lines net of discounts, excl. tax, commission-only excluded, in the quarter of the expected delivery date (requested delivery, else confirmed ETA, else ETA to US port; none or past → current quarter). An ERP order leaves once it is marked Invoiced in the ERP. The quarter table row says "Open orders (ERP, for now)" when the ERP is used',
+      // Before Nov 13 2026 (quarter of the expected delivery date):
+      // source: 'QuickBooks open sales orders (Ankur, Nov 5 call: "on QuickBooks under invoices, the open sales orders"): status not closed / cancelled and not linked to an invoice; amount = product / service lines excl. tax; quarter = ship date, else due date (none or past → current quarter). ERP fallback (Nov 9 2026, Ankur Nov 7 email: \"temporarily use from ERP although I prefer QuickBooks\"): while QuickBooks sales orders cannot be read, the ERP orders on the books are used: firm confirmed / processing orders not delivered, tire lines net of discounts, excl. tax, commission-only excluded, in the quarter of the expected delivery date (requested delivery, else confirmed ETA, else ETA to US port; none or past → current quarter). An ERP order leaves once it is marked Invoiced in the ERP. The quarter table row says "Open orders (ERP, for now)" when the ERP is used',
+      source: 'QuickBooks open sales orders (Ankur, Nov 5 call: "on QuickBooks under invoices, the open sales orders"): status not closed / cancelled and not linked to an invoice; amount = product / service lines excl. tax; quarter = ship date, else due date (none or past → current quarter). ERP fallback (Nov 9 2026, Ankur Nov 7 email: \"temporarily use from ERP although I prefer QuickBooks\"): while QuickBooks sales orders cannot be read, the ERP orders on the books are used: firm confirmed / processing orders not delivered, tire lines net of discounts, excl. tax, commission-only excluded, in the quarter of the expected delivery date + 30 days (requested delivery, else confirmed ETA, else ETA to US port; none or past → today; customers pay net 30 after delivery, Ankur Nov 12 email). An ERP order leaves once it is marked Invoiced in the ERP. The quarter table row says "Open orders (ERP, for now)" when the ERP is used',
       status: 'live',
     },
   ],
@@ -181,7 +191,9 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
     // Nov 12 2026 (Ankur, Nov 11 email): Previous Month / T90 Average / YTD, no PY
     { kpi: 'OPEX / Month – Previous Month', formula: '= OPEX of the last full calendar month', source: 'QuickBooks Profit and Loss (OPEX accounts)', status: 'live' },
     { kpi: 'OPEX / Month – T90 Average', formula: '= OPEX of the last 90 days ÷ 3', source: 'QuickBooks Profit and Loss (OPEX accounts)', status: 'live' },
-    { kpi: 'OPEX / Month – YTD', formula: '= YTD OPEX (Jan 1 → today) ÷ current month number (e.g. November = 11)', source: 'QuickBooks Profit and Loss (OPEX accounts)', status: 'live' },
+    // { kpi: 'OPEX / Month – YTD', formula: '= YTD OPEX (Jan 1 → today) ÷ current month number (e.g. November = 11)', source: 'QuickBooks Profit and Loss (OPEX accounts)', status: 'live' },
+    // Nov 13 2026 (Ankur, Nov 12 email: "The months that closed so Jan-October")
+    { kpi: 'OPEX / Month – YTD', formula: '= OPEX of the completed months this year (Jan 1 → end of last month) ÷ number of completed months (e.g. on Nov 12: Jan–Oct ÷ 10). January: no value yet', source: 'QuickBooks Profit and Loss (OPEX accounts)', status: 'live' },
     { kpi: 'Annualized OPEX', formula: '= OPEX per month × 12', source: 'Calculated', status: 'live' },
   ],
   '3.1': [
@@ -245,17 +257,35 @@ export const CALCULATIONS: Record<string, CalcItem[]> = {
     { kpi: 'Weeks Left', formula: '= (window start − today) ÷ 7; 0 once the window has started', source: 'Calculated', status: 'live' },
     {
       kpi: 'Sold / Unsold / Forward Commit %',
-      formula: 'Sold = tires on sales orders (not draft/cancelled) of the same cycle · Unsold = Ordered − Sold · Commit % = Sold ÷ Ordered',
-      source: 'ERP sales orders',
+      // (before Nov 13 2026) formula: 'Sold = tires on sales orders (not draft/cancelled) of the same cycle · Unsold = Ordered − Sold · Commit % = Sold ÷ Ordered',
+      // source: 'ERP sales orders',
+      // (Nov 13 2026, before warehouse stock) formula: 'Sold = tires of the cycle’s purchase orders allocated to firm customer orders (allocation on the PO, else the PO’s linked sales order; not draft/cancelled; never more than the PO’s tires) · Unsold = Ordered − Sold · Commit % = Sold ÷ Ordered',
+      formula: 'Sold = tires of the cycle allocated to firm customer orders (not draft/cancelled): from the cycle’s purchase orders (allocation on the PO, else the PO’s linked sales order; max the PO’s tires), plus GDC warehouse stock allocated to orders of the cycle (max the cycle’s tires); platinum dealer tires not counted · Unsold = Ordered − Sold · Commit % = Sold ÷ Ordered',
+      source: 'ERP purchase orders, fulfillment allocations, sales orders',
+      status: 'live',
+    },
+    // (before Nov 12 2026: velocity columns, removed from table 4.1 per Ankur Nov 11 2026)
+    // {
+    //   kpi: 'Velocity',
+    //   formula: 'Actual = tires on the cycle’s sales orders dated in the last 4 weeks ÷ 4 · Required = Unsold ÷ Weeks Left · Gap = Actual − Required',
+    //   source: 'ERP sales orders',
+    //   status: 'live',
+    // },
+    // { kpi: 'Projected Uncommitted at Arrival', formula: '= max(0, Unsold − Actual Velocity × Weeks Left); = Unsold once the arrival window has started', source: 'Calculated', status: 'live' },
+    {
+      kpi: 'Average Purchase Price',
+      // (before Nov 13 2026) formula: '= Σ(unit price × tires ordered) ÷ Σ tires, tire lines of the cycle’s purchase orders (not draft / cancelled) that have a price',
+      formula: '= Σ(unit price × tires ordered) ÷ Σ tires, tire lines of the cycle’s purchase orders (not draft / cancelled) that have a price; commission-only loads left out',
+      source: 'ERP purchase orders',
       status: 'live',
     },
     {
-      kpi: 'Velocity',
-      formula: 'Actual = tires on the cycle’s sales orders dated in the last 4 weeks ÷ 4 · Required = Unsold ÷ Weeks Left · Gap = Actual − Required',
+      kpi: 'Average Sold Price',
+      // (before Nov 13 2026) formula: '= Σ(unit price × qty) ÷ Σ qty, tire lines of the cycle’s sales orders (not draft / cancelled) that have a price; commission-only loads left out',
+      formula: '= Σ(order line unit price × tires) ÷ Σ tires, over the tires counted in Sold that have a price; commission-only loads left out',
       source: 'ERP sales orders',
       status: 'live',
     },
-    { kpi: 'Projected Uncommitted at Arrival', formula: '= max(0, Unsold − Actual Velocity × Weeks Left); = Unsold once the arrival window has started', source: 'Calculated', status: 'live' },
   ],
   '4.2': [
     {

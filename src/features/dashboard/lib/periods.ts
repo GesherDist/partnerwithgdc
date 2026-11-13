@@ -84,6 +84,26 @@ export function getPeriods(asOf: string = businessToday()): Record<PeriodKey, Da
   };
 }
 
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/**
+ * Nov 13 2026 (Ankur, Nov 12 email: "The months that closed so Jan-October"):
+ * the completed months of the as-of date's year, Jan 1 → last day of the
+ * previous month. On Nov 12: 10 months, Jan 1 → Oct 31, "Jan–Oct".
+ * January has no completed month yet: months 0, range null.
+ */
+export function completedMonthsYtd(asOf: string): { months: number; range: DateRange | null; label: string | null } {
+  const months = Number(asOf.slice(5, 7)) - 1;
+  if (!Number.isFinite(months) || months < 1) {
+    return { months: 0, range: null, label: null };
+  }
+  return {
+    months,
+    range: range(`${asOf.slice(0, 4)}-01-01`, monthEnd(monthStart(asOf, 1))),
+    label: months === 1 ? 'Jan' : `Jan–${MONTH_NAMES[months - 1]}`,
+  };
+}
+
 /** Month-end dates strictly before the as-of date, from `from` (inclusive) */
 export function monthEndsBetween(from: string, asOf: string): string[] {
   const ends: string[] = [];

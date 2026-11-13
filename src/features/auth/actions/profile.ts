@@ -9,6 +9,7 @@
  */
 
 import { revalidatePath } from 'next/cache';
+import { unstable_rethrow } from 'next/navigation';
 import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 import { createClient } from '@/shared/lib/supabase/server';
 import { getAppUserByAuthId } from '@/shared/lib/auth';
@@ -113,6 +114,9 @@ export async function getMyProfile(): Promise<ProfileActionResult<MyProfile>> {
       },
     };
   } catch (error) {
+    // Next.js signals (build-time "this page is dynamic") go to Next.js, not
+    // to the error log (Nov 12 2026); real errors as before
+    unstable_rethrow(error);
     console.error('getMyProfile error:', error);
     return { success: false, error: 'Failed to load your profile.' };
   }

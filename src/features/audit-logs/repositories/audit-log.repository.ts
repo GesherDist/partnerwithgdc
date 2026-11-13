@@ -49,6 +49,35 @@ interface DbAuditLog {
   created_at: string;
 }
 
+/**
+ * Nov 13 2026: most audit entries save only user_id (no name / email), so the
+ * Audit Logs page showed "-" in the User column. Fill the name / email from the
+ * users table by user_id when the row has none (one query per page; read only).
+ */
+async function fillUserNames(rows: DbAuditLog[]): Promise<DbAuditLog[]> {
+  const ids = [...new Set(rows.filter((r) => r.user_id && !r.user_name).map((r) => r.user_id as string))];
+  if (ids.length === 0) {
+    return rows;
+  }
+  try {
+    const { data } = await db.from('users').select('id, email, first_name, last_name').in('id', ids);
+    const users = new Map(
+      ((data ?? []) as Array<{ id: string; email: string | null; first_name: string | null; last_name: string | null }>).map((u) => [u.id, u])
+    );
+    return rows.map((r) => {
+      const u = r.user_id && !r.user_name ? users.get(r.user_id) : undefined;
+      if (!u) {
+        return r;
+      }
+      const name = `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim();
+      return { ...r, user_name: name || null, user_email: r.user_email ?? u.email ?? null };
+    });
+  } catch {
+    // Names are only for display: show the logs without them
+    return rows;
+  }
+}
+
 // ============================================
 // REPOSITORY
 // ============================================
@@ -140,7 +169,8 @@ export const auditLogRepository = {
     const totalPages = Math.ceil(total / limit);
 
     return {
-      data: (data || []).map((row) => this.mapToAuditLog(row as DbAuditLog)),
+      // data: (data || []).map((row) => this.mapToAuditLog(row as DbAuditLog)),
+      data: (await fillUserNames((data || []) as DbAuditLog[])).map((row) => this.mapToAuditLog(row)),
       meta: {
         total,
         page,
@@ -167,7 +197,12 @@ export const auditLogRepository = {
       throw new Error(`Failed to fetch audit log: ${error.message}`);
     }
 
-    return data ? this.mapToAuditLog(data as DbAuditLog) : null;
+    // return data ? this.mapToAuditLog(data as DbAuditLog) : null;
+    if (!data) {
+      return null;
+    }
+    const [row] = await fillUserNames([data as DbAuditLog]);
+    return this.mapToAuditLog(row as DbAuditLog);
   },
 
   /**
@@ -185,7 +220,8 @@ export const auditLogRepository = {
       throw new Error(`Failed to fetch audit logs: ${error.message}`);
     }
 
-    return (data || []).map((row) => this.mapToAuditLog(row as DbAuditLog));
+    // return (data || []).map((row) => this.mapToAuditLog(row as DbAuditLog));
+    return (await fillUserNames((data || []) as DbAuditLog[])).map((row) => this.mapToAuditLog(row));
   },
 
   /**

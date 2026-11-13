@@ -225,6 +225,9 @@ export function SalesOrdersPageContent() {
       const result = await deleteSalesOrder(orderToDelete.id);
       if (result.success) {
         toast.success(`Order ${orderToDelete.orderNumber} deleted`);
+        if (result.warning) {
+          toast.warning(result.warning, { duration: 10000 });
+        }
         refetchOrders();
       } else {
         toast.error(result.error || 'Failed to delete order');

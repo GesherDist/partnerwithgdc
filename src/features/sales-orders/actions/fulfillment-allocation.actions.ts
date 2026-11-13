@@ -31,6 +31,8 @@ import {
 import type { FulfillmentAllocation } from '@/features/sales-orders/types';
 import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
 import { ALLOCATION_PERMISSIONS } from '../lib/allocation-permissions';
+// Audit log: who changed an allocation (Nov 12 2026)
+import '../lib/audit-actor.server';
 
 // ============================================
 // TYPES
@@ -1043,6 +1045,25 @@ export async function updateAllocationStatus(
       return {
         success: false,
         error: 'This allocation was cancelled. Add a new allocation instead.',
+      };
+    }
+
+    // Cancelled: release the reserved stock / PO too, not only the status
+    // (Nov 12 2026, Bug C: before, only the status changed and stock stayed reserved)
+    if (status === 'cancelled') {
+      const { cancelAllocationAndRelease } = await import(
+        '@/features/sales-orders/services/fulfillment-orchestration.service'
+      );
+      const cancelled = await cancelAllocationAndRelease(allocationId);
+      if (!cancelled.success) {
+        return { success: false, error: cancelled.error || 'Failed to cancel allocation' };
+      }
+      return {
+        success: true,
+        data: cancelled.data ?? null,
+        ...(cancelled.warnings.length > 0
+          ? { message: `Allocation cancelled, but check the inventory: ${cancelled.warnings.join('; ')}` }
+          : {}),
       };
     }
 

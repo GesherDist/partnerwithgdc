@@ -429,6 +429,20 @@ export async function createMultiSourceAllocation(
     // Check if any inventory update failed
     const failedInventory = inventoryResults.find((r) => !r.success);
     if (failedInventory) {
+      // Rollback: release the reservations that did go through (Nov 12 2026:
+      // before, only the allocation rows were deleted and those stayed reserved)
+      for (let i = 0; i < inventoryResults.length; i++) {
+        const a = params.allocations[i];
+        if (inventoryResults[i]?.success && a) {
+          await deallocateInventoryForAllocation({
+            fulfillmentSource: a.fulfillmentSource,
+            quantity: a.quantity,
+            productId: params.productId,
+            locationId: a.locationId,
+            dealerLocationId: a.dealerLocationId,
+          });
+        }
+      }
       // Rollback: Delete all allocations
       await Promise.all(allocations.map((a) => deleteAllocation(a.id)));
       return {
@@ -548,6 +562,7 @@ export async function updateAllocationQuantity(
         productId: params.productId,
         locationId: currentAllocation.locationId || undefined,
         dealerLocationId: currentAllocation.dealerLocationId || undefined,
+        restore: true,
       });
       return {
         success: false,
@@ -580,6 +595,7 @@ export async function updateAllocationQuantity(
         productId: params.productId,
         locationId: currentAllocation.locationId || undefined,
         dealerLocationId: currentAllocation.dealerLocationId || undefined,
+        restore: true,
       });
 
       return {
@@ -765,7 +781,8 @@ export async function updateAllocationDetails(params: {
       const reserved = await allocateInventoryForAllocation(newReservation);
       if (!reserved.success) {
         if (oldReservation.quantity > 0) {
-          await allocateInventoryForAllocation(oldReservation);
+          // await allocateInventoryForAllocation(oldReservation);
+          await allocateInventoryForAllocation({ ...oldReservation, restore: true });
         }
         return { success: false, error: reserved.error || 'Failed to allocate new inventory' };
       }
@@ -783,7 +800,8 @@ export async function updateAllocationDetails(params: {
       if (inventoryChanged) {
         await deallocateInventoryForAllocation(newReservation);
         if (oldReservation.quantity > 0) {
-          await allocateInventoryForAllocation(oldReservation);
+          // await allocateInventoryForAllocation(oldReservation);
+          await allocateInventoryForAllocation({ ...oldReservation, restore: true });
         }
       }
       return { success: false, error: updateError?.message || 'Failed to update allocation' };
@@ -1053,13 +1071,15 @@ export async function releaseAllocationsForCancelledOrder(salesOrderId: string):
     const { error: statusError } = await updateAllocation({ id: row.id, status: 'cancelled' });
     if (statusError) {
       // Put the reservation back so stock and allocation stay in step
-      if (release.success) {
+      // if (release.success) {
+      if (release.success && (release.released ?? row.quantity) > 0) {
         await allocateInventoryForAllocation({
           fulfillmentSource: row.fulfillment_source,
           quantity: release.released ?? row.quantity,
           productId,
           locationId: row.location_id || undefined,
           dealerLocationId: row.dealer_location_id || undefined,
+          restore: true,
         });
       }
       warnings.push(`${row.quantity} tires: allocation could not be cancelled (${statusError.message})`);
@@ -1073,6 +1093,111 @@ export async function releaseAllocationsForCancelledOrder(salesOrderId: string):
   }
 
   return { success: true, released, warnings, itemIdsWithAllocations };
+}
+
+/**
+ * Set ONE allocation to "cancelled" and release what it reserved (Nov 12 2026,
+ * Bug C). Before, the status dropdowns (Platinum Dealers drawer and the
+ * updateAllocationStatus action) only changed the status: the warehouse /
+ * dealer stock stayed reserved and the PO stayed sold (MWI C-SO2600038:
+ * 12 x 38" allocation cancelled on Nov 9 with no release movement).
+ *
+ * Same steps as releaseAllocationsForCancelledOrder for one row: release its
+ * reservation (GDC warehouse or dealer location; Manufacturer and Dealer
+ * Fulfillment reserve nothing), mark it cancelled (kept for history), free its
+ * PO when no other allocation uses it. A release that fails because nothing
+ * was reserved (older data) does not block the cancel: it comes back in
+ * `warnings`. Already cancelled: nothing to do. Fulfilled (shipped): refused.
+ */
+export async function cancelAllocationAndRelease(allocationId: string): Promise<{
+  success: boolean;
+  error?: string;
+  data?: FulfillmentAllocation | null;
+  warnings: string[];
+}> {
+  const warnings: string[] = [];
+  const { data: row, error } = await db
+    .from('fulfillment_allocations')
+    .select(
+      'id, status, quantity, fulfillment_source, location_id, dealer_location_id, purchase_order_id, sales_order_item_id, sales_order_items (product_id)'
+    )
+    .eq('id', allocationId)
+    .maybeSingle();
+  if (error || !row) {
+    return { success: false, error: error ? `Could not load the allocation: ${error.message}` : 'Allocation not found', warnings };
+  }
+
+  type Row = {
+    id: string;
+    status: string;
+    quantity: number;
+    fulfillment_source: FulfillmentSource;
+    location_id: string | null;
+    dealer_location_id: string | null;
+    purchase_order_id: string | null;
+    sales_order_item_id: string;
+    sales_order_items: { product_id: string | null } | Array<{ product_id: string | null }> | null;
+  };
+  const r = row as unknown as Row;
+
+  if (r.status === 'cancelled') {
+    const { data: current } = await getAllocationById(allocationId);
+    return { success: true, data: current, warnings };
+  }
+  if (r.status === 'fulfilled') {
+    return { success: false, error: 'This allocation is already fulfilled (shipped) and cannot be cancelled.', warnings };
+  }
+  // Part of it already shipped: how much is still reserved is not known here,
+  // so releasing the full quantity could take other orders' reservations
+  if (r.status === 'partially_fulfilled') {
+    return {
+      success: false,
+      error: 'This allocation is partially fulfilled (some tires shipped) and cannot be cancelled here. Please adjust the quantity instead.',
+      warnings,
+    };
+  }
+
+  const item = Array.isArray(r.sales_order_items) ? r.sales_order_items[0] : r.sales_order_items;
+  const productId = item?.product_id ?? null;
+
+  let release: { success: boolean; error?: string; released?: number } = { success: false };
+  if (productId) {
+    release = await deallocateInventoryForAllocation({
+      fulfillmentSource: r.fulfillment_source,
+      quantity: r.quantity,
+      productId,
+      locationId: r.location_id || undefined,
+      dealerLocationId: r.dealer_location_id || undefined,
+    });
+    if (!release.success) {
+      warnings.push(`${r.quantity} tires: stock not released (${release.error || 'unknown error'})`);
+    }
+  } else {
+    warnings.push(`${r.quantity} tires: line has no product, no stock released`);
+  }
+
+  const { data: updated, error: statusError } = await updateAllocation({ id: allocationId, status: 'cancelled' });
+  if (statusError) {
+    // Put the reservation back so stock and allocation stay in step
+    // if (release.success && productId) {
+    if (release.success && productId && (release.released ?? r.quantity) > 0) {
+      await allocateInventoryForAllocation({
+        fulfillmentSource: r.fulfillment_source,
+        quantity: release.released ?? r.quantity,
+        productId,
+        locationId: r.location_id || undefined,
+        dealerLocationId: r.dealer_location_id || undefined,
+        restore: true,
+      });
+    }
+    return { success: false, error: `Allocation could not be cancelled: ${statusError.message}`, warnings };
+  }
+
+  if (r.fulfillment_source === 'direct' && r.purchase_order_id) {
+    await unlinkPurchaseOrderIfUnused(r.purchase_order_id, r.sales_order_item_id);
+  }
+
+  return { success: true, data: updated, warnings };
 }
 
 // ============================================
@@ -1132,6 +1257,7 @@ export async function cancelAllocation(params: {
         productId: params.productId,
         locationId: allocation.locationId || undefined,
         dealerLocationId: allocation.dealerLocationId || undefined,
+        restore: true,
       });
 
       return {
@@ -1240,7 +1366,77 @@ export async function markAllocationFulfilled(params: {
 // ============================================
 
 /**
+ * Safe warehouse stock write (Nov 12 2026): two users saving at the same time.
+ *
+ * Before, the reservation was read, then written as "old + quantity". Two saves
+ * at the same moment both read the same value and the second write replaced
+ * the first: one reservation was lost, and both could pass the "available"
+ * check, so more tires than available could be allocated.
+ *
+ * Now the write only goes through when the row still has the on_hand and
+ * allocated that were read ("compare and set"). When another user changed the
+ * row in between, nothing is written, the row is read again and the change is
+ * worked out again from the new values (and the available check runs again).
+ * After STOCK_WRITE_ATTEMPTS tries the user is asked to save again.
+ * No database change is needed.
+ */
+const STOCK_WRITE_ATTEMPTS = 5;
+/** Rollbacks (restore) try longer: a lost restore would leave an allocation without its reservation */
+const STOCK_RESTORE_ATTEMPTS = 20;
+const STOCK_BUSY_ERROR = 'The stock was changed by another user at the same moment. Please save again.';
+
+async function updateWarehouseAllocated(
+  locationId: string,
+  productId: string,
+  // Returns the new allocated value, or an error message to stop
+  nextAllocated: (row: { on_hand: number; allocated: number }) => { allocated: number } | { error: string },
+  attempts: number = STOCK_WRITE_ATTEMPTS
+): Promise<{ success: boolean; error?: string; before?: { on_hand: number; allocated: number }; after?: number }> {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const { data: row, error: fetchError } = await db
+      .from('inventory')
+      .select('on_hand, allocated')
+      .eq('location_id', locationId)
+      .eq('product_id', productId)
+      .single();
+    if (fetchError || !row) {
+      return { success: false, error: 'Inventory not found' };
+    }
+    const current = { on_hand: Number(row.on_hand ?? 0), allocated: Number(row.allocated ?? 0) };
+    const next = nextAllocated(current);
+    if ('error' in next) {
+      return { success: false, error: next.error, before: current };
+    }
+    if (next.allocated === current.allocated) {
+      return { success: true, before: current, after: current.allocated };
+    }
+
+    const { data: written, error: updateError } = await db
+      .from('inventory')
+      .update({ allocated: next.allocated })
+      .eq('location_id', locationId)
+      .eq('product_id', productId)
+      // only when nobody changed the row since it was read
+      .eq('on_hand', row.on_hand)
+      .eq('allocated', row.allocated)
+      .select('allocated');
+    if (updateError) {
+      return { success: false, error: updateError.message, before: current };
+    }
+    if (written && written.length > 0) {
+      return { success: true, before: current, after: next.allocated };
+    }
+    // Changed by someone else in between: read again and retry
+  }
+  return { success: false, error: STOCK_BUSY_ERROR };
+}
+
+/**
  * Allocate inventory for an allocation
+ *
+ * `restore`: put back a reservation that was released a moment ago in this
+ * same save (rollback). It skips the "available" check, so the allocation that
+ * still exists keeps its reservation even if someone took the stock in between.
  */
 async function allocateInventoryForAllocation(params: {
   fulfillmentSource: FulfillmentSource;
@@ -1248,6 +1444,7 @@ async function allocateInventoryForAllocation(params: {
   productId: string;
   locationId?: string;
   dealerLocationId?: string;
+  restore?: boolean;
 }): Promise<{ success: boolean; error?: string }> {
   try {
     if (params.fulfillmentSource === 'gdc_inventory') {
@@ -1255,26 +1452,43 @@ async function allocateInventoryForAllocation(params: {
         return { success: false, error: 'Location ID required for GDC inventory' };
       }
 
-      const supabase = db;
-      const { data: inventory, error: fetchError } = await supabase
-        .from('inventory')
-        .select('on_hand, allocated')
-        .eq('location_id', params.locationId)
-        .eq('product_id', params.productId)
-        .single();
+      // const supabase = db;
+      // const { data: inventory, error: fetchError } = await supabase
+      //   .from('inventory')
+      //   .select('on_hand, allocated')
+      //   .eq('location_id', params.locationId)
+      //   .eq('product_id', params.productId)
+      //   .single();
+      //
+      // if (fetchError || !inventory) {
+      //   return { success: false, error: 'Inventory not found' };
+      // }
+      //
+      // const { error: updateError } = await supabase
+      //   .from('inventory')
+      //   .update({ allocated: inventory.allocated + params.quantity })
+      //   .eq('location_id', params.locationId)
+      //   .eq('product_id', params.productId);
+      //
+      // if (updateError) {
+      //   return { success: false, error: updateError.message };
+      // }
+      // (Before Nov 12 2026: read, then write old + quantity; two saves at the
+      // same moment could lose one reservation.)
 
-      if (fetchError || !inventory) {
-        return { success: false, error: 'Inventory not found' };
-      }
-
-      const { error: updateError } = await supabase
-        .from('inventory')
-        .update({ allocated: inventory.allocated + params.quantity })
-        .eq('location_id', params.locationId)
-        .eq('product_id', params.productId);
-
-      if (updateError) {
-        return { success: false, error: updateError.message };
+      const write = await updateWarehouseAllocated(params.locationId, params.productId, (row) => {
+        const available = row.on_hand - row.allocated;
+        // Same rule as validateAllocationRequest, checked again on the latest stock
+        if (!params.restore && available < params.quantity) {
+          return { error: `Insufficient GDC inventory. Available: ${available}, Requested: ${params.quantity}` };
+        }
+        return { allocated: row.allocated + params.quantity };
+      }, params.restore ? STOCK_RESTORE_ATTEMPTS : STOCK_WRITE_ATTEMPTS);
+      if (!write.success) {
+        if (params.restore) {
+          console.error(`[allocateInventoryForAllocation] Rollback could not restore ${params.quantity} units at location ${params.locationId}: ${write.error}`);
+        }
+        return { success: false, error: write.error };
       }
 
       // Log inventory movement
@@ -1300,6 +1514,8 @@ async function allocateInventoryForAllocation(params: {
         dealerLocationId: params.dealerLocationId,
         productId: params.productId,
         quantity: params.quantity,
+        // rollback: put the reservation back without the available check
+        skipAvailabilityCheck: params.restore === true,
       });
 
       if (!success) {
@@ -1347,21 +1563,38 @@ async function deallocateInventoryForAllocation(params: {
         return { success: false, error: 'Location ID required for GDC inventory' };
       }
 
-      const supabase = db;
-      const { data: inventory, error: fetchError } = await supabase
-        .from('inventory')
-        .select('on_hand, allocated')
-        .eq('location_id', params.locationId)
-        .eq('product_id', params.productId)
-        .single();
-
-      if (fetchError || !inventory) {
-        return { success: false, error: 'Inventory not found' };
-      }
+      // const supabase = db;
+      // const { data: inventory, error: fetchError } = await supabase
+      //   .from('inventory')
+      //   .select('on_hand, allocated')
+      //   .eq('location_id', params.locationId)
+      //   .eq('product_id', params.productId)
+      //   .single();
+      //
+      // if (fetchError || !inventory) {
+      //   return { success: false, error: 'Inventory not found' };
+      // }
+      //
+      // const released = Math.min(params.quantity, Math.max(0, inventory.allocated));
+      // ...
+      // const { error: updateError } = await supabase
+      //   .from('inventory')
+      //   .update({ allocated: inventory.allocated - released })
+      //   .eq('location_id', params.locationId)
+      //   .eq('product_id', params.productId);
+      // (Before Nov 12 2026: read, then write; two saves at the same moment
+      // could lose one change. Now compare and set, see updateWarehouseAllocated.)
 
       // Release only what is actually reserved: an allocation saved without its
       // reservation (older data) must not push `allocated` below zero
-      const released = Math.min(params.quantity, Math.max(0, inventory.allocated));
+      let released = 0;
+      const write = await updateWarehouseAllocated(params.locationId, params.productId, (row) => {
+        released = Math.min(params.quantity, Math.max(0, row.allocated));
+        return { allocated: row.allocated - released };
+      });
+      if (!write.success) {
+        return { success: false, error: write.error };
+      }
       if (released < params.quantity) {
         console.warn(
           `[deallocateInventoryForAllocation] Only ${released} of ${params.quantity} units were reserved at location ${params.locationId}`
@@ -1369,16 +1602,6 @@ async function deallocateInventoryForAllocation(params: {
       }
       if (released === 0) {
         return { success: true, released: 0 };
-      }
-
-      const { error: updateError } = await supabase
-        .from('inventory')
-        .update({ allocated: inventory.allocated - released })
-        .eq('location_id', params.locationId)
-        .eq('product_id', params.productId);
-
-      if (updateError) {
-        return { success: false, error: updateError.message };
       }
 
       // Log inventory movement

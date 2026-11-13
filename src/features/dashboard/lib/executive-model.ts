@@ -6,11 +6,14 @@
  * reason it is unavailable — no sample numbers.
  */
 
-import type { BacklogOrder, ErpExecutiveFigures, SupplyCycle } from '../services/executive-erp.service';
+// import type { BacklogOrder, ErpExecutiveFigures, SupplyCycle } from '../services/executive-erp.service';
+import type { BacklogOrder, ErpExecutiveFigures, SupplierPayable, SupplyCycle } from '../services/executive-erp.service';
 import type { DailySnapshot } from '../services/executive-history.service';
 import type { QboBalances, QboFinancials, QboOpenBills, QboOpenInvoices } from '@/modules/integrations/quickbooks/services/qbo-financials.service';
 // import { addYears } from './periods';
-import { addYears, trailingMonths } from './periods';
+// import { addYears, trailingMonths } from './periods';
+// import { addYears, completedMonthsYtd, trailingMonths } from './periods';
+import { addDays, addYears, completedMonthsYtd, trailingMonths } from './periods';
 import { qboCommission } from './commission';
 // PeriodKey: used by the commented ERP rows -- import { type PeriodKey } from './periods';
 
@@ -58,6 +61,13 @@ export interface CashQuarter {
    * after today. 0 without QuickBooks OPEX.
    */
   opex: number;
+  /**
+   * Nov 13 2026 (Ankur, Nov 12 email: net 45 after delivery): supplier POs not delivered
+   * yet (bill not in QuickBooks yet), paid out at expected delivery + 45 days. 0 when none.
+   */
+  supplierPayables: number;
+  /** Number of those POs */
+  supplierPos: number;
   closing: number;
   orders: number;
   tires: number;
@@ -68,8 +78,11 @@ export interface ProjectionOpex {
   /** YTD OPEX / months: one month of OPEX */
   monthly: number;
   ytd: number;
-  /** Current month number of the QuickBooks as-of date (Nov = 11) */
+  // Before Nov 13 2026: Current month number of the QuickBooks as-of date (Nov = 11)
+  /** Nov 13 2026: completed months of the year (Nov 12 → 10, Jan–Oct); 1 in January (month to date) */
   months: number;
+  /** Nov 13 2026: the months behind `ytd`, e.g. "Jan–Oct" (missing in older code paths) */
+  period?: string;
   /** Basis of the YTD OPEX (Cash whenever the snapshot has it) */
   basis: 'Cash' | 'Accrual';
 }
@@ -99,13 +112,28 @@ export interface CashProjection {
   movements: CashMovement[];
   /** Nov 12 2026: OPEX run rate taken off each quarter (null = not included) */
   opex?: ProjectionOpex | null;
+  /** Nov 13 2026: days after delivery the orders are paid (ERP orders: net 30; 0 = on the expected date) */
+  orderPaymentDays?: number;
+  /**
+   * Nov 13 2026: supplier POs (net 45 after delivery). included = paid out in the
+   * projection; billed = left out because a QuickBooks open bill shows the PO number
+   * (already in the open bills). Null = the ERP figures had no supplier POs list.
+   */
+  supplierPayables?: {
+    termsDays: number;
+    total: number;
+    included: Array<SupplierPayable & { payDate: string }>;
+    billed: Array<SupplierPayable & { bill: string }>;
+  } | null;
 }
 
 export interface CashMovement {
   date: string;
   // kind: 'Invoice' | 'Bill' | 'Order';
   // Nov 12 2026: 'OPEX' = one month of OPEX at the YTD run rate, on the month-end
-  kind: 'Invoice' | 'Bill' | 'Order' | 'OPEX';
+  // kind: 'Invoice' | 'Bill' | 'Order' | 'OPEX';
+  // Nov 13 2026: 'Supplier PO' = supplier PO not billed yet, paid at delivery + 45
+  kind: 'Invoice' | 'Bill' | 'Order' | 'OPEX' | 'Supplier PO';
   ref: string;
   party: string;
   amount: number;
@@ -209,7 +237,13 @@ export function projectionOrdersOf(
 ): { orders: BacklogOrder[]; source: 'quickbooks' | 'erp' | 'missing' } {
   const qso = qbo?.periods?.openSalesOrders;
   if (!qso) {
-    return erpOrders ? { orders: erpOrders, source: 'erp' } : { orders: [], source: 'missing' };
+    // return erpOrders ? { orders: erpOrders, source: 'erp' } : { orders: [], source: 'missing' };
+    // Nov 13 2026 (Ankur, Nov 12 email: "Payment terms are typically net 30 after delivery"):
+    // ERP orders are paid 30 days after their expected delivery. QuickBooks open sales orders
+    // keep their ship / due date as it is (a due date already includes the terms).
+    return erpOrders
+      ? { orders: erpOrders.map((o) => ({ ...o, paymentTermsDays: CUSTOMER_PAYMENT_TERMS_DAYS })), source: 'erp' }
+      : { orders: [], source: 'missing' };
   }
   return {
     source: 'quickbooks',
@@ -225,10 +259,50 @@ export function projectionOrdersOf(
   };
 }
 
-/** Quarter an order is expected to be invoiced in: no date / date passed → current quarter */
+/** Nov 13 2026 (Ankur, Nov 12 email): customers pay net 30 after delivery */
+export const CUSTOMER_PAYMENT_TERMS_DAYS = 30;
+
+/**
+ * Nov 13 2026: day an order's cash comes in = expected delivery date (no date /
+ * date passed → today) + the order's payment terms (none → the delivery day, as before).
+ */
+export function orderCashDate(order: BacklogOrder, asOf: string): string {
+  const delivery = order.expectedDate && order.expectedDate > asOf ? order.expectedDate : asOf;
+  return order.paymentTermsDays && order.paymentTermsDays > 0 ? addDays(delivery, order.paymentTermsDays) : delivery;
+}
+
+/** Nov 13 2026 (Ankur, Nov 12 email: "After the container is delivered we pay on net 45 terms") */
+export const SUPPLIER_PAYMENT_TERMS_DAYS = 45;
+
+/** Nov 13 2026: day a supplier PO is paid = expected delivery (no date / passed → today) + 45 days */
+export function supplierPayDate(po: SupplierPayable, asOf: string): string {
+  const delivery = po.expectedDate && po.expectedDate > asOf ? po.expectedDate : asOf;
+  return addDays(delivery, SUPPLIER_PAYMENT_TERMS_DAYS);
+}
+
+/**
+ * Nov 13 2026: the QuickBooks open bill that carries this PO's number (digits of the
+ * PO number, e.g. "PO-2600038" → "2600038", found in the bill no.), or null. Such a
+ * PO is already paid out through the open bills, so it is not counted twice.
+ */
+export function billOfSupplierPo(po: SupplierPayable, openBills: QboOpenBills | null | undefined): string | null {
+  const digits = po.po.replace(/\D/g, '');
+  if (digits.length < 5) {
+    return null;
+  }
+  const bill = (openBills?.bills ?? []).find((b) => b.doc.replace(/\D/g, '').includes(digits));
+  return bill ? bill.doc : null;
+}
+
+// Before Nov 13 2026 (cash on the expected delivery date):
+// /** Quarter an order is expected to be invoiced in: no date / date passed → current quarter */
+// export function cashQuarterOf(order: BacklogOrder, asOf: string): string {
+//   const current = quarterStart(asOf);
+//   return order.expectedDate && order.expectedDate >= current ? quarterStart(order.expectedDate) : current;
+// }
+/** Quarter an order's cash comes in: expected delivery (no date / passed → today) + payment terms */
 export function cashQuarterOf(order: BacklogOrder, asOf: string): string {
-  const current = quarterStart(asOf);
-  return order.expectedDate && order.expectedDate >= current ? quarterStart(order.expectedDate) : current;
+  return quarterStart(orderCashDate(order, asOf));
 }
 
 /** Quarter an open invoice is expected to be paid in: due date; no date / overdue → current quarter */
@@ -284,7 +358,10 @@ export function buildCashProjection(
   // Before Nov 9 2026: ordersSource: 'quickbooks' | 'missing' = 'missing'
   ordersSource: 'quickbooks' | 'erp' | 'missing' = 'missing',
   // Nov 12 2026 (Ankur, Nov 11 email): OPEX at the YTD run rate; null = not included (as before)
-  opexRunRate: ProjectionOpex | null = null
+  opexRunRate: ProjectionOpex | null = null,
+  // Nov 13 2026 (Ankur, Nov 12 email): supplier POs not delivered yet, paid at delivery + 45;
+  // null / missing = not included (as before)
+  supplierPos: SupplierPayable[] | null = null
 ): CashProjection {
   const current = quarterStart(asOf);
   const byQuarter = new Map<string, { inflow: number; receivables: number; invoices: number; payables: number; bills: number; orders: number; tires: number }>();
@@ -316,6 +393,28 @@ export function buildCashProjection(
     last = q > last ? q : last;
   }
 
+  // Nov 13 2026: supplier POs not billed yet, in the quarter of delivery + 45 days. A PO whose
+  // number is on a QuickBooks open bill is already in the open bills above (not counted twice).
+  const poIncluded: Array<SupplierPayable & { payDate: string }> = [];
+  const poBilled: Array<SupplierPayable & { bill: string }> = [];
+  for (const po of supplierPos ?? []) {
+    const bill = billOfSupplierPo(po, openBills);
+    if (bill) {
+      poBilled.push({ ...po, bill });
+    } else {
+      poIncluded.push({ ...po, payDate: supplierPayDate(po, asOf) });
+    }
+  }
+  const poByQuarter = new Map<string, { amount: number; count: number }>();
+  for (const po of poIncluded) {
+    const q = quarterStart(po.payDate);
+    const r = poByQuarter.get(q) ?? { amount: 0, count: 0 };
+    r.amount += po.amount;
+    r.count += 1;
+    poByQuarter.set(q, r);
+    last = q > last ? q : last;
+  }
+
   // Nov 12 2026: OPEX per month-end from tomorrow (Ankur: ((YTD OPEX / months) x 12) / 4 a quarter,
   // i.e. one month x 3). The current month counts only its days after today.
   const quarterStarts: string[] = [];
@@ -335,7 +434,10 @@ export function buildCashProjection(
     const payables = Math.round(row.payables * 100) / 100;
     // const closing = Math.round((opening + receivables + inflow - payables) * 100) / 100;
     const opex = Math.round(opexIn(q, quarterEnd(q)) * 100) / 100;
-    const closing = Math.round((opening + receivables + inflow - payables - opex) * 100) / 100;
+    // const closing = Math.round((opening + receivables + inflow - payables - opex) * 100) / 100;
+    // Nov 13 2026: minus supplier POs not billed yet (delivery + 45)
+    const supplierPayables = Math.round((poByQuarter.get(q)?.amount ?? 0) * 100) / 100;
+    const closing = Math.round((opening + receivables + inflow - payables - opex - supplierPayables) * 100) / 100;
     quarters.push({
       label: quarterLabel(q),
       start: q,
@@ -347,6 +449,8 @@ export function buildCashProjection(
       payables,
       bills: row.bills,
       opex,
+      supplierPayables,
+      supplierPos: poByQuarter.get(q)?.count ?? 0,
       closing,
       orders: row.orders,
       tires: row.tires,
@@ -360,9 +464,13 @@ export function buildCashProjection(
   const moves: Array<Omit<CashMovement, 'balance'>> = [
     ...(openInvoices?.invoices ?? []).map((i) => ({ date: onDate(i.dueDate), kind: 'Invoice' as const, ref: i.doc, party: i.customer, amount: i.balance })),
     ...(openBills?.bills ?? []).map((b) => ({ date: onDate(b.dueDate), kind: 'Bill' as const, ref: b.doc, party: b.vendor, amount: -b.balance })),
-    ...orders.map((o) => ({ date: onDate(o.expectedDate), kind: 'Order' as const, ref: o.order, party: '', amount: o.revenue })),
+    // ...orders.map((o) => ({ date: onDate(o.expectedDate), kind: 'Order' as const, ref: o.order, party: '', amount: o.revenue })),
+    // Nov 13 2026: on the day the order is paid (ERP orders: delivery + 30)
+    ...orders.map((o) => ({ date: orderCashDate(o, asOf), kind: 'Order' as const, ref: o.order, party: '', amount: o.revenue })),
     // Nov 12 2026: OPEX at the YTD run rate, one movement per month-end
     ...opexMonths.map((m) => ({ date: m.date, kind: 'OPEX' as const, ref: m.ref, party: '', amount: -m.amount })),
+    // Nov 13 2026: supplier POs not billed yet, on delivery + 45
+    ...poIncluded.map((po) => ({ date: po.payDate, kind: 'Supplier PO' as const, ref: po.po, party: '', amount: -po.amount })),
   ].sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind));
   const movements: CashMovement[] = [];
   let balance = cashToday;
@@ -389,6 +497,7 @@ export function buildCashProjection(
     ordersSource,
     undatedOrders: orders.filter((o) => !o.expectedDate).length,
     overdueOrders: orders.filter((o) => o.expectedDate && o.expectedDate < current).length,
+    orderPaymentDays: orders.reduce((n, o) => Math.max(n, o.paymentTermsDays ?? 0), 0),
     openInvoices: openInvoices
       ? { total: openInvoices.total, overdue: openInvoices.overdue, count: openInvoices.count, asOf: invoicesAsOf }
       : null,
@@ -397,6 +506,14 @@ export function buildCashProjection(
     highCash: daily ? high : null,
     movements: daily ? movements : [],
     opex: opexRunRate,
+    supplierPayables: supplierPos
+      ? {
+          termsDays: SUPPLIER_PAYMENT_TERMS_DAYS,
+          total: Math.round(poIncluded.reduce((n, po) => n + po.amount, 0) * 100) / 100,
+          included: poIncluded,
+          billed: poBilled,
+        }
+      : null,
   };
 }
 
@@ -685,15 +802,39 @@ export function buildExecutiveModel(
   //   T90 Average    = T90 OPEX ÷ 3
   //   YTD            = YTD OPEX ÷ current month number (Nov = 11)
   //   Annualized     = monthly × 12
-  const opexYtdMonths = qbo ? Number(qbo.asOf.slice(5, 7)) : 0;
+  // const opexYtdMonths = qbo ? Number(qbo.asOf.slice(5, 7)) : 0;
+  // const opexMonthly = q
+  //   ? { pm: q.opex.pm, t90: q.opex.t90 / 3, ytd: opexYtdMonths > 0 ? q.opex.ytd / opexYtdMonths : null }
+  //   : null;
+  // Nov 13 2026 (Ankur, Nov 12 email: "The months that closed so Jan-October"):
+  //   YTD = OPEX of the completed months (Jan 1 → end of last month = YTD − MTD)
+  //         ÷ number of completed months (Nov 12: Jan–Oct ÷ 10)
+  //   January (no completed month yet): no value, with a note
+  const opexClosed = qbo ? completedMonthsYtd(qbo.asOf) : null;
+  const opexClosedTotal = (o: { ytd: number; mtd: number } | null | undefined) =>
+    o && Number.isFinite(o.ytd) && Number.isFinite(o.mtd) ? Math.round((o.ytd - o.mtd) * 100) / 100 : null;
+  const opexYtdClosed = q ? opexClosedTotal(q.opex) : null;
   const opexMonthly = q
-    ? { pm: q.opex.pm, t90: q.opex.t90 / 3, ytd: opexYtdMonths > 0 ? q.opex.ytd / opexYtdMonths : null }
+    ? {
+        pm: q.opex.pm,
+        t90: q.opex.t90 / 3,
+        ytd: opexClosed && opexClosed.months > 0 && opexYtdClosed !== null ? opexYtdClosed / opexClosed.months : null,
+      }
     : null;
   const rr = (x: number | null | undefined, times = 1): Cell =>
     !q ? none(qNote) : x === null || x === undefined || !Number.isFinite(x) ? none(REASON.noQuickBooks) : v(Math.round(x * times * 100) / 100);
+  const noClosedMonth = 'No completed month this year yet (January)';
+  const rrYtd = (times: number): Cell =>
+    q && opexClosed && opexClosed.months === 0
+      ? none(noClosedMonth)
+      : opexMonthly?.ytd !== null && opexMonthly?.ytd !== undefined && Number.isFinite(opexMonthly.ytd)
+        ? v(Math.round(opexMonthly.ytd * times * 100) / 100, opexClosed?.label ? `${opexClosed.label} ÷ ${opexClosed.months}` : undefined)
+        : rr(opexMonthly?.ytd, times);
   const opexRunRate: ExecutiveDashboardModel['opexRunRate'] = {
-    monthly: { pm: rr(opexMonthly?.pm), t90: rr(opexMonthly?.t90), ytd: rr(opexMonthly?.ytd) },
-    annualized: { pm: rr(opexMonthly?.pm, 12), t90: rr(opexMonthly?.t90, 12), ytd: rr(opexMonthly?.ytd, 12) },
+    // monthly: { pm: rr(opexMonthly?.pm), t90: rr(opexMonthly?.t90), ytd: rr(opexMonthly?.ytd) },
+    // annualized: { pm: rr(opexMonthly?.pm, 12), t90: rr(opexMonthly?.t90, 12), ytd: rr(opexMonthly?.ytd, 12) },
+    monthly: { pm: rr(opexMonthly?.pm), t90: rr(opexMonthly?.t90), ytd: rrYtd(1) },
+    annualized: { pm: rr(opexMonthly?.pm, 12), t90: rr(opexMonthly?.t90, 12), ytd: rrYtd(12) },
   };
 
   // ---------- daily history (backlog / inventory units, migration 163) ----------
@@ -839,8 +980,19 @@ export function buildExecutiveModel(
   // const projection = current ? buildCashProjection(current.cash, projectionOrders.orders, erp.asOf, q?.openInvoices ?? null, qbo?.asOf ?? null, q?.openBills ?? null, projectionOrders.source) : null;
   // Nov 12 2026 (Ankur, Nov 11 email): minus OPEX at the YTD run rate, YTD OPEX / current month number
   // (same as OPEX Run Rate > YTD). Cash basis whatever the P&L toggle shows (cash projection).
-  const projectionOpexYtd = q ? q.opexCash?.ytd ?? q.opex.ytd : null;
-  const projectionOpexMonths = qbo ? Number(qbo.asOf.slice(5, 7)) : 0;
+  // const projectionOpexYtd = q ? q.opexCash?.ytd ?? q.opex.ytd : null;
+  // const projectionOpexMonths = qbo ? Number(qbo.asOf.slice(5, 7)) : 0;
+  // Nov 13 2026 (Ankur, Nov 12 email): completed months only, same as OPEX Run Rate > YTD
+  // (Nov 12: Jan–Oct OPEX ÷ 10). January has no completed month: the month to date ÷ 1
+  // as before, so Projected Cash keeps taking OPEX off.
+  const projectionOpexSource = q ? q.opexCash ?? q.opex : null;
+  const projectionClosed = opexClosed && opexClosed.months > 0 ? opexClosed : null;
+  const projectionOpexYtd = projectionOpexSource
+    ? projectionClosed
+      ? opexClosedTotal(projectionOpexSource)
+      : projectionOpexSource.ytd
+    : null;
+  const projectionOpexMonths = projectionClosed ? projectionClosed.months : qbo ? 1 : 0;
   const projectionOpex: ProjectionOpex | null =
     q && projectionOpexYtd !== null && Number.isFinite(projectionOpexYtd) && projectionOpexMonths > 0
       ? {
@@ -848,10 +1000,23 @@ export function buildExecutiveModel(
           ytd: projectionOpexYtd,
           months: projectionOpexMonths,
           basis: q.opexCash ? 'Cash' : q.pnlBasis ?? 'Accrual',
+          period: projectionClosed?.label ?? 'Jan month to date',
         }
       : null;
   const projection = current
-    ? buildCashProjection(current.cash, projectionOrders.orders, erp.asOf, q?.openInvoices ?? null, qbo?.asOf ?? null, q?.openBills ?? null, projectionOrders.source, projectionOpex)
+    ? // buildCashProjection(current.cash, projectionOrders.orders, erp.asOf, q?.openInvoices ?? null, qbo?.asOf ?? null, q?.openBills ?? null, projectionOrders.source, projectionOpex)
+      // Nov 13 2026: + supplier POs not billed yet (net 45 after delivery)
+      buildCashProjection(
+        current.cash,
+        projectionOrders.orders,
+        erp.asOf,
+        q?.openInvoices ?? null,
+        qbo?.asOf ?? null,
+        q?.openBills ?? null,
+        projectionOrders.source,
+        projectionOpex,
+        erp.supplierPayables ?? null
+      )
     : null;
 
   return {
@@ -873,7 +1038,9 @@ export function buildExecutiveModel(
             projection.quarters[projection.quarters.length - 1]!.closing,
             // Before Nov 9 2026: ${projection.ordersSource === 'quickbooks' ? 'open sales orders' : 'open sales orders not synced'}
             // `Through ${projection.throughDate} · ${projection.openInvoices ? 'open invoices + ' : ''}${projection.ordersSource === 'quickbooks' ? 'open sales orders' : projection.ordersSource === 'erp' ? 'ERP open orders (QuickBooks sales orders not available)' : 'open sales orders not synced'}${projection.openBills ? ' − open bills' : ''}`
-            `Through ${projection.throughDate} · ${projection.openInvoices ? 'open invoices + ' : ''}${projection.ordersSource === 'quickbooks' ? 'open sales orders' : projection.ordersSource === 'erp' ? 'ERP open orders (QuickBooks sales orders not available)' : 'open sales orders not synced'}${projection.openBills ? ' − open bills' : ''}${projection.opex ? ' − OPEX (YTD run rate)' : ''}`
+            // Before Nov 13 2026:
+            // `Through ${projection.throughDate} · ${projection.openInvoices ? 'open invoices + ' : ''}${projection.ordersSource === 'quickbooks' ? 'open sales orders' : projection.ordersSource === 'erp' ? 'ERP open orders (QuickBooks sales orders not available)' : 'open sales orders not synced'}${projection.openBills ? ' − open bills' : ''}${projection.opex ? ' − OPEX (YTD run rate)' : ''}`
+            `Through ${projection.throughDate} · ${projection.openInvoices ? 'open invoices + ' : ''}${projection.ordersSource === 'quickbooks' ? 'open sales orders' : projection.ordersSource === 'erp' ? 'ERP open orders (QuickBooks sales orders not available)' : 'open sales orders not synced'}${projection.openBills ? ' − open bills' : ''}${projection.opex ? ' − OPEX (YTD run rate)' : ''}${projection.supplierPayables?.included.length ? ' − supplier POs not billed (delivery + 45)' : ''}`
           )
         : none(qNote),
       projection,

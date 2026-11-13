@@ -59,6 +59,18 @@ const DEFAULT_EXCLUDE_FIELDS = [
 class AuditServiceImpl {
   private config: Required<AuditServiceConfig>;
 
+  /**
+   * Nov 13 2026: returns the logged-in user's users.id for the current request.
+   * Registered by src/shared/lib/auth/check-permission.ts (server only), so this
+   * file never imports next/headers: it is also bundled into client pages through
+   * feature index files (e.g. pick-tickets), where next/headers breaks the build.
+   */
+  private currentUserIdResolver: (() => Promise<string | null>) | null = null;
+
+  setCurrentUserIdResolver(resolver: () => Promise<string | null>): void {
+    this.currentUserIdResolver = resolver;
+  }
+
   constructor(config: AuditServiceConfig = {}) {
     this.config = {
       enabled: config.enabled ?? true,
@@ -120,6 +132,29 @@ class AuditServiceImpl {
   }
 
   /**
+   * Nov 13 2026: user id for every audit entry, in one place.
+   *  - userId passed by the caller: used as before.
+   *  - no userId: the logged-in user of this request, from getCurrentUser()
+   *    through currentUserIdResolver (React cache: already loaded by the
+   *    action's permission check, so no extra query in the normal case).
+   *  - nobody logged in (webhooks, cron, background work): null, as before.
+   * Never throws.
+   */
+  private async resolveUserId(entry: CreateAuditEntry): Promise<string | null> {
+    if (entry.userId) {
+      return entry.userId;
+    }
+    if (!this.currentUserIdResolver) {
+      return null;
+    }
+    try {
+      return await this.currentUserIdResolver();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Log an audit entry
    */
   async log(entry: CreateAuditEntry): Promise<AuditEntry | null> {
@@ -150,11 +185,17 @@ class AuditServiceImpl {
         });
       }
 
+      // Nov 13 2026: logged-in user id when the caller did not pass one (see resolveUserId)
+      const userId = await this.resolveUserId(entry);
+
       // Store in database
       const { data: auditLog, error } = await db
         .from('audit_logs')
         .insert({
-          user_id: sanitizedEntry.userId ?? null,
+          // user_id: sanitizedEntry.userId ?? null,
+          // user_email: sanitizedEntry.userEmail ?? null,
+          // user_name: sanitizedEntry.userName ?? null,
+          user_id: userId,
           user_email: sanitizedEntry.userEmail ?? null,
           user_name: sanitizedEntry.userName ?? null,
           action: sanitizedEntry.action,

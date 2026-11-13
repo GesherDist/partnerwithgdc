@@ -368,6 +368,16 @@ function ProjectedCashByQuarter({ projection }: { projection: CashProjection | n
     ...(projection.opex
       ? [{ label: '− OPEX (YTD run rate)', value: (q: CashProjection['quarters'][number]) => money(-q.opex) }]
       : []),
+    // Nov 13 2026 (Ankur, Nov 12 email): supplier POs not billed yet, paid at delivery + 45
+    ...(projection.supplierPayables?.included.length
+      ? [
+          {
+            label: `− Supplier POs not billed (delivery + ${projection.supplierPayables.termsDays})`,
+            value: (q: CashProjection['quarters'][number]) => money(-(q.supplierPayables ?? 0)),
+          },
+          { label: 'POs', value: (q: CashProjection['quarters'][number]) => String(q.supplierPos ?? 0) },
+        ]
+      : []),
     { label: 'Projected Cash (quarter end)', value: (q) => money(q.closing), bold: true },
   ];
   const placed = projection.undatedOrders + projection.overdueOrders;
@@ -383,17 +393,33 @@ function ProjectedCashByQuarter({ projection }: { projection: CashProjection | n
               // Before Nov 9 2026: `... + QuickBooks open sales orders (by ship / due date${projection.ordersSource === 'quickbooks' ? '' : '; not in this snapshot, sync QuickBooks'})...`
               `Cash Today + QuickBooks open invoices (by due date) + ${
                 projection.ordersSource === 'erp'
-                  ? 'ERP open orders for now (QuickBooks sales orders not available; by expected delivery date)'
+                  ? // Before Nov 13 2026: 'ERP open orders for now (QuickBooks sales orders not available; by expected delivery date)'
+                    `ERP open orders for now (QuickBooks sales orders not available; by expected delivery date${projection.orderPaymentDays ? ` + ${projection.orderPaymentDays} days, customers pay net ${projection.orderPaymentDays}` : ''})`
                   : `QuickBooks open sales orders (by ship / due date${projection.ordersSource === 'quickbooks' ? '' : '; not in this snapshot, sync QuickBooks'})`
               }${projection.openBills ? ' − QuickBooks open bills (by due date)' : ''}`
             : 'Cash Today + firm orders still to be invoiced, by expected delivery date (sync QuickBooks to add open invoices)'}{' '}
           · through {projection.throughDate}
           {inv && inv.overdue > 0 && ` · ${money(inv.overdue)} overdue invoices are in the current quarter`}
           {projection.openBills && projection.openBills.overdue > 0 && ` · ${money(projection.openBills.overdue)} overdue bills are in the current quarter`}
-          {placed > 0 && ` · ${placed} order(s) with no or a past delivery date are in the current quarter`}
+          {/* {placed > 0 && ` · ${placed} order(s) with no or a past delivery date are in the current quarter`} */}
+          {/* Nov 13 2026: with payment terms they are paid that many days from today */}
+          {placed > 0 &&
+            (projection.orderPaymentDays
+              ? ` · ${placed} order(s) with no or a past delivery date are counted as delivered today (paid in ${projection.orderPaymentDays} days)`
+              : ` · ${placed} order(s) with no or a past delivery date are in the current quarter`)}
           {/* Nov 12 2026 */}
+          {/* {projection.opex &&
+            ` · OPEX: YTD ${money(projection.opex.ytd)} ÷ ${projection.opex.months} months = ...`} */}
+          {/* Nov 13 2026: completed months (Ankur, Nov 12 email) */}
           {projection.opex &&
-            ` · OPEX: YTD ${money(projection.opex.ytd)} ÷ ${projection.opex.months} months = ${money(projection.opex.monthly)} a month (${projection.opex.basis} basis), ${money(projection.opex.monthly * 3)} a full quarter; the current quarter counts only the days left`}
+            ` · OPEX: ${projection.opex.period ?? 'YTD'} ${money(projection.opex.ytd)} ÷ ${projection.opex.months} ${projection.opex.months === 1 ? 'month' : 'months'} = ${money(projection.opex.monthly)} a month (${projection.opex.basis} basis), ${money(projection.opex.monthly * 3)} a full quarter; the current quarter counts only the days left`}
+          {/* Nov 13 2026 (Ankur, Nov 12 email: Galileo is paid net 45 after the container is delivered) */}
+          {projection.supplierPayables &&
+            projection.supplierPayables.included.length > 0 &&
+            ` · Supplier POs not delivered yet (no bill in QuickBooks yet): ${projection.supplierPayables.included.length} PO(s), ${money(projection.supplierPayables.total)}, paid ${projection.supplierPayables.termsDays} days after the expected delivery (no or a past date → today + ${projection.supplierPayables.termsDays})`}
+          {projection.supplierPayables &&
+            projection.supplierPayables.billed.length > 0 &&
+            ` · ${projection.supplierPayables.billed.length} PO(s) left out: already on a QuickBooks open bill`}
         </CardDescription>
       </CardHeader>
       <CardContent className="overflow-x-auto">
@@ -553,7 +579,8 @@ export function ProfitabilityTables() {
               //   { key: 'py', label: 'PY' },
               // ]}
               // Nov 12 2026 (Ankur, Nov 11 email): Previous Month / T90 Average / YTD, no PY
-              description="QuickBooks Profit and Loss, accounts mapped to OPEX (last sync). Previous Month = last full month; T90 Average = last 90 days ÷ 3; YTD = YTD OPEX ÷ current month number. Annualized = monthly × 12."
+              // Before Nov 13 2026: "... YTD = YTD OPEX ÷ current month number. ..."
+              description="QuickBooks Profit and Loss, accounts mapped to OPEX (last sync). Previous Month = last full month; T90 Average = last 90 days ÷ 3; YTD = OPEX of the completed months this year ÷ number of completed months (e.g. Jan–Oct ÷ 10). Annualized = monthly × 12."
               columns={[
                 { key: 'pm', label: 'Previous Month' },
                 { key: 't90', label: 'T90 Average' },
@@ -592,6 +619,11 @@ export function ProfitabilityTables() {
 // ============================================
 
 const num = (n: number | null, suffix = '') => (n === null ? '—' : `${n.toLocaleString('en-US', { maximumFractionDigits: 1 })}${suffix}`);
+/** $ per tire, 2 decimals (table 4.1 average prices) */
+const price = (n: number | null) =>
+  n === null ? '—' : n.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+/** Table 4.1 columns (Ankur, Nov 11 2026: velocity columns out, average prices in) */
+const SUPPLY_COLUMNS = ['Order Cycle', 'Tires Ordered', 'Containers', 'Arrival Window', 'Weeks Left', 'Sold', 'Unsold', 'Forward Commit %', 'Average Purchase Price', 'Average Sold Price'];
 
 export function SupplyChainTables() {
   return (
@@ -606,15 +638,20 @@ export function SupplyChainTables() {
                 <DrillDownButton kind="table-4.1" label="Table 4.1 – Incoming Supply" />
               </div>
               <CardDescription>
-                Per order cycle: tires ordered on purchase orders, arrival window from shipment ETAs, sold = tires on sales
-                orders of the same cycle, velocity over the last 4 weeks.
+                {/* (before Nov 12 2026) ... sold = tires on sales orders of the same cycle, velocity over the last 4 weeks. */}
+                {/* (before Nov 13 2026) ... sold = tires on sales orders of the same cycle, average purchase / sold price per tire from purchase and sales order lines. */}
+                Per order cycle: tires ordered on purchase orders, arrival window from shipment ETAs, sold = tires of the
+                cycle allocated to firm customer orders (from its purchase orders or GDC warehouse stock), average purchase /
+                sold price per tire from purchase and sales order lines.
               </CardDescription>
             </CardHeader>
             <CardContent className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    {['Order Cycle', 'Tires Ordered', 'Containers', 'Arrival Window', 'Weeks Left', 'Sold', 'Unsold', 'Forward Commit %', 'Actual Weekly Velocity', 'Required Weekly Velocity', 'Velocity Gap', 'Projected Uncommitted at Arrival'].map((h) => (
+                    {/* (before Nov 12 2026) ..., 'Forward Commit %', 'Actual Weekly Velocity', 'Required Weekly Velocity', 'Velocity Gap', 'Projected Uncommitted at Arrival' */}
+                    {/* Ankur, Nov 11 2026: velocity columns removed, Average Purchase / Sold Price added */}
+                    {SUPPLY_COLUMNS.map((h) => (
                       <TableHead key={h} className={h === 'Order Cycle' ? '' : 'text-right'}>
                         {h}
                       </TableHead>
@@ -624,7 +661,7 @@ export function SupplyChainTables() {
                 <TableBody>
                   {m.supply.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={12} className="py-6 text-center text-muted-foreground">
+                      <TableCell colSpan={SUPPLY_COLUMNS.length} className="py-6 text-center text-muted-foreground">
                         No purchase orders with tires.
                       </TableCell>
                     </TableRow>
@@ -643,6 +680,7 @@ export function SupplyChainTables() {
                         <TableCell className="text-right tabular-nums">{num(s.sold)}</TableCell>
                         <TableCell className="text-right tabular-nums">{num(s.unsold)}</TableCell>
                         <TableCell className="text-right tabular-nums">{num(s.forwardCommitPct, '%')}</TableCell>
+                        {/* (before Nov 12 2026: velocity columns, removed per Ankur Nov 11 2026)
                         <TableCell className="text-right tabular-nums">{num(s.actualWeeklyVelocity)}</TableCell>
                         <TableCell className="text-right tabular-nums">{num(s.requiredWeeklyVelocity)}</TableCell>
                         <TableCell
@@ -651,13 +689,18 @@ export function SupplyChainTables() {
                           {s.velocityGap === null ? '—' : `${s.velocityGap > 0 ? '+' : ''}${num(s.velocityGap)}`}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">{num(s.projectedUncommitted)}</TableCell>
+                        */}
+                        <TableCell className="text-right tabular-nums">{price(s.avgPurchasePrice)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{price(s.avgSoldPrice)}</TableCell>
                       </TableRow>
                     ))
                   )}
                 </TableBody>
               </Table>
+              {/* (before Nov 12 2026) Weeks Left is 0 once the arrival window has started; required velocity is then not applicable. */}
               <p className="mt-2 text-xs text-muted-foreground">
-                Weeks Left is 0 once the arrival window has started; required velocity is then not applicable.
+                Weeks Left is 0 once the arrival window has started. Average prices are weighted by tires; lines without a
+                price and commission-only loads are left out.
               </p>
             </CardContent>
           </Card>

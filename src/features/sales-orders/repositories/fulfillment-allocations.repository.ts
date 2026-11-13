@@ -61,6 +61,122 @@ interface AllocationValidationResult {
 }
 
 // ============================================
+// AUDIT LOG (Nov 12 2026)
+// ============================================
+//
+// Allocation create / update / cancel / delete were not in the audit log, so a
+// change like the MWI C-SO2600038 allocation cancelled on Nov 9 could not be
+// traced to a user. Every write below goes through these repository functions,
+// so logging here covers the Allocation dialogs, the status dropdowns, order
+// cancel / delete and the confirm flow. Logging never fails or blocks the save.
+
+const AUDIT_FIELDS = [
+  'sales_order_item_id',
+  'fulfillment_source',
+  'quantity',
+  'status',
+  'location_id',
+  'platinum_dealer_id',
+  'dealer_location_id',
+  'purchase_order_id',
+  'container_qty',
+  'notes',
+] as const;
+
+const SOURCE_LABELS: Record<string, string> = {
+  gdc_inventory: 'GDC Inventory',
+  platinum_dealer_inventory: 'Platinum Dealer Inventory',
+  platinum_dealer_fulfillment: 'Platinum Dealer Fulfillment',
+  direct: 'Manufacturer',
+};
+
+function auditSnapshot(row: Record<string, unknown> | null | undefined): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (!row) {
+    return out;
+  }
+  for (const key of AUDIT_FIELDS) {
+    if (key in row) {
+      out[key] = row[key];
+    }
+  }
+  return out;
+}
+
+async function auditAllocation(params: {
+  action: 'create' | 'update' | 'delete';
+  allocationId: string;
+  oldRow?: Record<string, unknown> | null;
+  newRow?: Record<string, unknown> | null;
+}): Promise<void> {
+  try {
+    const row = params.newRow ?? params.oldRow ?? {};
+    const itemId = row.sales_order_item_id as string | undefined;
+
+    // Order number and SKU, so the log reads without lookups
+    let orderNumber: string | null = null;
+    let salesOrderId: string | null = null;
+    let sku: string | null = null;
+    if (itemId) {
+      const { data: item } = await db
+        .from('sales_order_items')
+        .select('sku, sales_order_id, sales_orders (order_number)')
+        .eq('id', itemId)
+        .maybeSingle();
+      const so = (item as { sales_orders?: { order_number?: string } | Array<{ order_number?: string }> } | null)?.sales_orders;
+      orderNumber = (Array.isArray(so) ? so[0]?.order_number : so?.order_number) ?? null;
+      salesOrderId = (item as { sales_order_id?: string } | null)?.sales_order_id ?? null;
+      sku = (item as { sku?: string } | null)?.sku ?? null;
+    }
+
+    const oldStatus = params.oldRow?.status as string | undefined;
+    const newStatus = params.newRow?.status as string | undefined;
+    const verb =
+      params.action === 'create'
+        ? 'created'
+        : params.action === 'delete'
+          ? 'deleted'
+          : newStatus === 'cancelled' && oldStatus !== 'cancelled'
+            ? 'cancelled'
+            : newStatus && oldStatus && newStatus !== oldStatus
+              ? `status ${oldStatus} → ${newStatus}`
+              : 'updated';
+    const source = SOURCE_LABELS[String(row.fulfillment_source)] ?? String(row.fulfillment_source ?? '');
+    const description = `Allocation ${verb}: ${[orderNumber, sku].filter(Boolean).join(' ')} ${row.quantity ?? '?'} tires (${source})`.replace(/\s+/g, ' ');
+
+    // const [{ getCurrentUser }, { auditService }] = await Promise.all([
+    //   import('@/shared/lib/auth/check-permission'),
+    //   import('@/shared/lib/audit'),
+    // ]);
+    // const user = await getCurrentUser();
+    // (check-permission uses next/headers; this repository is also in client
+    // bundles, so the user now comes from audit-actor, set by the server actions)
+    const [{ currentAuditActor }, { auditService }] = await Promise.all([
+      import('../lib/audit-actor'),
+      import('@/shared/lib/audit'),
+    ]);
+    const user = await currentAuditActor();
+
+    await auditService.log({
+      action: params.action,
+      module: 'sales_orders',
+      entityType: 'FulfillmentAllocation',
+      entityId: params.allocationId,
+      description,
+      oldData: params.oldRow ? auditSnapshot(params.oldRow) : undefined,
+      newData: params.newRow ? auditSnapshot(params.newRow) : undefined,
+      metadata: { salesOrderId, orderNumber, salesOrderItemId: itemId ?? null, sku },
+      userId: user?.id,
+      userEmail: user?.email,
+      // userName: user ? `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() || undefined : undefined,
+      userName: user?.name,
+    });
+  } catch (error) {
+    console.error('[fulfillment-allocations] audit log failed:', error);
+  }
+}
+
+// ============================================
 // BASIC CRUD OPERATIONS
 // ============================================
 
@@ -111,6 +227,8 @@ export async function createAllocation(
       return { data: null, error: new Error(error.message) };
     }
 
+    await auditAllocation({ action: 'create', allocationId: data.id, newRow: data });
+
     return { data: mapAllocationFromDb(data), error: null };
   } catch (error) {
     console.error('Unexpected error creating allocation:', error);
@@ -160,6 +278,8 @@ export async function createBatchAllocations(
       console.error('Error creating batch allocations:', error);
       return { data: null, error: new Error(error.message) };
     }
+
+    await Promise.all(data.map((row) => auditAllocation({ action: 'create', allocationId: row.id, newRow: row })));
 
     return { data: data.map(mapAllocationFromDb), error: null };
   } catch (error) {
@@ -323,6 +443,13 @@ export async function updateAllocation(
       updateData.container_remaining = params.containerRemaining;
     if (params.notes !== undefined) updateData.notes = params.notes;
 
+    // Row before the change, for the audit log (a failed read only skips "from" values)
+    const { data: oldRow } = await supabase
+      .from('fulfillment_allocations')
+      .select('*')
+      .eq('id', params.id)
+      .maybeSingle();
+
     const { data, error } = await supabase
       .from('fulfillment_allocations')
       .update(updateData)
@@ -334,6 +461,8 @@ export async function updateAllocation(
       console.error('Error updating allocation:', error);
       return { data: null, error: new Error(error.message) };
     }
+
+    await auditAllocation({ action: 'update', allocationId: params.id, oldRow, newRow: data });
 
     return { data: mapAllocationFromDb(data), error: null };
   } catch (error) {
@@ -354,6 +483,13 @@ export async function deleteAllocation(
   try {
     const supabase = db;
 
+    // Row before the delete, for the audit log
+    const { data: oldRow } = await supabase
+      .from('fulfillment_allocations')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+
     const { error } = await supabase
       .from('fulfillment_allocations')
       .delete()
@@ -362,6 +498,10 @@ export async function deleteAllocation(
     if (error) {
       console.error('Error deleting allocation:', error);
       return { success: false, error: new Error(error.message) };
+    }
+
+    if (oldRow) {
+      await auditAllocation({ action: 'delete', allocationId: id, oldRow });
     }
 
     return { success: true, error: null };

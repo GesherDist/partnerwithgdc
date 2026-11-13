@@ -35,9 +35,11 @@ import {
   type RecognizedSales,
 } from './recognized-sales.service';
 import { dollars, toCsv, type Cell } from './overview-drilldown.service';
-import { buildExecutiveModel, cashQuarterOf, invoiceQuarterOf, projectionOrdersOf, type ExecutiveDashboardModel } from '../lib/executive-model';
+// import { buildExecutiveModel, cashQuarterOf, invoiceQuarterOf, projectionOrdersOf, type ExecutiveDashboardModel } from '../lib/executive-model';
+import { buildExecutiveModel, cashQuarterOf, invoiceQuarterOf, orderCashDate, projectionOrdersOf, type ExecutiveDashboardModel } from '../lib/executive-model';
 // import { addDays, addYears, getPeriods, monthEnd, monthStart } from '../lib/periods';
-import { addDays, addYears, getPeriods, monthEnd, monthStart, trailingMonths } from '../lib/periods';
+// import { addDays, addYears, getPeriods, monthEnd, monthStart, trailingMonths } from '../lib/periods';
+import { addDays, addYears, completedMonthsYtd, getPeriods, monthEnd, monthStart, trailingMonths } from '../lib/periods';
 import { withPnlBasis, type PnlBasis } from '../lib/pnl-basis';
 import type { CsvExport, TableDrillDown } from '../lib/drilldown';
 
@@ -251,22 +253,61 @@ async function liquidityCsv(basis: PnlBasis = 'Cash'): Promise<string> {
           title: `Projected Cash by quarter: Cash Today + QuickBooks open invoices (by due date) − QuickBooks open bills (by due date) + orders on the books still to be invoiced (through ${projection.throughDate})${openInvoices ? '' : ' · open invoices not in this snapshot, sync QuickBooks again'}`,
           // columns: ['Quarter', 'From', 'To', 'Opening Cash', 'Open Invoices (QuickBooks)', 'Invoices', 'Open Bills (QuickBooks, paid out)', 'Bills', 'Orders on the books', 'Orders', 'Tires', 'Projected Cash (quarter end)'],
           // Nov 12 2026: OPEX (YTD run rate) column
-          columns: ['Quarter', 'From', 'To', 'Opening Cash', 'Open Invoices (QuickBooks)', 'Invoices', 'Open Bills (QuickBooks, paid out)', 'Bills', 'Orders on the books', 'Orders', 'Tires', 'OPEX (YTD run rate, paid out)', 'Projected Cash (quarter end)'],
+          // columns: ['Quarter', 'From', 'To', 'Opening Cash', 'Open Invoices (QuickBooks)', 'Invoices', 'Open Bills (QuickBooks, paid out)', 'Bills', 'Orders on the books', 'Orders', 'Tires', 'OPEX (YTD run rate, paid out)', 'Projected Cash (quarter end)'],
+          // Nov 13 2026: supplier POs not billed yet (delivery + 45) columns
+          columns: ['Quarter', 'From', 'To', 'Opening Cash', 'Open Invoices (QuickBooks)', 'Invoices', 'Open Bills (QuickBooks, paid out)', 'Bills', 'Orders on the books', 'Orders', 'Tires', 'OPEX (YTD run rate, paid out)', 'Supplier POs not billed (paid out)', 'POs', 'Projected Cash (quarter end)'],
           rows: [
             // ...projection.quarters.map((q) => [q.label, q.start, q.end, q.opening, q.receivables, q.invoices, -q.payables, q.bills, q.inflow, q.orders, q.tires, q.closing]),
-            ...projection.quarters.map((q) => [q.label, q.start, q.end, q.opening, q.receivables, q.invoices, -q.payables, q.bills, q.inflow, q.orders, q.tires, -q.opex, q.closing]),
-            ['Dashboard (Projected Cash)', '', '', '', '', '', '', '', '', '', '', '', cellValue(model.liquidity.projectedCash)],
+            // ...projection.quarters.map((q) => [q.label, q.start, q.end, q.opening, q.receivables, q.invoices, -q.payables, q.bills, q.inflow, q.orders, q.tires, -q.opex, q.closing]),
+            // ['Dashboard (Projected Cash)', '', '', '', '', '', '', '', '', '', '', '', cellValue(model.liquidity.projectedCash)],
+            ...projection.quarters.map((q) => [q.label, q.start, q.end, q.opening, q.receivables, q.invoices, -q.payables, q.bills, q.inflow, q.orders, q.tires, -q.opex, -(q.supplierPayables ?? 0), q.supplierPos ?? 0, q.closing]),
+            ['Dashboard (Projected Cash)', '', '', '', '', '', '', '', '', '', '', '', '', '', cellValue(model.liquidity.projectedCash)],
           ],
         },
+        // Nov 13 2026 (Ankur, Nov 12 email: "After the container is delivered we pay on net 45 terms")
+        ...(projection.supplierPayables
+          ? [
+              {
+                title: `Supplier POs not delivered yet (their bill is not in QuickBooks yet): paid ${projection.supplierPayables.termsDays} days after the expected delivery (no or a past date → today + ${projection.supplierPayables.termsDays}). Amount = (qty ordered − qty received) × unit price. Left out: received / delivered / paid / closed / cancelled POs, delivered shipments, commission-only loads`,
+                columns: ['PO', 'PO Date', 'Status', 'Load Status', 'Expected Delivery', 'Date Source', 'Pay Date', 'Units not received', 'Amount'],
+                rows: [
+                  ...projection.supplierPayables.included.map((po) => [
+                    po.po,
+                    po.poDate,
+                    po.status,
+                    po.loadStatus ?? '',
+                    po.expectedDate ?? '',
+                    po.expectedDate ? (po.expectedDate <= model.asOf ? `${po.dateSource} (passed: counted as delivered today)` : po.dateSource ?? '') : 'No date (counted as delivered today)',
+                    po.payDate,
+                    po.tires,
+                    po.amount,
+                  ]),
+                  ['TOTAL', '', '', '', '', '', '', projection.supplierPayables.included.reduce((n, po) => n + po.tires, 0), projection.supplierPayables.total],
+                ],
+              } as Section,
+              ...(projection.supplierPayables.billed.length
+                ? [
+                    {
+                      title: 'Supplier POs left out: their number is on a QuickBooks open bill (already in Open Bills, not counted twice)',
+                      columns: ['PO', 'QuickBooks Bill', 'Status', 'Expected Delivery', 'Amount (ERP)'],
+                      rows: projection.supplierPayables.billed.map((po) => [po.po, po.bill, po.status, po.expectedDate ?? '', po.amount]),
+                    } as Section,
+                  ]
+                : []),
+            ]
+          : []),
         // Nov 12 2026 (Ankur, Nov 11 email): how the OPEX in Projected Cash is worked out
         ...(projection.opex
           ? [
               {
-                title: `OPEX in Projected Cash: ((YTD OPEX ÷ months) × 12) ÷ 4 a quarter (${projection.opex.basis} basis, last sync); the current month counts only the days after ${model.asOf}`,
+                title: `OPEX in Projected Cash: ((OPEX of the completed months ÷ months) × 12) ÷ 4 a quarter (${projection.opex.basis} basis, last sync); the current month counts only the days after ${model.asOf}`,
                 columns: ['Step', 'Value'],
                 rows: [
-                  ['YTD OPEX (QuickBooks P&L, accounts mapped to OPEX)', projection.opex.ytd],
-                  ['Months (current month number)', projection.opex.months],
+                  // ['YTD OPEX (QuickBooks P&L, accounts mapped to OPEX)', projection.opex.ytd],
+                  // ['Months (current month number)', projection.opex.months],
+                  // Nov 13 2026: completed months (Ankur, Nov 12 email)
+                  [`OPEX ${projection.opex.period ?? 'YTD'} (QuickBooks P&L, accounts mapped to OPEX)`, projection.opex.ytd],
+                  ['Months (completed months; January: 1, month to date)', projection.opex.months],
                   ['OPEX per month = YTD OPEX ÷ months', projection.opex.monthly],
                   ['Annual OPEX = per month × 12', round2(projection.opex.monthly * 12)],
                   ['OPEX per full quarter = annual ÷ 4', round2(projection.opex.monthly * 3)],
@@ -334,19 +375,29 @@ async function liquidityCsv(basis: PnlBasis = 'Cash'): Promise<string> {
                 source.source === 'erp'
                   ? `${q.label}: ERP open orders, firm orders not delivered yet (QuickBooks sales orders not available) (${q.start} to ${q.end}) · as of ${model.asOf}`
                   : `${q.label}: QuickBooks open sales orders (${q.start} to ${q.end}) · as of ${qbo.asOf}`,
-              columns: ['Sales Order', 'Order Date', 'Status', 'Expected Delivery', 'Date Source', 'Tires', 'Revenue (tire lines, excl. tax)'],
+              // columns: ['Sales Order', 'Order Date', 'Status', 'Expected Delivery', 'Date Source', 'Tires', 'Revenue (tire lines, excl. tax)'],
+              // Nov 13 2026 (Ankur, Nov 12 email): the day the order is paid (ERP orders: delivery + 30)
+              columns: ['Sales Order', 'Order Date', 'Status', 'Expected Delivery', 'Date Source', 'Expected Payment', 'Tires', 'Revenue (tire lines, excl. tax)'],
               rows: [
                 ...orders.map((o) => [
                   o.order,
                   o.orderDate,
                   o.status,
                   o.expectedDate ?? '',
-                  o.expectedDate ? (o.expectedDate < q.start ? `${o.dateSource} (passed, current quarter)` : o.dateSource ?? '') : 'No date (current quarter)',
+                  // o.expectedDate ? (o.expectedDate < q.start ? `${o.dateSource} (passed, current quarter)` : o.dateSource ?? '') : 'No date (current quarter)',
+                  o.expectedDate
+                    ? o.expectedDate <= model.asOf
+                      ? `${o.dateSource} (passed: counted as delivered today)`
+                      : o.dateSource ?? ''
+                    : 'No date (counted as delivered today)',
+                  o.paymentTermsDays ? `${orderCashDate(o, model.asOf)} (delivery + ${o.paymentTermsDays} days)` : orderCashDate(o, model.asOf),
                   o.tires,
                   o.revenue,
                 ]),
-                ['TOTAL', '', '', '', '', orders.reduce((n, o) => n + o.tires, 0), round2(orders.reduce((n, o) => n + o.revenue, 0))],
-                ['Dashboard', '', '', '', '', q.tires, q.inflow],
+                // ['TOTAL', '', '', '', '', orders.reduce((n, o) => n + o.tires, 0), round2(orders.reduce((n, o) => n + o.revenue, 0))],
+                // ['Dashboard', '', '', '', '', q.tires, q.inflow],
+                ['TOTAL', '', '', '', '', '', orders.reduce((n, o) => n + o.tires, 0), round2(orders.reduce((n, o) => n + o.revenue, 0))],
+                ['Dashboard', '', '', '', '', '', q.tires, q.inflow],
               ],
             };
           }),
@@ -361,7 +412,8 @@ async function liquidityCsv(basis: PnlBasis = 'Cash'): Promise<string> {
     projection && projection.movements.length
       ? {
           // Nov 12 2026: + OPEX at the YTD run rate on each month-end
-          title: `Low Cash / High Cash: cash day by day from ${model.asOf} through ${projection.throughDate} (open invoices on due date, open bills on due date, orders on expected delivery; overdue / no date → today${projection.opex ? '; OPEX at the YTD run rate on each month-end' : ''}). Low ${cellValue(model.liquidity.lowCash)} on ${projection.lowCash?.date ?? ''} · High ${cellValue(model.liquidity.highCash)} on ${projection.highCash?.date ?? ''}`,
+          // Nov 13 2026: orders on expected delivery + 30, supplier POs on delivery + 45
+          title: `Low Cash / High Cash: cash day by day from ${model.asOf} through ${projection.throughDate} (open invoices on due date, open bills on due date, orders on expected delivery${projection.orderPaymentDays ? ` + ${projection.orderPaymentDays} days` : ''}; overdue / no date → today${projection.opex ? '; OPEX at the YTD run rate on each month-end' : ''}${projection.supplierPayables?.included.length ? `; supplier POs not billed on delivery + ${projection.supplierPayables.termsDays} days` : ''}). Low ${cellValue(model.liquidity.lowCash)} on ${projection.lowCash?.date ?? ''} · High ${cellValue(model.liquidity.highCash)} on ${projection.highCash?.date ?? ''}`,
           columns: ['Date', 'Type', 'Reference', 'Customer / Vendor', 'Amount', 'Cash after'],
           rows: [
             [model.asOf, 'Cash Today', '', '', '', cellValue(model.liquidity.cashToday)],
@@ -834,11 +886,17 @@ async function opexRunRateCsv(basis: PnlBasis = 'Cash'): Promise<string> {
   const { qbo, model } = await loadContext(basis);
   const qp = getPeriods(qbo.asOf);
   const rr = model.opexRunRate;
-  const ytdMonths = Number(qbo.asOf.slice(5, 7));
+  // const ytdMonths = Number(qbo.asOf.slice(5, 7));
+  // Nov 13 2026 (Ankur, Nov 12 email: "The months that closed so Jan-October"):
+  // YTD = completed months (Jan 1 → end of last month) ÷ their number. January: none yet.
+  const closed = completedMonthsYtd(qbo.asOf);
+  const ytdMonths = closed.months;
   const opex = await opexSections([
     { label: 'Previous Month', range: qp.pm, dashboard: '' },
     { label: 'T90', range: qp.t90, dashboard: '' },
-    { label: 'YTD', range: qp.ytd, dashboard: '' },
+    // { label: 'YTD', range: qp.ytd, dashboard: '' },
+    // January (no completed month): the month to date, shown as "no value" below
+    { label: closed.label ? `YTD completed months (${closed.label})` : 'YTD', range: closed.range ?? qp.ytd, dashboard: '' },
   ], basis);
   const [pm, t90, ytd] = opex.totals as [number, number, number];
   return sectionsCsv([
@@ -856,7 +914,10 @@ async function opexRunRateCsv(basis: PnlBasis = 'Cash'): Promise<string> {
       rows: [
         ['Previous Month', pm, round2(pm), round2(pm * 12), 'Last full month OPEX; annualized = monthly × 12'],
         ['T90 Average', t90, round2(t90 / 3), round2((t90 / 3) * 12), 'T90 OPEX ÷ 3 months; annualized = monthly × 12'],
-        ['YTD', ytd, round2(ytd / ytdMonths), round2((ytd / ytdMonths) * 12), `YTD OPEX ÷ ${ytdMonths} (current month number); annualized = monthly × 12`],
+        // ['YTD', ytd, round2(ytd / ytdMonths), round2((ytd / ytdMonths) * 12), `YTD OPEX ÷ ${ytdMonths} (current month number); annualized = monthly × 12`],
+        ytdMonths > 0
+          ? ['YTD', ytd, round2(ytd / ytdMonths), round2((ytd / ytdMonths) * 12), `${closed.label} OPEX ÷ ${ytdMonths} completed months; annualized = monthly × 12`]
+          : ['YTD', ytd, '', '', 'No completed month this year yet (January)'],
       ],
     },
     ...opex.sections.map((s) => ({ ...s, rows: s.rows.filter((r) => r[0] !== 'Dashboard (last sync)') })),
@@ -1049,7 +1110,8 @@ async function incomingSupplyCsv(basis: PnlBasis = 'Cash'): Promise<string> {
     db.from('products').select('id, sku, name, item_type'),
     db
       .from('purchase_orders')
-      .select('id, po_number, po_date, status, order_series, expected_delivery_date, confirmed_eta, purchase_order_items(product_id, quantity_ordered)')
+      // unit_price added Nov 12 2026 (Average Purchase Price)
+      .select('id, po_number, po_date, status, order_series, expected_delivery_date, confirmed_eta, purchase_order_items(product_id, quantity_ordered, unit_price)')
       .is('deleted_at', null)
       .not('status', 'in', '(draft,cancelled)'),
     db
@@ -1059,7 +1121,8 @@ async function incomingSupplyCsv(basis: PnlBasis = 'Cash'): Promise<string> {
       .not('purchase_order_id', 'is', null),
     db
       .from('sales_orders')
-      .select('order_number, order_date, status, order_series, is_commission_only, customers (name), sales_order_items(product_id, quantity, customer_qty)')
+      // unit_price added Nov 12 2026 (Average Sold Price)
+      .select('order_number, order_date, status, order_series, is_commission_only, customers (name), sales_order_items(product_id, quantity, customer_qty, unit_price)')
       .is('deleted_at', null)
       .not('status', 'in', '(draft,cancelled)')
       .order('order_date', { ascending: true }),
@@ -1084,17 +1147,19 @@ async function incomingSupplyCsv(basis: PnlBasis = 'Cash'): Promise<string> {
     shipsByPo.set(String(s.purchase_order_id), list);
   }
 
-  type SupplyOrder = { order_number: string; order_date: string | null; status: string; order_series: string | null; is_commission_only: boolean | null; customers: One<{ name: string | null }>; sales_order_items: Array<{ product_id: string | null; quantity: number | null; customer_qty: number | null }> | null };
+  type SupplyOrder = { order_number: string; order_date: string | null; status: string; order_series: string | null; is_commission_only: boolean | null; customers: One<{ name: string | null }>; sales_order_items: Array<{ product_id: string | null; quantity: number | null; customer_qty: number | null; unit_price?: number | null }> | null };
   const sos = (soRes.data ?? []) as unknown as SupplyOrder[];
-  const pos = (poRes.data ?? []) as unknown as Array<{ id: string; po_number: string; po_date: string | null; status: string; order_series: string | null; expected_delivery_date: string | null; confirmed_eta: string | null; purchase_order_items: Array<{ product_id: string | null; quantity_ordered: number | null }> | null }>;
+  const pos = (poRes.data ?? []) as unknown as Array<{ id: string; po_number: string; po_date: string | null; status: string; order_series: string | null; expected_delivery_date: string | null; confirmed_eta: string | null; purchase_order_items: Array<{ product_id: string | null; quantity_ordered: number | null; unit_price?: number | null }> | null }>;
 
   const sections: Section[] = [
     {
       title: 'Table 4.1 as shown',
-      columns: ['Order Cycle', 'Tires Ordered', 'Containers', 'Arrival Window', 'Weeks Left', 'Sold', 'Unsold', 'Forward Commit %', 'Actual Weekly Velocity', 'Required Weekly Velocity', 'Velocity Gap', 'Projected Uncommitted at Arrival'],
+      // (before Nov 12 2026) ..., 'Forward Commit %', 'Actual Weekly Velocity', 'Required Weekly Velocity', 'Velocity Gap', 'Projected Uncommitted at Arrival'
+      // rows: ..., s.forwardCommitPct, s.actualWeeklyVelocity, s.requiredWeeklyVelocity, s.velocityGap, s.projectedUncommitted
+      columns: ['Order Cycle', 'Tires Ordered', 'Containers', 'Arrival Window', 'Weeks Left', 'Sold', 'Unsold', 'Forward Commit %', 'Average Purchase Price', 'Average Sold Price'],
       rows: model.supply.map((s) => [
         s.cycle, s.tiresOrdered, cellValue(s.containers), s.arrivalStart ? `${s.arrivalStart} to ${s.arrivalEnd}` : '', s.weeksLeft, s.sold, s.unsold,
-        s.forwardCommitPct, s.actualWeeklyVelocity, s.requiredWeeklyVelocity, s.velocityGap, s.projectedUncommitted,
+        s.forwardCommitPct, s.avgPurchasePrice, s.avgSoldPrice,
       ]),
     },
   ];
@@ -1104,18 +1169,44 @@ async function incomingSupplyCsv(basis: PnlBasis = 'Cash'): Promise<string> {
 
     // Tires ordered
     let ordered = 0;
+    // Average Purchase Price (Nov 12 2026): priced lines only, cents
+    let buyValue = 0;
+    let buyQty = 0;
     const poRows: Cell[][] = [];
+    // Nov 13 2026: commission-only POs left out of the average price (list from the dashboard model)
+    const commissionPos = new Set(s.commissionOnlyPos ?? []);
     for (const po of cyclePos) {
+      const isCommissionPo = commissionPos.has(po.po_number);
       for (const item of po.purchase_order_items ?? []) {
         if (!isTire(item.product_id)) {
           continue;
         }
-        ordered += Number(item.quantity_ordered ?? 0);
-        poRows.push([po.po_number, po.po_date, po.status, sku(item.product_id), Number(item.quantity_ordered ?? 0)]);
+        const qty = Number(item.quantity_ordered ?? 0);
+        const unit = Number(item.unit_price ?? 0);
+        ordered += qty;
+        // if (unit > 0) {
+        if (unit > 0 && !isCommissionPo) {
+          buyValue += unit * qty;
+          buyQty += qty;
+        }
+        // poRows.push([po.po_number, po.po_date, po.status, sku(item.product_id), Number(item.quantity_ordered ?? 0)]);
+        // poRows.push([po.po_number, po.po_date, po.status, sku(item.product_id), qty, unit > 0 ? unit / 100 : 'no price (left out)', unit > 0 ? (unit * qty) / 100 : '']);
+        poRows.push([
+          isCommissionPo ? `${po.po_number} (commission only, left out of price)` : po.po_number,
+          po.po_date, po.status, sku(item.product_id), qty,
+          isCommissionPo ? (unit > 0 ? unit / 100 : '') : unit > 0 ? unit / 100 : 'no price (left out)',
+          !isCommissionPo && unit > 0 ? (unit * qty) / 100 : '',
+        ]);
       }
     }
-    poRows.push(['TOTAL', '', '', '', ordered], ['Dashboard', '', '', '', s.tiresOrdered]);
-    sections.push({ title: `${s.cycle} – Tires Ordered: tire lines on purchase orders of this cycle (not draft / cancelled)`, columns: ['PO #', 'PO Date', 'Status', 'SKU', 'Tires Ordered'], rows: poRows });
+    // poRows.push(['TOTAL', '', '', '', ordered], ['Dashboard', '', '', '', s.tiresOrdered]);
+    poRows.push(
+      ['TOTAL', '', '', '', ordered, '', buyValue / 100],
+      ['Average Purchase Price = total value / priced tires', '', '', '', buyQty, buyQty > 0 ? Math.round(buyValue / buyQty) / 100 : '', ''],
+      ['Dashboard', '', '', '', s.tiresOrdered, s.avgPurchasePrice, '']
+    );
+    // columns before Nov 12 2026: ['PO #', 'PO Date', 'Status', 'SKU', 'Tires Ordered']
+    sections.push({ title: `${s.cycle} – Tires Ordered and Average Purchase Price: tire lines on purchase orders of this cycle (not draft / cancelled)`, columns: ['PO #', 'PO Date', 'Status', 'SKU', 'Tires Ordered', 'Unit Price $', 'Line Value $'], rows: poRows });
 
     // Arrival window and containers
     const etaRows: Cell[][] = [];
@@ -1153,6 +1244,9 @@ async function incomingSupplyCsv(basis: PnlBasis = 'Cash'): Promise<string> {
     // Sold and recent sales
     let sold = 0;
     let recent = 0;
+    // Average Sold Price (Nov 12 2026): priced lines, not commission-only, cents
+    let sellValue = 0;
+    let sellQty = 0;
     const soRows: Cell[][] = [];
     for (const so of sos.filter((o) => cycleOf(o.order_series) === s.cycle)) {
       const inWindow = Boolean(so.order_date && so.order_date >= velocityFrom && so.order_date <= asOf);
@@ -1165,14 +1259,76 @@ async function incomingSupplyCsv(basis: PnlBasis = 'Cash'): Promise<string> {
         if (inWindow) {
           recent += tires;
         }
-        soRows.push([so.order_number, so.order_date, so.status, one(so.customers)?.name ?? '', so.is_commission_only ? 'Yes' : 'No', sku(item.product_id), tires, inWindow ? 'Yes' : '']);
+        // soRows.push([so.order_number, so.order_date, so.status, one(so.customers)?.name ?? '', so.is_commission_only ? 'Yes' : 'No', sku(item.product_id), tires, inWindow ? 'Yes' : '']);
+        const unit = Number(item.unit_price ?? 0);
+        const priced = !so.is_commission_only && unit > 0;
+        if (priced) {
+          sellValue += unit * Number(item.quantity ?? 0);
+          sellQty += Number(item.quantity ?? 0);
+        }
+        soRows.push([
+          so.order_number, so.order_date, so.status, one(so.customers)?.name ?? '', so.is_commission_only ? 'Yes' : 'No', sku(item.product_id), tires, inWindow ? 'Yes' : '',
+          unit > 0 ? unit / 100 : '', priced ? 'Yes' : so.is_commission_only ? 'No (commission only)' : 'No (no price)',
+        ]);
       }
     }
     if (soRows.length === 0) {
       soRows.push(['No sales orders in this cycle']);
     }
-    soRows.push(['TOTAL Sold', '', '', '', '', '', sold, ''], [`Sold in last 4 weeks (${velocityFrom} to ${asOf})`, '', '', '', '', '', recent, ''], ['Dashboard Sold', '', '', '', '', '', s.sold, '']);
-    sections.push({ title: `${s.cycle} – Sold: tire lines on sales orders of this cycle (not draft / cancelled)`, columns: ['SO #', 'Order Date', 'Status', 'Customer', 'Commission Only', 'SKU', 'Tires', 'In Last 4 Weeks'], rows: soRows });
+    // soRows.push(['TOTAL Sold', '', '', '', '', '', sold, ''], [`Sold in last 4 weeks (${velocityFrom} to ${asOf})`, '', '', '', '', '', recent, ''], ['Dashboard Sold', '', '', '', '', '', s.sold, '']);
+    // Nov 13 2026 (Ankur's Definition 5.1): Sold = tires of this cycle's POs allocated to
+    // firm orders, the same rows the dashboard used. The order-series list above is kept
+    // below for reference only.
+    if (s.soldRows) {
+      const soldDetail: Cell[][] = [];
+      let poSold = 0;
+      let poValue = 0;
+      let poQty = 0;
+      for (const r of s.soldRows) {
+        poSold += r.tires;
+        if (r.inSoldPrice) {
+          poValue += r.unitPrice * r.tires;
+          poQty += r.tires;
+        }
+        soldDetail.push([
+          r.po, r.order, r.orderDate, r.source, sku(r.productId), r.tires,
+          r.unitPrice > 0 ? r.unitPrice / 100 : '',
+          r.inSoldPrice ? 'Yes' : r.commissionOnly ? 'No (commission only)' : 'No (no price)',
+        ]);
+      }
+      if (soldDetail.length === 0) {
+        soldDetail.push(['No tires of this cycle allocated to firm orders']);
+      }
+      soldDetail.push(
+        ['TOTAL Sold', '', '', '', '', poSold, '', ''],
+        ['Dashboard Sold', '', '', '', '', s.sold, '', ''],
+        ['Average Sold Price = total (unit price x tires) / tires of priced rows', '', '', '', '', poQty, poQty > 0 ? Math.round(poValue / poQty) / 100 : '', ''],
+        ['Dashboard Average Sold Price', '', '', '', '', '', s.avgSoldPrice, '']
+      );
+      sections.push({
+        // (before Nov 13 2026 warehouse stock) title: `${s.cycle} – Sold and Average Sold Price: tires of this cycle's POs allocated to firm customer orders (allocation, else the PO's linked order; never more than the PO's tires)`,
+        title: `${s.cycle} – Sold and Average Sold Price: tires of this cycle allocated to firm customer orders (allocation on a PO, else the PO's linked order, max the PO's tires; then GDC warehouse stock sold on orders of this cycle, max the cycle's tires; platinum dealer tires not counted)`,
+        columns: ['PO #', 'SO #', 'Order Date', 'Source', 'SKU', 'Tires', 'Unit Price $', 'In Average Price'],
+        rows: soldDetail,
+      });
+      soRows.push(
+        ['TOTAL tires on sales orders with this order series (reference only, not the dashboard Sold)', '', '', '', '', '', sold, '', '', ''],
+        ['Average price of these lines (reference only)', '', '', '', '', '', sellQty, '', sellQty > 0 ? Math.round(sellValue / sellQty) / 100 : '', '']
+      );
+      sections.push({ title: `${s.cycle} – Reference: sales orders with order series ${s.cycle} (before Nov 13 2026 Sold was counted this way)`, columns: ['SO #', 'Order Date', 'Status', 'Customer', 'Commission Only', 'SKU', 'Tires', 'In Last 4 Weeks', 'Unit Price $', 'In Average Price'], rows: soRows });
+    }
+    // Before Nov 13 2026 (always shown); now only when the model has no soldRows (older snapshot)
+    if (!s.soldRows) {
+      soRows.push(
+        ['TOTAL Sold', '', '', '', '', '', sold, '', '', ''],
+        [`Sold in last 4 weeks (${velocityFrom} to ${asOf})`, '', '', '', '', '', recent, '', '', ''],
+        ['Dashboard Sold', '', '', '', '', '', s.sold, '', '', ''],
+        ['Average Sold Price = total (unit price x qty) / qty of priced lines', '', '', '', '', '', sellQty, '', sellQty > 0 ? Math.round(sellValue / sellQty) / 100 : '', ''],
+        ['Dashboard Average Sold Price', '', '', '', '', '', '', '', s.avgSoldPrice, '']
+      );
+      // columns before Nov 12 2026: ['SO #', 'Order Date', 'Status', 'Customer', 'Commission Only', 'SKU', 'Tires', 'In Last 4 Weeks']
+      sections.push({ title: `${s.cycle} – Sold and Average Sold Price: tire lines on sales orders of this cycle (not draft / cancelled)`, columns: ['SO #', 'Order Date', 'Status', 'Customer', 'Commission Only', 'SKU', 'Tires', 'In Last 4 Weeks', 'Unit Price $', 'In Average Price'], rows: soRows });
+    }
 
     // Calculation
     sections.push({
@@ -1180,12 +1336,19 @@ async function incomingSupplyCsv(basis: PnlBasis = 'Cash'): Promise<string> {
       columns: ['KPI', 'Formula', 'Value'],
       rows: [
         ['Weeks Left', `Days from ${asOf} to arrival start ${s.arrivalStart ?? '—'} ÷ 7 (0 once arrival started)`, s.weeksLeft],
+        // Nov 13 2026: Sold row (Ankur's Definition 5.1)
+        // ['Sold', 'Tires of this cycle’s POs allocated to firm customer orders (allocation on the PO, else its linked order; max the PO’s tires)', s.sold],
+        ['Sold', 'Tires of this cycle allocated to firm customer orders: from its POs (allocation, else linked order; max the PO’s tires) + GDC warehouse stock on orders of this cycle (max the cycle’s tires); platinum dealer tires not counted', s.sold],
         ['Unsold', `Tires Ordered ${s.tiresOrdered} − Sold ${s.sold} (min 0)`, s.unsold],
         ['Forward Commit %', `Sold ${s.sold} ÷ Tires Ordered ${s.tiresOrdered} × 100`, s.forwardCommitPct],
-        ['Actual Weekly Velocity', `Sold in last 4 weeks ${recent} ÷ 4`, s.actualWeeklyVelocity],
-        ['Required Weekly Velocity', `Unsold ${s.unsold} ÷ Weeks Left ${s.weeksLeft ?? '—'} (blank when Weeks Left is 0)`, s.requiredWeeklyVelocity],
-        ['Velocity Gap', 'Actual − Required', s.velocityGap],
-        ['Projected Uncommitted at Arrival', 'Unsold − Actual velocity × Weeks Left (min 0); Unsold once arrival started', s.projectedUncommitted],
+        // (before Nov 12 2026: velocity rows; columns removed from table 4.1 per Ankur Nov 11 2026)
+        // ['Actual Weekly Velocity', `Sold in last 4 weeks ${recent} ÷ 4`, s.actualWeeklyVelocity],
+        // ['Required Weekly Velocity', `Unsold ${s.unsold} ÷ Weeks Left ${s.weeksLeft ?? '—'} (blank when Weeks Left is 0)`, s.requiredWeeklyVelocity],
+        // ['Velocity Gap', 'Actual − Required', s.velocityGap],
+        // ['Projected Uncommitted at Arrival', 'Unsold − Actual velocity × Weeks Left (min 0); Unsold once arrival started', s.projectedUncommitted],
+        // ['Average Purchase Price', 'Σ(PO unit price × tires ordered) ÷ Σ tires, PO tire lines with a price', s.avgPurchasePrice],
+        ['Average Purchase Price', 'Σ(PO unit price × tires ordered) ÷ Σ tires, PO tire lines with a price, commission-only loads left out', s.avgPurchasePrice],
+        ['Average Sold Price', 'Σ(SO unit price × qty) ÷ Σ qty, priced tire lines, commission-only loads left out', s.avgSoldPrice],
       ],
     });
   }

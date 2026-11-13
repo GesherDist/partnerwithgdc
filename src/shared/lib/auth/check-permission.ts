@@ -4,9 +4,11 @@
  * Utilities for checking user permissions in API routes and server actions.
  */
 
+import { unstable_rethrow } from 'next/navigation';
 import { createClient } from '@/shared/lib/supabase/server';
 import { getAppUserByAuthId } from './get-app-user';
 import type { AppUser } from '@/shared/stores/auth.store';
+import { auditService } from '@/shared/lib/audit/audit-service';
 
 // ============================================
 // TYPES
@@ -144,6 +146,11 @@ export async function getCurrentUser(): Promise<AppUser | null> {
 
     return appUser;
   } catch (error) {
+    // Next.js signals (build-time "this page is dynamic", redirect, notFound)
+    // must reach Next.js, not be logged as errors (Nov 12 2026: every page
+    // logged "Dynamic server usage" during npm run build). Real errors are
+    // handled as before.
+    unstable_rethrow(error);
     console.error('[getCurrentUser] Error:', error);
     return null;
   }
@@ -336,3 +343,7 @@ export async function requireSuperAdmin(): Promise<
 
   return { user };
 }
+
+// Nov 13 2026: audit logs without a userId record the logged-in user. Registered
+// here (server only) so audit-service.ts does not import next/headers.
+auditService.setCurrentUserIdResolver(async () => (await getCurrentUser())?.id ?? null);

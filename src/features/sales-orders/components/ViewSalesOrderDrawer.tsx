@@ -54,6 +54,7 @@ import {
   ORDER_CREDIT_STATUS_LABELS,
   ORDER_CREDIT_STATUS_COLORS,
   ORDER_SERIES_OPTIONS,
+  ORDER_STATUS_TRANSITIONS,
 } from '../types';
 import {
   Select,
@@ -478,7 +479,9 @@ const handleReleaseHold = async () => {
   // Can confirm draft or pending orders
   const canConfirm = order && ['draft', 'pending'].includes(order.status) && canEditPermission;
   // Can cancel any order except delivered/invoiced/cancelled
-  const canCancel = order && !['delivered', 'invoiced', 'cancelled'].includes(order.status) && canEditPermission;
+  // const canCancel = order && !['delivered', 'invoiced', 'cancelled'].includes(order.status) && canEditPermission;
+  // Same rule as the server (cancelSalesOrder): shipped orders cannot be cancelled (Nov 12 2026)
+  const canCancel = order && (ORDER_STATUS_TRANSITIONS[order.status] ?? []).includes('cancelled') && canEditPermission;
   // Can create invoice for confirmed, processing, shipped, or delivered orders
   const canCreateInvoice = order &&
     ['confirmed', 'processing', 'shipped', 'delivered'].includes(order.status) &&

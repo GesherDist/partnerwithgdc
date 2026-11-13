@@ -30,6 +30,8 @@ import { db } from '@/shared/lib/supabase/database';
 import { auditService } from '@/shared/lib/audit';
 import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
 import type { AppUser } from '@/shared/stores/auth.store';
+// Audit log: who changed an allocation (Nov 12 2026)
+import '../lib/audit-actor.server';
 
 // ============================================
 // TYPES
@@ -543,11 +545,32 @@ export async function deleteSalesOrder(id: string): Promise<ActionResult<SalesOr
     return auth.result;
   }
 
-  const result = await salesOrderService.delete(id, auth.user.id);
+  // const result = await salesOrderService.delete(id, auth.user.id);
+  const result: ActionResult<SalesOrder> = await salesOrderService.delete(id, auth.user.id);
 
   if (result.success) {
+    // Release the deleted draft's allocations: its warehouse / dealer stock and
+    // its PO (Nov 12 2026). Before, a deleted draft kept them reserved. Done
+    // after the delete (only drafts can be deleted, checked by the service), so
+    // a refused delete never releases stock; a failure here is shown, not fatal.
+    try {
+      const { releaseAllocationsForCancelledOrder } = await import('../services/fulfillment-orchestration.service');
+      const release = await releaseAllocationsForCancelledOrder(id);
+      if (!release.success) {
+        result.warning = `Order deleted, but its allocations were not released: ${release.error || 'unknown error'}`;
+      } else if (release.warnings.length > 0) {
+        result.warning = `Order deleted, but check the inventory: ${release.warnings.join('; ')}`;
+      }
+    } catch (releaseError) {
+      console.error('[deleteSalesOrder] release allocations:', releaseError);
+      result.warning = 'Order deleted, but its allocations could not be released. Please check the inventory.';
+    }
+
     revalidatePath('/sales-orders');
     revalidatePath('/api/sales-orders');
+    revalidatePath('/inventory');
+    revalidatePath('/purchase-orders');
+    revalidatePath('/operations');
   }
 
   return result;

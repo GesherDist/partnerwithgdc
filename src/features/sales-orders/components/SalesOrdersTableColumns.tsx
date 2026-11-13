@@ -17,6 +17,7 @@ import {
   ORDER_STATUS_LABELS,
   ORDER_STATUS_COLORS,
   canEditOrder,
+  ORDER_STATUS_TRANSITIONS,
 } from '../types';
 import { formatDate } from '../lib/mock-data';
 import { INVOICEABLE_ORDER_STATUSES } from './MarkInvoicedDialog';
@@ -296,7 +297,10 @@ export function getSalesOrdersTableColumns(
         const status = row.original.status;
         const isEditable = canEditOrder(status);
         const canConfirmOrder = ['draft', 'pending'].includes(status);
-        const canCancelOrder = !['delivered', 'invoiced', 'cancelled'].includes(status);
+        // const canCancelOrder = !['delivered', 'invoiced', 'cancelled'].includes(status);
+        // Same rule as the server (cancelSalesOrder): shipped orders can no longer
+        // be cancelled, so the menu no longer offers it (Nov 12 2026)
+        const canCancelOrder = (ORDER_STATUS_TRANSITIONS[status] ?? []).includes('cancelled');
 
         const { actions, separatorAfter } = createCommonRowActions({
           onView: onView ? () => onView(row.original) : undefined,

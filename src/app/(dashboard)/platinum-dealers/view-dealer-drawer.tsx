@@ -440,6 +440,10 @@ export function ViewDealerDrawer({
 
       if (result.success) {
         toast.success(`Allocation status updated to ${newStatus.replace('_', ' ')}`);
+        // Cancel released stock; a note comes back when nothing could be released
+        if (result.message) {
+          toast.warning(result.message, { duration: 10000 });
+        }
         // Reload allocations to reflect the change
         loadAllocations();
       } else {

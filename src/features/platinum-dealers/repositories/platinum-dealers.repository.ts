@@ -650,58 +650,102 @@ export async function updateInventory(
 }
 
 /**
+ * Safe dealer stock write (Nov 12 2026): two users saving at the same time.
+ * Same "compare and set" as the warehouse stock (fulfillment-orchestration
+ * updateWarehouseAllocated): the write only goes through when on_hand and
+ * allocated are still what was read; else read again and retry. Before, the
+ * second of two saves at the same moment replaced the first (lost reservation)
+ * and both could pass the available check. No database change.
+ */
+const DEALER_STOCK_WRITE_ATTEMPTS = 5;
+/** Rollbacks try longer: a lost restore would leave an allocation without its reservation */
+const DEALER_STOCK_RESTORE_ATTEMPTS = 20;
+
+async function updateDealerAllocated(
+  dealerLocationId: string,
+  productId: string,
+  nextAllocated: (row: { onHand: number; allocated: number }) => { allocated: number } | { error: string },
+  attempts: number = DEALER_STOCK_WRITE_ATTEMPTS
+): Promise<{ success: boolean; error: Error | null }> {
+  const supabase = await createClient();
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const { data: inventory, error: fetchError } = await getDealerInventory({ dealerLocationId, productId });
+    if (fetchError) {
+      return { success: false, error: fetchError };
+    }
+    if (!inventory) {
+      return { success: false, error: new Error('Inventory record not found') };
+    }
+    const row = { onHand: Number(inventory.onHand ?? 0), allocated: Number(inventory.allocated ?? 0) };
+    const next = nextAllocated(row);
+    if ('error' in next) {
+      return { success: false, error: new Error(next.error) };
+    }
+    if (next.allocated === row.allocated) {
+      return { success: true, error: null };
+    }
+
+    // only when nobody changed the row since it was read (NULL compared with IS NULL)
+    let write = supabase
+      .from('platinum_dealer_inventory')
+      .update({ allocated: next.allocated })
+      .eq('dealer_location_id', dealerLocationId)
+      .eq('product_id', productId);
+    write = inventory.onHand === null || inventory.onHand === undefined ? write.is('on_hand', null) : write.eq('on_hand', inventory.onHand);
+    write =
+      inventory.allocated === null || inventory.allocated === undefined
+        ? write.is('allocated', null)
+        : write.eq('allocated', inventory.allocated);
+    const { data: written, error: updateError } = await write.select('allocated');
+    if (updateError) {
+      console.error('Error updating dealer allocated:', updateError);
+      return { success: false, error: new Error(updateError.message) };
+    }
+    if (written && written.length > 0) {
+      return { success: true, error: null };
+    }
+    // Changed by someone else in between: read again and retry
+  }
+  return {
+    success: false,
+    error: new Error('The dealer stock was changed by another user at the same moment. Please save again.'),
+  };
+}
+
+/**
  * Allocate inventory (increase allocated quantity)
+ *
+ * `skipAvailabilityCheck`: rollback only (put back a reservation released a
+ * moment ago in the same save).
  */
 export async function allocateInventory(params: {
   dealerLocationId: string;
   productId: string;
   quantity: number;
+  skipAvailabilityCheck?: boolean;
 }): Promise<{ success: boolean; error: Error | null }> {
   try {
-    const supabase = await createClient();
-
-    // Get current inventory
-    const { data: inventory, error: fetchError } = await getDealerInventory({
-      dealerLocationId: params.dealerLocationId,
-      productId: params.productId,
-    });
-
-    if (fetchError) {
-      return { success: false, error: fetchError };
-    }
-
-    if (!inventory) {
-      return {
-        success: false,
-        error: new Error('Inventory record not found'),
-      };
-    }
-
-    // Check if enough available
-    if (inventory.available < params.quantity) {
-      return {
-        success: false,
-        error: new Error(
-          `Insufficient inventory. Available: ${inventory.available}, Requested: ${params.quantity}`
-        ),
-      };
-    }
-
-    // Update allocated quantity
-    const { error: updateError } = await supabase
-      .from('platinum_dealer_inventory')
-      .update({
-        allocated: inventory.allocated + params.quantity,
-      })
-      .eq('dealer_location_id', params.dealerLocationId)
-      .eq('product_id', params.productId);
-
-    if (updateError) {
-      console.error('Error allocating inventory:', updateError);
-      return { success: false, error: new Error(updateError.message) };
-    }
-
-    return { success: true, error: null };
+    // const supabase = await createClient();
+    // const { data: inventory, error: fetchError } = await getDealerInventory({ ... });
+    // ... if (inventory.available < params.quantity) { return Insufficient inventory }
+    // const { error: updateError } = await supabase
+    //   .from('platinum_dealer_inventory')
+    //   .update({ allocated: inventory.allocated + params.quantity })
+    //   .eq('dealer_location_id', params.dealerLocationId)
+    //   .eq('product_id', params.productId);
+    // (Before Nov 12 2026: read, then write old + quantity.)
+    return await updateDealerAllocated(
+      params.dealerLocationId,
+      params.productId,
+      (row) => {
+        const available = row.onHand - row.allocated;
+        if (!params.skipAvailabilityCheck && available < params.quantity) {
+          return { error: `Insufficient inventory. Available: ${available}, Requested: ${params.quantity}` };
+        }
+        return { allocated: row.allocated + params.quantity };
+      },
+      params.skipAvailabilityCheck ? DEALER_STOCK_RESTORE_ATTEMPTS : DEALER_STOCK_WRITE_ATTEMPTS
+    );
   } catch (error) {
     console.error('Unexpected error allocating inventory:', error);
     return {
@@ -720,50 +764,22 @@ export async function deallocateInventory(params: {
   quantity: number;
 }): Promise<{ success: boolean; error: Error | null }> {
   try {
-    const supabase = await createClient();
-
-    // Get current inventory
-    const { data: inventory, error: fetchError } = await getDealerInventory({
-      dealerLocationId: params.dealerLocationId,
-      productId: params.productId,
+    // const supabase = await createClient();
+    // const { data: inventory, error: fetchError } = await getDealerInventory({ ... });
+    // ... if (inventory.allocated < params.quantity) { return Cannot deallocate }
+    // const { error: updateError } = await supabase
+    //   .from('platinum_dealer_inventory')
+    //   .update({ allocated: inventory.allocated - params.quantity })
+    //   .eq('dealer_location_id', params.dealerLocationId)
+    //   .eq('product_id', params.productId);
+    // (Before Nov 12 2026: read, then write old - quantity.)
+    return await updateDealerAllocated(params.dealerLocationId, params.productId, (row) => {
+      // Check if enough allocated to deallocate (same rule as before)
+      if (row.allocated < params.quantity) {
+        return { error: `Cannot deallocate ${params.quantity} units. Only ${row.allocated} allocated.` };
+      }
+      return { allocated: row.allocated - params.quantity };
     });
-
-    if (fetchError) {
-      return { success: false, error: fetchError };
-    }
-
-    if (!inventory) {
-      return {
-        success: false,
-        error: new Error('Inventory record not found'),
-      };
-    }
-
-    // Check if enough allocated to deallocate
-    if (inventory.allocated < params.quantity) {
-      return {
-        success: false,
-        error: new Error(
-          `Cannot deallocate ${params.quantity} units. Only ${inventory.allocated} allocated.`
-        ),
-      };
-    }
-
-    // Update allocated quantity
-    const { error: updateError } = await supabase
-      .from('platinum_dealer_inventory')
-      .update({
-        allocated: inventory.allocated - params.quantity,
-      })
-      .eq('dealer_location_id', params.dealerLocationId)
-      .eq('product_id', params.productId);
-
-    if (updateError) {
-      console.error('Error deallocating inventory:', updateError);
-      return { success: false, error: new Error(updateError.message) };
-    }
-
-    return { success: true, error: null };
   } catch (error) {
     console.error('Unexpected error deallocating inventory:', error);
     return {
