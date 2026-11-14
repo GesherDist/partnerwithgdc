@@ -323,7 +323,11 @@ export function ViewQuoteDrawer({
   // Can approve/reject pending_approval quotes (and must have approve permission)
   const canApproveReject = quote && quote.status === 'pending_approval' && canApprovePermission;
   // ONLY Super Admin can convert to Sales Order (from any status EXCEPT already converted)
-  const canConvert = quote && quote.status !== 'converted' && isSuperAdmin() && canConvertToOrderPermission;
+  // const canConvert = quote && quote.status !== 'converted' && isSuperAdmin() && canConvertToOrderPermission;
+  // Nov 14 2026: shown by the convert_to_order permission (Super Admin always has it).
+  // Other roles only on approved quotes, same rule the server action applies.
+  const canConvert = quote && quote.status !== 'converted' && canConvertToOrderPermission
+    && (isSuperAdmin() || quote.status === 'approved');
 
   // ----------------------------------------
   // RENDER

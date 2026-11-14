@@ -220,7 +220,11 @@ export function getQuotesTableColumns(
       cell: ({ row }) => {
         const quote = row.original;
         // ONLY Super Admin can convert (from any status except already converted)
-        const canConvert = options.isSuperAdmin === true && quote.status !== 'converted';
+        // const canConvert = options.isSuperAdmin === true && quote.status !== 'converted';
+        // Nov 14 2026: onConvert is passed only with the convert_to_order permission
+        // (quotes-content.tsx); other roles only on approved quotes, as the server requires.
+        const canConvert = quote.status !== 'converted'
+          && (options.isSuperAdmin === true || quote.status === 'approved');
         const canEdit = isQuoteEditable(quote.status);
         const canDelete = quote.status === 'draft';
         const canSubmitForApproval = quote.status === 'draft';
