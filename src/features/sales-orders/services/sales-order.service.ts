@@ -868,6 +868,102 @@ export const salesOrderService = {
   },
 
   /**
+   * Status set by the warehouse flow: a pick ticket reaching "shipped" and a
+   * packing list reaching "delivered".
+   *
+   * Nov 16 2026: those three call sites wrote sales_orders.status straight to
+   * the database, so the change left no audit row and Pipedrive was never
+   * told (Build Brief: "every state change writes an audit row").
+   *
+   * The database write is deliberately byte-for-byte what those call sites did
+   * before, so nothing that works today starts failing:
+   * - no status-transition check. An order reaches "shipped" from "confirmed"
+   *   as well as from "processing", and ORDER_STATUS_TRANSITIONS does not
+   *   allow confirmed -> shipped, so transitionStatus() would now reject work
+   *   that succeeds today
+   * - the only guard is the one that was already there: an order already
+   *   invoiced (closed out) keeps its status
+   * - no deleted_at filter, and the row is written even when it already holds
+   *   the target status, exactly as before (that write bumps updated_at, which
+   *   the Pipedrive reconcile cron reads)
+   *
+   * Only the audit row and the Pipedrive update are new, and both run solely
+   * when the status really changed, so a repeat does not add noise. Pipedrive
+   * is best-effort: a CRM failure never turns a completed status change into a
+   * reported failure.
+   */
+  async setFulfilmentStatus(
+    id: string,
+    newStatus: Extract<OrderStatus, 'shipped' | 'delivered'>,
+    userId?: string
+  ): Promise<ServiceResult<{ changed: boolean }>> {
+    try {
+      const { data: existing, error: fetchError } = await db
+        .from('sales_orders')
+        .select('id, order_number, status')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (fetchError) {
+        return { success: false, error: fetchError.message };
+      }
+      if (!existing) {
+        return { success: false, error: 'Sales order not found' };
+      }
+
+      const oldStatus = existing.status as OrderStatus;
+      // Same guard as before: a closed-out order keeps its status
+      if (oldStatus === 'invoiced') {
+        return { success: true, data: { changed: false } };
+      }
+
+      const { error: updateError } = await db
+        .from('sales_orders')
+        .update({
+          status: newStatus,
+          updated_at: new Date().toISOString(),
+          updated_by: userId || null,
+        })
+        .eq('id', id);
+
+      if (updateError) {
+        return { success: false, error: updateError.message };
+      }
+
+      // Nothing actually changed (the order was already at this status): the
+      // row is refreshed as before, but no audit row and no Pipedrive call
+      if (oldStatus === newStatus) {
+        return { success: true, data: { changed: false } };
+      }
+
+      auditService.log({
+        action: 'update', // status_change
+        module: 'sales_orders',
+        entityType: 'SalesOrder',
+        entityId: id,
+        oldData: { status: oldStatus },
+        newData: { status: newStatus },
+        userId,
+        description: `Sales order ${existing.order_number} status changed by the warehouse flow: ${oldStatus} → ${newStatus}`,
+      }).catch((err) => {
+        console.error('Failed to log sales order fulfilment status audit:', err);
+      });
+
+      try {
+        await refreshPipedrivePurchaseHistory(id, [oldStatus, newStatus]);
+        syncPipedriveOrderStatus(id);
+      } catch (error) {
+        console.error('[setFulfilmentStatus] Pipedrive update failed (status change kept):', error);
+      }
+
+      return { success: true, data: { changed: true } };
+    } catch (error) {
+      console.error('SalesOrderService.setFulfilmentStatus error:', error);
+      return { success: false, error: 'Failed to update the sales order status' };
+    }
+  },
+
+  /**
    * Generic status transition
    */
   async transitionStatus(

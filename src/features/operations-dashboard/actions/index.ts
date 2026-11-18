@@ -11,6 +11,7 @@ import { revalidatePath, unstable_noStore as noStore } from 'next/cache';
 import { db } from '@/shared/lib/supabase/database';
 import { createAdminClient } from '@/shared/lib/supabase/admin';
 import { getCurrentUser, hasPermission } from '@/shared/lib/auth';
+import { auditService } from '@/shared/lib/audit';
 import type { AppUser } from '@/shared/stores/auth.store';
 import { OPERATIONS_PERMISSIONS } from '../lib/permissions';
 import { poReceivingService } from '@/features/inventory/services/po-receiving.service';
@@ -748,6 +749,86 @@ export interface UpdateShipmentOrOrderInput {
  * Smart update that tries shipments first, then sales_orders
  * Used by the simplified edit dialog
  */
+// ============================================
+// AUDIT TRAIL
+// ============================================
+
+/**
+ * Operations Dashboard edits write straight to shipments, purchase_orders and
+ * sales_orders, and one save can touch all three: the record the user opened
+ * plus the records linked to it.
+ *
+ * Nov 16 2026: each of those writes now leaves an audit row (Build Brief:
+ * "every state change writes an audit row"). The row is written only after
+ * the write succeeded, and always fire-and-forget - an audit failure must
+ * never undo or fail a save that already went through.
+ */
+function logOperationsAudit(entry: {
+  module: 'shipments' | 'purchase_orders' | 'sales_orders';
+  entityType: 'Shipment' | 'PurchaseOrder' | 'SalesOrder';
+  entityId: string;
+  oldData?: Record<string, unknown>;
+  newData: Record<string, unknown>;
+  userId?: string;
+  description: string;
+}): void {
+  auditService.log({ action: 'update', ...entry }).catch((error) => {
+    console.error('Failed to write Operations Dashboard audit log:', error);
+  });
+}
+
+/**
+ * Keeps only the fields the Operations Dashboard can change, so the audit
+ * "before" snapshot stays readable next to the "after" payload.
+ */
+function pickAuditFields(
+  row: Record<string, unknown> | null | undefined,
+  fields: readonly string[]
+): Record<string, unknown> {
+  const picked: Record<string, unknown> = {};
+  if (!row) {
+    return picked;
+  }
+  for (const field of fields) {
+    if (field in row) {
+      picked[field] = row[field];
+    }
+  }
+  return picked;
+}
+
+const SHIPMENT_AUDIT_FIELDS = [
+  'load_status',
+  'container_number',
+  'eta_to_port',
+  'confirmed_eta',
+  'customer_expected_delivery',
+  'actual_arrival',
+  'qty_delivered',
+  'outstanding_qty',
+  'action_required',
+] as const;
+
+const PO_AUDIT_FIELDS = [
+  'load_status',
+  'expected_delivery_date',
+  'confirmed_eta',
+  'actual_delivery_date',
+  'internal_notes',
+  'qty_delivered',
+  'outstanding_qty',
+] as const;
+
+const SO_AUDIT_FIELDS = [
+  'customer_expected_delivery',
+  'confirmed_eta',
+  'eta_to_us_port',
+  'actual_delivery_date',
+  'qty_delivered',
+  'outstanding_qty',
+  'internal_notes',
+] as const;
+
 export async function updateShipmentOrOrder(
   input: UpdateShipmentOrOrderInput
 ): Promise<ActionResult<{ id: string }>> {
@@ -796,14 +877,20 @@ export async function updateShipmentOrOrder(
     // Try 1: Check if input.id is a shipment ID
     const { data: shipmentById, error: shipmentByIdError } = await supabase
       .from('shipments')
-      .select('id, container_number')
+      // Widened Nov 16 2026 for the audit "before" snapshot (same rows, no extra query)
+      .select(
+        'id, shipment_number, container_number, load_status, eta_to_port, confirmed_eta, customer_expected_delivery, actual_arrival, qty_delivered, outstanding_qty, action_required'
+      )
       .eq('id', input.id)
       .maybeSingle();
 
     // Try 2: Check if input.id is a purchase order ID
     const { data: shipmentByPO, error: shipmentByPOError } = await supabase
       .from('shipments')
-      .select('id, container_number')
+      // Widened Nov 16 2026 for the audit "before" snapshot (same rows, no extra query)
+      .select(
+        'id, shipment_number, container_number, load_status, eta_to_port, confirmed_eta, customer_expected_delivery, actual_arrival, qty_delivered, outstanding_qty, action_required'
+      )
       .eq('purchase_order_id', input.id)
       .maybeSingle();
 
@@ -874,6 +961,16 @@ export async function updateShipmentOrOrder(
 
       console.log('[updateShipmentOrOrder] ✅ Shipment updated successfully');
 
+      logOperationsAudit({
+        module: 'shipments',
+        entityType: 'Shipment',
+        entityId: shipment.id,
+        oldData: pickAuditFields(shipment as Record<string, unknown>, SHIPMENT_AUDIT_FIELDS),
+        newData: pickAuditFields(updateData, SHIPMENT_AUDIT_FIELDS),
+        userId: user.id,
+        description: `Operations Dashboard: updated shipment ${(shipment as { shipment_number?: string }).shipment_number ?? shipment.id}`,
+      });
+
       // A new or changed container is tracked right away instead of waiting
       // for the daily sync. Tracking problems never fail the save.
       if (containerNumber && containerNumber !== shipment.container_number) {
@@ -932,6 +1029,16 @@ export async function updateShipmentOrOrder(
           // Don't fail the whole operation if PO update fails
         } else {
           console.log('[updateShipmentOrOrder] ✅ Related PO also updated successfully');
+          // Cascaded write: only the new values are known here, so no "before"
+          // snapshot is taken (that would cost an extra read per save)
+          logOperationsAudit({
+            module: 'purchase_orders',
+            entityType: 'PurchaseOrder',
+            entityId: shipmentWithPO.purchase_order_id as string,
+            newData: pickAuditFields(poUpdateData, PO_AUDIT_FIELDS),
+            userId: user.id,
+            description: 'Operations Dashboard: updated the purchase order linked to the edited shipment',
+          });
         }
       } else {
         console.log('[updateShipmentOrOrder] No related PO found for this shipment');
@@ -949,7 +1056,10 @@ export async function updateShipmentOrOrder(
 
       const { data: purchaseOrder, error: poError } = await supabase
         .from('purchase_orders')
-        .select('id')
+        // Widened Nov 16 2026 for the audit "before" snapshot (same row, no extra query)
+        .select(
+          'id, po_number, load_status, expected_delivery_date, confirmed_eta, actual_delivery_date, internal_notes, qty_delivered, outstanding_qty'
+        )
         .eq('id', input.id)
         .maybeSingle();
 
@@ -1000,6 +1110,16 @@ export async function updateShipmentOrOrder(
 
         console.log('[PO Update] Successfully updated PO:', input.id);
 
+        logOperationsAudit({
+          module: 'purchase_orders',
+          entityType: 'PurchaseOrder',
+          entityId: input.id,
+          oldData: pickAuditFields(purchaseOrder as Record<string, unknown>, PO_AUDIT_FIELDS),
+          newData: pickAuditFields(updateData, PO_AUDIT_FIELDS),
+          userId: user.id,
+          description: `Operations Dashboard: updated purchase order ${(purchaseOrder as { po_number?: string }).po_number ?? input.id}`,
+        });
+
         // Delivered: put clear stock POs into warehouse stock (once)
         if (loadStatus === 'delivered' && !poWasDelivered) {
           await poReceivingService.autoReceiveForPurchaseOrder(input.id, user.id);
@@ -1047,6 +1167,14 @@ export async function updateShipmentOrOrder(
             // Don't fail the whole operation if SO update fails
           } else {
             console.log('[updateShipmentOrOrder] ✅ Related SO also updated successfully');
+            logOperationsAudit({
+              module: 'sales_orders',
+              entityType: 'SalesOrder',
+              entityId: poWithSO.sales_order_id as string,
+              newData: pickAuditFields(soUpdateData, SO_AUDIT_FIELDS),
+              userId: user.id,
+              description: 'Operations Dashboard: updated the sales order linked to the edited purchase order',
+            });
           }
         }
       } else {
@@ -1056,7 +1184,10 @@ export async function updateShipmentOrOrder(
         // ============================================
         const { data: salesOrder, error: soDirectError } = await supabase
           .from('sales_orders')
-          .select('id')
+          // Widened Nov 16 2026 for the audit "before" snapshot (same row, no extra query)
+          .select(
+            'id, order_number, customer_expected_delivery, confirmed_eta, eta_to_us_port, actual_delivery_date, qty_delivered, outstanding_qty, internal_notes'
+          )
           .eq('id', input.id)
           .maybeSingle();
 
@@ -1105,6 +1236,16 @@ export async function updateShipmentOrOrder(
           }
 
           console.log('[SO Update] Successfully updated SO:', input.id);
+
+          logOperationsAudit({
+            module: 'sales_orders',
+            entityType: 'SalesOrder',
+            entityId: input.id,
+            oldData: pickAuditFields(salesOrder as Record<string, unknown>, SO_AUDIT_FIELDS),
+            newData: pickAuditFields(updateData, SO_AUDIT_FIELDS),
+            userId: user.id,
+            description: `Operations Dashboard: updated sales order ${(salesOrder as { order_number?: string }).order_number ?? input.id}`,
+          });
         } else {
           return { success: false, error: 'Record not found in shipments, purchase_orders, or sales_orders table' };
         }
@@ -1152,6 +1293,14 @@ export async function updateShipmentOrOrder(
           console.error('[updateShipmentOrOrder] Warning: Failed to update related SO from shipment:', soError.message);
         } else {
           console.log('[updateShipmentOrOrder] ✅ Related SO from shipment also updated successfully');
+          logOperationsAudit({
+            module: 'sales_orders',
+            entityType: 'SalesOrder',
+            entityId: shipmentWithSO.sales_order_id as string,
+            newData: pickAuditFields(soUpdateData, SO_AUDIT_FIELDS),
+            userId: user.id,
+            description: 'Operations Dashboard: updated the sales order linked to the edited shipment',
+          });
         }
       }
     }
@@ -1193,6 +1342,14 @@ export async function updateShipmentNotes(
     }
     const user = auth.user;
 
+    // Read the note being replaced so the audit row shows both versions.
+    // A failed read only costs the "before" value, never the save.
+    const { data: before } = await db
+      .from('shipments')
+      .select('shipment_number, action_required')
+      .eq('id', shipmentId)
+      .maybeSingle();
+
     const { error } = await db
       .from('shipments')
       .update({
@@ -1206,6 +1363,16 @@ export async function updateShipmentNotes(
       console.error('Error updating shipment notes:', error);
       return { success: false, error: error.message };
     }
+
+    logOperationsAudit({
+      module: 'shipments',
+      entityType: 'Shipment',
+      entityId: shipmentId,
+      oldData: { action_required: before?.action_required ?? null },
+      newData: { action_required: notes },
+      userId: user.id,
+      description: `Operations Dashboard: updated the Action Required note on shipment ${before?.shipment_number ?? shipmentId}`,
+    });
 
     // Revalidate operations dashboard
     revalidatePath('/operations');
@@ -1235,6 +1402,14 @@ export async function updateSalesOrderNotes(
     }
     const user = auth.user;
 
+    // Read the note being replaced so the audit row shows both versions.
+    // A failed read only costs the "before" value, never the save.
+    const { data: before } = await db
+      .from('sales_orders')
+      .select('order_number, internal_notes')
+      .eq('id', salesOrderId)
+      .maybeSingle();
+
     const { error } = await db
       .from('sales_orders')
       .update({
@@ -1248,6 +1423,16 @@ export async function updateSalesOrderNotes(
       console.error('Error updating sales order notes:', error);
       return { success: false, error: error.message };
     }
+
+    logOperationsAudit({
+      module: 'sales_orders',
+      entityType: 'SalesOrder',
+      entityId: salesOrderId,
+      oldData: { internal_notes: before?.internal_notes ?? null },
+      newData: { internal_notes: notes },
+      userId: user.id,
+      description: `Operations Dashboard: updated the internal notes on sales order ${before?.order_number ?? salesOrderId}`,
+    });
 
     // Revalidate operations dashboard
     revalidatePath('/operations');

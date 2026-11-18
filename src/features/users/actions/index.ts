@@ -375,7 +375,7 @@ export async function findUserByEmail(
 
     const { data: user, error } = await db
       .from('users')
-      .select('id, name, email')
+      .select('id, first_name, last_name, email')
       .eq('email', email)
       .eq('status', 'active')
       .single();
@@ -391,9 +391,14 @@ export async function findUserByEmail(
       throw error;
     }
 
+    // The table stores first_name/last_name; callers expect a single `name`
     return {
       success: true,
-      data: user,
+      data: {
+        id: user.id,
+        name: [user.first_name, user.last_name].filter(Boolean).join(' '),
+        email: user.email,
+      },
     };
   } catch (error) {
     console.error('Error finding user by email:', error);

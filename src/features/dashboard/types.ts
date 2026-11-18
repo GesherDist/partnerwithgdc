@@ -140,6 +140,8 @@ export interface DashboardStat {
   color: string;
   subtitle?: string; // For additional info like "38": 800, 24": 434"
   target?: string; // For target comparison
+  /** Nov 18 2026: red line under the value (e.g. commission invoices without a tire count) */
+  warning?: string;
 }
 
 export interface CommissionRevenueStats {

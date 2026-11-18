@@ -77,6 +77,22 @@ export async function matchCustomerPOData(
   };
 }
 
+/**
+ * Reports a lookup that failed instead of letting it pass as "no match".
+ *
+ * Nov 16 2026: every lookup in this file discarded its error. When the column
+ * names here drifted from the schema (customers.customer_name instead of
+ * customers.name, and three more) each query failed, `data` came back null,
+ * and the caller read that as "not found" - so every inbound email matched
+ * nothing and there was no sign of why. Logging keeps that class of bug
+ * visible instead of silent.
+ */
+function reportQueryError(where: string, error: { message?: string } | null): void {
+  if (error) {
+    console.error(`[matching.service] ${where} lookup failed:`, error.message ?? error);
+  }
+}
+
 // ============================================
 // CUSTOMER MATCHING
 // ============================================
@@ -97,17 +113,19 @@ async function matchCustomer(
 
   // Try exact match by email first
   if (customerEmail) {
-    const { data: emailMatch } = await supabase
+    const { data: emailMatch, error: emailMatchError } = await supabase
       .from('customers')
-      .select('id, customer_name, email')
+      .select('id, name, email')
       .eq('email', customerEmail)
       .eq('status', 'active')
-      .single();
+      .is('deleted_at', null)
+      .maybeSingle();
+    reportQueryError('customers (emailMatch)', emailMatchError);
 
     if (emailMatch) {
       return {
         customerId: emailMatch.id,
-        customerName: emailMatch.customer_name,
+        customerName: emailMatch.name,
         matchType: 'exact',
         confidence: 1.0,
       };
@@ -116,17 +134,19 @@ async function matchCustomer(
 
   // Try exact match by name
   if (customerName) {
-    const { data: nameMatch } = await supabase
+    const { data: nameMatch, error: nameMatchError } = await supabase
       .from('customers')
-      .select('id, customer_name, email')
-      .ilike('customer_name', customerName)
+      .select('id, name, email')
+      .ilike('name', customerName)
       .eq('status', 'active')
-      .single();
+      .is('deleted_at', null)
+      .maybeSingle();
+    reportQueryError('customers (nameMatch)', nameMatchError);
 
     if (nameMatch) {
       return {
         customerId: nameMatch.id,
-        customerName: nameMatch.customer_name,
+        customerName: nameMatch.name,
         matchType: 'exact',
         confidence: 1.0,
       };
@@ -135,12 +155,14 @@ async function matchCustomer(
 
   // Fuzzy match by name (partial match)
   if (customerName) {
-    const { data: fuzzyMatches } = await supabase
+    const { data: fuzzyMatches, error: fuzzyMatchesError } = await supabase
       .from('customers')
-      .select('id, customer_name, email')
-      .ilike('customer_name', `%${customerName}%`)
+      .select('id, name, email')
+      .ilike('name', `%${customerName}%`)
       .eq('status', 'active')
+      .is('deleted_at', null)
       .limit(5);
+    reportQueryError('customers (fuzzyMatches)', fuzzyMatchesError);
 
     if (fuzzyMatches && fuzzyMatches.length > 0) {
       // Calculate similarity scores
@@ -148,7 +170,7 @@ async function matchCustomer(
         ...customer,
         similarity: calculateStringSimilarity(
           customerName.toLowerCase(),
-          customer.customer_name.toLowerCase()
+          customer.name.toLowerCase()
         ),
       }));
 
@@ -159,12 +181,12 @@ async function matchCustomer(
 
       return {
         customerId: best.id,
-        customerName: best.customer_name,
+        customerName: best.name,
         matchType: 'fuzzy',
         confidence: best.similarity,
         suggestions: withScores.slice(0, 3).map((c: any) => ({
           id: c.id,
-          name: c.customer_name,
+          name: c.name,
           similarity: c.similarity,
         })),
       };
@@ -215,30 +237,34 @@ async function matchSingleProduct(
 
   // Try exact SKU match first
   if (sku) {
-    const { data: skuMatch } = await supabase
+    const { data: skuMatch, error: skuMatchError } = await supabase
       .from('products')
-      .select('id, sku, product_name')
+      .select('id, sku, name')
       .eq('sku', sku)
       .eq('status', 'active')
-      .single();
+      .is('deleted_at', null)
+      .maybeSingle();
+    reportQueryError('products (skuMatch)', skuMatchError);
 
     if (skuMatch) {
       return {
         productId: skuMatch.id,
         sku: skuMatch.sku,
-        productName: skuMatch.product_name,
+        productName: skuMatch.name,
         matchType: 'exact_sku',
         confidence: 1.0,
       };
     }
 
     // Try fuzzy SKU match (case-insensitive, partial)
-    const { data: fuzzySKUMatches } = await supabase
+    const { data: fuzzySKUMatches, error: fuzzySKUMatchesError } = await supabase
       .from('products')
-      .select('id, sku, product_name')
+      .select('id, sku, name')
       .ilike('sku', `%${sku}%`)
       .eq('status', 'active')
+      .is('deleted_at', null)
       .limit(5);
+    reportQueryError('products (fuzzySKUMatches)', fuzzySKUMatchesError);
 
     if (fuzzySKUMatches && fuzzySKUMatches.length > 0) {
       const best = fuzzySKUMatches[0];
@@ -250,13 +276,13 @@ async function matchSingleProduct(
       return {
         productId: best.id,
         sku: best.sku,
-        productName: best.product_name,
+        productName: best.name,
         matchType: 'fuzzy_sku',
         confidence: similarity,
         suggestions: fuzzySKUMatches.slice(0, 3).map((p: any) => ({
           id: p.id,
           sku: p.sku,
-          name: p.product_name,
+          name: p.name,
           similarity: calculateStringSimilarity(
             sku.toLowerCase(),
             p.sku.toLowerCase()
@@ -268,51 +294,55 @@ async function matchSingleProduct(
 
   // Try exact name match
   if (productName) {
-    const { data: nameMatch } = await supabase
+    const { data: nameMatch, error: nameMatchError } = await supabase
       .from('products')
-      .select('id, sku, product_name')
-      .ilike('product_name', productName)
+      .select('id, sku, name')
+      .ilike('name', productName)
       .eq('status', 'active')
-      .single();
+      .is('deleted_at', null)
+      .maybeSingle();
+    reportQueryError('products (nameMatch)', nameMatchError);
 
     if (nameMatch) {
       return {
         productId: nameMatch.id,
         sku: nameMatch.sku,
-        productName: nameMatch.product_name,
+        productName: nameMatch.name,
         matchType: 'exact_name',
         confidence: 0.95,
       };
     }
 
     // Try fuzzy name match
-    const { data: fuzzyNameMatches } = await supabase
+    const { data: fuzzyNameMatches, error: fuzzyNameMatchesError } = await supabase
       .from('products')
-      .select('id, sku, product_name')
-      .ilike('product_name', `%${productName}%`)
+      .select('id, sku, name')
+      .ilike('name', `%${productName}%`)
       .eq('status', 'active')
+      .is('deleted_at', null)
       .limit(5);
+    reportQueryError('products (fuzzyNameMatches)', fuzzyNameMatchesError);
 
     if (fuzzyNameMatches && fuzzyNameMatches.length > 0) {
       const best = fuzzyNameMatches[0];
       const similarity = calculateStringSimilarity(
         productName.toLowerCase(),
-        best.product_name.toLowerCase()
+        best.name.toLowerCase()
       );
 
       return {
         productId: best.id,
         sku: best.sku,
-        productName: best.product_name,
+        productName: best.name,
         matchType: 'fuzzy_name',
         confidence: similarity,
         suggestions: fuzzyNameMatches.slice(0, 3).map((p: any) => ({
           id: p.id,
           sku: p.sku,
-          name: p.product_name,
+          name: p.name,
           similarity: calculateStringSimilarity(
             productName.toLowerCase(),
-            p.product_name.toLowerCase()
+            p.name.toLowerCase()
           ),
         })),
       };
@@ -478,17 +508,19 @@ async function matchSupplier(
 
   // Try exact match by email first
   if (supplierEmail) {
-    const { data: emailMatch } = await supabase
+    const { data: emailMatch, error: emailMatchError } = await supabase
       .from('suppliers')
-      .select('id, supplier_name, email')
-      .eq('email', supplierEmail)
+      .select('id, name, primary_contact_email')
+      .eq('primary_contact_email', supplierEmail)
       .eq('status', 'active')
-      .single();
+      .is('deleted_at', null)
+      .maybeSingle();
+    reportQueryError('suppliers (emailMatch)', emailMatchError);
 
     if (emailMatch) {
       return {
         supplierId: emailMatch.id,
-        supplierName: emailMatch.supplier_name,
+        supplierName: emailMatch.name,
         matchType: 'exact',
         confidence: 1.0,
       };
@@ -497,17 +529,19 @@ async function matchSupplier(
 
   // Try exact match by name
   if (supplierName) {
-    const { data: nameMatch } = await supabase
+    const { data: nameMatch, error: nameMatchError } = await supabase
       .from('suppliers')
-      .select('id, supplier_name, email')
-      .ilike('supplier_name', supplierName)
+      .select('id, name, primary_contact_email')
+      .ilike('name', supplierName)
       .eq('status', 'active')
-      .single();
+      .is('deleted_at', null)
+      .maybeSingle();
+    reportQueryError('suppliers (nameMatch)', nameMatchError);
 
     if (nameMatch) {
       return {
         supplierId: nameMatch.id,
-        supplierName: nameMatch.supplier_name,
+        supplierName: nameMatch.name,
         matchType: 'exact',
         confidence: 1.0,
       };
@@ -516,19 +550,21 @@ async function matchSupplier(
 
   // Fuzzy match by name
   if (supplierName) {
-    const { data: fuzzyMatches } = await supabase
+    const { data: fuzzyMatches, error: fuzzyMatchesError } = await supabase
       .from('suppliers')
-      .select('id, supplier_name, email')
-      .ilike('supplier_name', `%${supplierName}%`)
+      .select('id, name, primary_contact_email')
+      .ilike('name', `%${supplierName}%`)
       .eq('status', 'active')
+      .is('deleted_at', null)
       .limit(5);
+    reportQueryError('suppliers (fuzzyMatches)', fuzzyMatchesError);
 
     if (fuzzyMatches && fuzzyMatches.length > 0) {
       const withScores = fuzzyMatches.map((supplier: any) => ({
         ...supplier,
         similarity: calculateStringSimilarity(
           supplierName.toLowerCase(),
-          supplier.supplier_name.toLowerCase()
+          supplier.name.toLowerCase()
         ),
       }));
 
@@ -537,12 +573,12 @@ async function matchSupplier(
 
       return {
         supplierId: best.id,
-        supplierName: best.supplier_name,
+        supplierName: best.name,
         matchType: 'fuzzy',
         confidence: best.similarity,
         suggestions: withScores.slice(0, 3).map((s: any) => ({
           id: s.id,
-          name: s.supplier_name,
+          name: s.name,
           similarity: s.similarity,
         })),
       };
@@ -621,12 +657,14 @@ async function matchPurchaseOrder(
   console.log('[PO Matching] Trying PO formats:', poFormats);
 
   // Try exact match by PO number (try all formats)
-  const { data: exactMatch } = await supabase
+  const { data: exactMatch, error: exactMatchError } = await supabase
     .from('purchase_orders')
     .select('id, po_number, status')
     .in('po_number', poFormats)
     .in('status', ['draft', 'sent', 'confirmed', 'in_production', 'ready_to_ship', 'partial', 'in_transit'])
-    .single();
+    .is('deleted_at', null)
+    .maybeSingle();
+  reportQueryError('purchase_orders (exactMatch)', exactMatchError);
 
   if (exactMatch) {
     return {
@@ -639,12 +677,14 @@ async function matchPurchaseOrder(
   }
 
   // Try fuzzy match by PO number (case-insensitive, partial)
-  const { data: fuzzyMatches } = await supabase
+  const { data: fuzzyMatches, error: fuzzyMatchesError } = await supabase
     .from('purchase_orders')
     .select('id, po_number, status')
     .ilike('po_number', `%${poNumber}%`)
     .in('status', ['draft', 'sent', 'confirmed', 'in_production', 'ready_to_ship', 'partial', 'in_transit'])
+    .is('deleted_at', null)
     .limit(5);
+  reportQueryError('purchase_orders (fuzzyMatches)', fuzzyMatchesError);
 
   if (fuzzyMatches && fuzzyMatches.length > 0) {
     const withScores = fuzzyMatches.map((po: any) => ({

@@ -15,6 +15,43 @@ import type {
   CreditNoteStatus,
 } from '../types';
 import { CREDIT_NOTE_STATUS_TRANSITIONS } from '../types';
+import { auditService } from '@/shared/lib/audit';
+
+// ============================================
+// AUDIT TRAIL
+// ============================================
+
+/**
+ * Credit notes are financial documents (Build Brief 5.3: short or damaged
+ * goods are settled with one), so every create, edit, delete and status
+ * change leaves an audit row.
+ *
+ * Fire-and-forget on purpose: an audit failure must never fail or undo a
+ * credit note that was already written.
+ */
+function creditNoteAuditData(cn: CreditNote | CreditNoteWithItems): Record<string, unknown> {
+  return {
+    id: cn.id,
+    creditNoteNumber: cn.creditNoteNumber,
+    customerId: cn.customerId,
+    invoiceId: cn.invoiceId,
+    salesOrderId: cn.salesOrderId,
+    reason: cn.reason,
+    reasonDescription: cn.reasonDescription,
+    status: cn.status,
+    subtotal: cn.subtotal,
+    taxTotal: cn.taxTotal,
+    grandTotal: cn.grandTotal,
+    customerNotes: cn.customerNotes,
+    internalNotes: cn.internalNotes,
+  };
+}
+
+function logCreditNoteAudit(entry: Parameters<typeof auditService.log>[0]): void {
+  auditService.log(entry).catch((error) => {
+    console.error('Failed to write credit note audit log:', error);
+  });
+}
 
 // ============================================
 // TYPES
@@ -122,6 +159,16 @@ export const creditNoteService = {
 
       const cn = await creditNoteRepository.create(data, userId);
 
+      logCreditNoteAudit({
+        action: 'create',
+        module: 'credit_notes',
+        entityType: 'CreditNote',
+        entityId: cn.id,
+        newData: creditNoteAuditData(cn),
+        userId,
+        description: `Created credit note ${cn.creditNoteNumber}`,
+      });
+
       return {
         success: true,
         data: cn,
@@ -161,6 +208,17 @@ export const creditNoteService = {
 
       const cn = await creditNoteRepository.update(id, data, userId);
 
+      logCreditNoteAudit({
+        action: 'update',
+        module: 'credit_notes',
+        entityType: 'CreditNote',
+        entityId: cn.id,
+        oldData: creditNoteAuditData(existing),
+        newData: creditNoteAuditData(cn),
+        userId,
+        description: `Updated credit note ${cn.creditNoteNumber}`,
+      });
+
       return {
         success: true,
         data: cn,
@@ -195,6 +253,16 @@ export const creditNoteService = {
       }
 
       const cn = await creditNoteRepository.softDelete(id, userId);
+
+      logCreditNoteAudit({
+        action: 'delete',
+        module: 'credit_notes',
+        entityType: 'CreditNote',
+        entityId: cn.id,
+        oldData: creditNoteAuditData(existing),
+        userId,
+        description: `Deleted credit note ${cn.creditNoteNumber}`,
+      });
 
       return {
         success: true,
@@ -259,6 +327,17 @@ export const creditNoteService = {
       }
 
       const cn = await creditNoteRepository.updateStatus(id, newStatus, userId);
+
+      logCreditNoteAudit({
+        action: 'update', // status_change
+        module: 'credit_notes',
+        entityType: 'CreditNote',
+        entityId: cn.id,
+        oldData: { status: existing.status },
+        newData: { status: newStatus },
+        userId,
+        description: `Credit note ${cn.creditNoteNumber} status changed: ${existing.status} → ${newStatus}`,
+      });
 
       return {
         success: true,

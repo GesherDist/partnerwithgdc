@@ -93,7 +93,9 @@ export async function ensureFreshQuickBooksFinancials(): Promise<Result<{ financ
     (financials?.revenueHistory ?? []).every((m) => m.cogs !== undefined) &&
     // Open invoices for Projected Cash (Nov 6 2026)
     Boolean(financials?.periods?.openInvoices) &&
-    Boolean(financials?.periods?.openBills);
+    Boolean(financials?.periods?.openBills) &&
+    // Nov 18 2026: Tires_38 / Tires_24 for Total Tires Sold (always stored once read, with `error` if it failed)
+    financials?.periods?.commissionTires !== undefined;
   if (financials && financials.asOf >= businessToday() && financials.periods && hasPnl) {
     return { success: true, data: null }; // already fresh today
   }

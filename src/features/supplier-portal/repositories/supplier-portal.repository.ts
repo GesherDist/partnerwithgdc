@@ -152,7 +152,7 @@ export async function getSupplierPurchaseOrderById(
   if (poData.sales_order_id) {
     const { data: soData } = await db
       .from('sales_orders')
-      .select('id, so_number')
+      .select('id, order_number')
       .eq('id', poData.sales_order_id)
       .single();
     salesOrder = soData;
@@ -777,7 +777,7 @@ function mapPurchaseOrder(data: Record<string, unknown>): SupplierPurchaseOrder 
     createdAt: data.created_at as string,
     updatedAt: data.updated_at as string,
     salesOrder: salesOrder
-      ? { id: salesOrder.id as string, soNumber: salesOrder.so_number as string }
+      ? { id: salesOrder.id as string, soNumber: salesOrder.order_number as string }
       : undefined,
     items: items?.map(mapPurchaseOrderItem),
   };

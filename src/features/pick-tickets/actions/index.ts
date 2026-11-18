@@ -288,25 +288,27 @@ export async function updatePickTicket(id: string, data: UpdatePickTicketDTO) {
         // NOTE: Warehouse orders no longer create shipments
         // Delivery tracking is handled in packing list (if created) or directly on pick ticket
 
-        // Update sales order status to 'shipped'
-        try {
-          // An order already invoiced (closed out) keeps its status
-          const { data: soNow } = updatedPT.data.salesOrderId
-            ? await db.from('sales_orders').select('status').eq('id', updatedPT.data.salesOrderId).single()
-            : { data: null };
-          if (updatedPT.data.salesOrderId && soNow?.status !== 'invoiced') {
-            await db
-              .from('sales_orders')
-              .update({
-                status: 'shipped',
-                updated_at: new Date().toISOString(),
-                updated_by: auth.user.id || null,
-              })
-              .eq('id', updatedPT.data.salesOrderId);
-            console.log('[updatePickTicket] Sales order status updated to "shipped"');
+        // Update sales order status to 'shipped'.
+        // Nov 16 2026: through the service, so the change is audited and the
+        // Pipedrive deal follows. The "already invoiced keeps its status"
+        // guard now lives in setFulfilmentStatus. Still non-fatal: a failure
+        // here must not undo a completed pick.
+        if (updatedPT.data.salesOrderId) {
+          try {
+            const { salesOrderService } = await import('@/features/sales-orders/services');
+            const statusResult = await salesOrderService.setFulfilmentStatus(
+              updatedPT.data.salesOrderId,
+              'shipped',
+              auth.user.id
+            );
+            if (!statusResult.success) {
+              console.error('[updatePickTicket] Failed to update sales order status:', statusResult.error);
+            } else if (statusResult.data?.changed) {
+              console.log('[updatePickTicket] Sales order status updated to "shipped"');
+            }
+          } catch (error) {
+            console.error('[updatePickTicket] Failed to update sales order status:', error);
           }
-        } catch (error) {
-          console.error('[updatePickTicket] Failed to update sales order status:', error);
         }
       }
 
@@ -449,25 +451,24 @@ export async function completePicking(id: string) {
     // Delivery tracking is handled in packing list (if created)
     // For quick ship (no packing list), pick ticket tracks the shipment
 
-    // Update sales order status to 'shipped'
-    try {
-      // An order already invoiced (closed out) keeps its status
-      const { data: soNow } = pickTicket.salesOrderId
-        ? await db.from('sales_orders').select('status').eq('id', pickTicket.salesOrderId).single()
-        : { data: null };
-      if (pickTicket.salesOrderId && soNow?.status !== 'invoiced') {
-        await db
-          .from('sales_orders')
-          .update({
-            status: 'shipped',
-            updated_at: new Date().toISOString(),
-            updated_by: auth.user.id || null,
-          })
-          .eq('id', pickTicket.salesOrderId);
-        console.log('[completePicking] Sales order status updated to "shipped"');
+    // Update sales order status to 'shipped' (audited, Pipedrive updated;
+    // the "already invoiced" guard lives in setFulfilmentStatus). Non-fatal.
+    if (pickTicket.salesOrderId) {
+      try {
+        const { salesOrderService } = await import('@/features/sales-orders/services');
+        const statusResult = await salesOrderService.setFulfilmentStatus(
+          pickTicket.salesOrderId,
+          'shipped',
+          auth.user.id
+        );
+        if (!statusResult.success) {
+          console.error('[completePicking] Failed to update sales order status:', statusResult.error);
+        } else if (statusResult.data?.changed) {
+          console.log('[completePicking] Sales order status updated to "shipped"');
+        }
+      } catch (error) {
+        console.error('[completePicking] Failed to update sales order status:', error);
       }
-    } catch (error) {
-      console.error('[completePicking] Failed to update sales order status:', error);
     }
 
     revalidatePath('/pick-tickets');

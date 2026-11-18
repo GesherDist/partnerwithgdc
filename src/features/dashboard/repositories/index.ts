@@ -14,6 +14,7 @@ import { getPeriods } from '../lib/periods';
 import { erpChannelIndex, resolveChannel } from '../lib/channel';
 import { getDashboardTargets } from '../services/dashboard-targets.service';
 import { qboCommission } from '../lib/commission';
+import { totalTiresSold } from '../lib/total-tires';
 import { withPnlBasis, type PnlBasis } from '../lib/pnl-basis';
 // ERP / QuickBooks split of the Revenue Trend (replaced: all months from QuickBooks, Nov 6 2026)
 // import { revenueSourceOf } from '../lib/revenue-history';
@@ -566,6 +567,9 @@ export async function getDashboardStats(_dateRange?: DateRange, basis: PnlBasis 
 
   // Units Sold: QuickBooks Sales by Product/Service Summary, tire products (Nov 6 2026)
   const qboUnits = (await loadQboFinancials())?.periods?.units ?? null;
+  // Nov 18 2026 (Ankur, Nov 10): Total Tires Sold = direct units + commission tires
+  // (QuickBooks invoice custom fields Tires_38 / Tires_24), display only
+  const tiresSold = totalTiresSold((await loadQboFinancials())?.periods);
   // ERP delivered tire lines (replaced by QuickBooks):
   // const currentMonthUnits = current.units;
   // const currentMonthUnits38 = current.units38;
@@ -738,6 +742,38 @@ export async function getDashboardStats(_dateRange?: DateRange, basis: PnlBasis 
       icon: 'package',
       color: 'bg-indigo-500',
       subtitle: qboUnits ? sizeLine(qboUnits.ytd.bySize) : 'Sync QuickBooks',
+    },
+    {
+      // Nov 18 2026: display only (not used in any other calculation)
+      id: 'total-tires-sold-ytd',
+      title: 'Total Tires Sold (YTD)',
+      value: tiresSold ? tiresSold.total.toLocaleString('en-US') : '—',
+      // No comparison: display only (the card hides the "from last month" row)
+      change: '',
+      trend: 'up',
+      icon: 'package',
+      color: 'bg-sky-500',
+      subtitle: !tiresSold
+        ? 'Sync QuickBooks'
+        : tiresSold.readError
+          ? 'Direct only · commission tires not read yet (next QuickBooks sync)'
+          : !tiresSold.fieldsFound
+          ? 'Direct only · Tires_38 / Tires_24 not filled in QuickBooks yet'
+          : `Direct ${tiresSold.direct.toLocaleString('en-US')} + Commission ${tiresSold.commission.toLocaleString('en-US')} · ${sizeLine(tiresSold.bySize)}`,
+      ...(tiresSold?.fieldsFound && (tiresSold.missing.length || tiresSold.badValues)
+        ? {
+            warning: [
+              tiresSold.missing.length
+                ? `${tiresSold.missing.length} commission invoice${tiresSold.missing.length === 1 ? '' : 's'} without a tire count`
+                : '',
+              tiresSold.badValues
+                ? `${tiresSold.badValues} invoice${tiresSold.badValues === 1 ? '' : 's'} with a tire count that is not a number`
+                : '',
+            ]
+              .filter(Boolean)
+              .join(' · '),
+          }
+        : {}),
     },
     {
       id: 'blended-margin',

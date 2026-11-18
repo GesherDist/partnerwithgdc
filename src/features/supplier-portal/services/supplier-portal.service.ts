@@ -7,6 +7,7 @@
 import * as repo from '../repositories/supplier-portal.repository';
 import { purchaseOrderService } from '@/features/purchase-orders/services/purchase-order.service';
 import { createClient } from '@/shared/lib/supabase/server';
+import { auditService } from '@/shared/lib/audit';
 import type {
   Supplier,
   SupplierPurchaseOrder,
@@ -17,6 +18,36 @@ import type {
   UpdateProductionInput,
   UpdateShipmentInput,
 } from '../types';
+
+// ============================================
+// AUDIT TRAIL
+// ============================================
+
+/**
+ * Galileo acts on Gesher's purchase orders and shipments through this portal,
+ * so every one of those actions is recorded against the supplier user who made
+ * it (Build Brief: "every state change writes an audit row").
+ *
+ * The PO status change itself is already audited inside
+ * purchaseOrderService.transitionStatus(), so what is recorded here is the
+ * supplier-side event, not a second copy of the status row.
+ *
+ * Fire-and-forget on purpose: an audit failure must never fail or undo an
+ * action the supplier already completed.
+ */
+function logSupplierPortalAudit(entry: {
+  module: 'purchase_orders' | 'shipments';
+  entityType: 'PurchaseOrder' | 'Shipment';
+  entityId: string;
+  oldData?: Record<string, unknown>;
+  newData: Record<string, unknown>;
+  userId: string;
+  description: string;
+}): void {
+  auditService.log({ action: 'update', ...entry }).catch((error) => {
+    console.error('Failed to write supplier portal audit log:', error);
+  });
+}
 
 // ============================================
 // SUPPLIER
@@ -172,6 +203,27 @@ export async function confirmPO(
       .eq('id', shipment.id);
   }
 
+  logSupplierPortalAudit({
+    module: 'purchase_orders',
+    entityType: 'PurchaseOrder',
+    entityId: input.poId,
+    oldData: {
+      supplierConfirmedAt: po.supplierConfirmedAt,
+      expectedCompletionDate: po.expectedCompletionDate,
+      supplierNotes: po.supplierNotes,
+      productionStatus: po.productionStatus,
+    },
+    newData: {
+      supplierConfirmedAt: new Date().toISOString(),
+      expectedCompletionDate: input.expectedCompletionDate || null,
+      supplierNotes: input.supplierNotes || null,
+      productionStatus: 'not_started',
+      supplierReferenceNumber: input.supplierReferenceNumber || null,
+    },
+    userId,
+    description: `Supplier Portal: supplier confirmed purchase order ${po.poNumber}`,
+  });
+
   return {
     success: true,
     shipmentId: shipment?.id,
@@ -201,7 +253,21 @@ export async function rejectPO(
     return { success: false, error: 'Rejection reason is required' };
   }
 
-  return repo.rejectPurchaseOrder(input.poId, userId, input.rejectionReason);
+  const result = await repo.rejectPurchaseOrder(input.poId, userId, input.rejectionReason);
+
+  if (result.success) {
+    logSupplierPortalAudit({
+      module: 'purchase_orders',
+      entityType: 'PurchaseOrder',
+      entityId: input.poId,
+      oldData: { supplierRejectedAt: po.supplierRejectedAt, supplierRejectionReason: po.supplierRejectionReason },
+      newData: { supplierRejectedAt: new Date().toISOString(), supplierRejectionReason: input.rejectionReason },
+      userId,
+      description: `Supplier Portal: supplier rejected purchase order ${po.poNumber} - ${input.rejectionReason}`,
+    });
+  }
+
+  return result;
 }
 
 export async function updateProduction(
@@ -238,11 +304,33 @@ export async function updateProduction(
     }
   }
 
-  return repo.updateProductionStatus(input.poId, userId, {
+  const result = await repo.updateProductionStatus(input.poId, userId, {
     productionStatus: input.productionStatus,
     expectedCompletionDate: input.expectedCompletionDate,
     supplierNotes: input.supplierNotes,
   });
+
+  if (result.success) {
+    logSupplierPortalAudit({
+      module: 'purchase_orders',
+      entityType: 'PurchaseOrder',
+      entityId: input.poId,
+      oldData: {
+        productionStatus: po.productionStatus,
+        expectedCompletionDate: po.expectedCompletionDate,
+        supplierNotes: po.supplierNotes,
+      },
+      newData: {
+        productionStatus: input.productionStatus,
+        expectedCompletionDate: input.expectedCompletionDate || null,
+        supplierNotes: input.supplierNotes || null,
+      },
+      userId,
+      description: `Supplier Portal: production status on ${po.poNumber} changed by the supplier: ${po.productionStatus} → ${input.productionStatus}`,
+    });
+  }
+
+  return result;
 }
 
 // ============================================
@@ -293,7 +381,7 @@ export async function updateShipmentDetails(
     return { success: false, error: 'Shipment not found' };
   }
 
-  return repo.updateShipment(input.shipmentId, userId, {
+  const result = await repo.updateShipment(input.shipmentId, userId, {
     containerNumber: input.containerNumber,
     billOfLading: input.billOfLading,
     vesselName: input.vesselName,
@@ -304,6 +392,38 @@ export async function updateShipmentDetails(
     etaCustomer: input.etaCustomer,
     notes: input.notes,
   });
+
+  if (result.success) {
+    logSupplierPortalAudit({
+      module: 'shipments',
+      entityType: 'Shipment',
+      entityId: input.shipmentId,
+      oldData: {
+        containerNumber: shipment.containerNumber,
+        billOfLading: shipment.billOfLading,
+        vesselName: shipment.vesselName,
+        portOfLoading: shipment.portOfLoading,
+        portOfDischarge: shipment.portOfDischarge,
+        etd: shipment.etd,
+        etaPort: shipment.etaPort,
+        etaCustomer: shipment.etaCustomer,
+      },
+      newData: {
+        containerNumber: input.containerNumber ?? null,
+        billOfLading: input.billOfLading ?? null,
+        vesselName: input.vesselName ?? null,
+        portOfLoading: input.portOfLoading ?? null,
+        portOfDischarge: input.portOfDischarge ?? null,
+        etd: input.etd ?? null,
+        etaPort: input.etaPort ?? null,
+        etaCustomer: input.etaCustomer ?? null,
+      },
+      userId,
+      description: `Supplier Portal: supplier updated shipment ${shipment.shipmentNumber}`,
+    });
+  }
+
+  return result;
 }
 
 // ============================================

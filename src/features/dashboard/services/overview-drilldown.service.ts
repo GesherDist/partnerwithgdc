@@ -21,7 +21,8 @@ import type { DateRange, RevenueDataPoint } from '../types';
 import type { CsvExport, OverviewDrillDown } from '../lib/drilldown';
 import { getConnectionByProvider } from '@/modules/integrations/core';
 import { erpChannelIndex, resolveChannel } from '../lib/channel';
-import { getLatestSnapshot, type QboFinancials } from '@/modules/integrations/quickbooks/services/qbo-financials.service';
+import { totalTiresSold } from '../lib/total-tires';
+import { getLatestSnapshot, tireFieldSize, type QboFinancials } from '@/modules/integrations/quickbooks/services/qbo-financials.service';
 
 export type Cell = string | number | null | undefined;
 
@@ -352,6 +353,88 @@ async function unitsBySkuQboCsv(from: string, to: string): Promise<string> {
   return withErpReference(qboCsv, 'ERP incoming shipments by ETA to US port (the old chart), for reference only', await unitsBySkuCsv(from, to));
 }
 
+/**
+ * Total Tires Sold (YTD) card (Nov 18 2026): the QuickBooks invoices with Tires_38 /
+ * Tires_24 filled, the commission invoices still missing a count, and the total.
+ */
+async function totalTiresQboCsv(): Promise<string> {
+  const periods = (await loadQboSnapshot())?.periods;
+  const tires = periods?.commissionTires;
+  const t = totalTiresSold(periods);
+  // Direct tires only (no tire fields read): say why, no error
+  if (t && (!tires || tires.error)) {
+    return toCsv(
+      ['Summary', 'Tires'],
+      [
+        [tires?.error ? `Commission tires could not be read from QuickBooks (${tires.error}); next sync tries again` : 'Commission tires not in this snapshot yet; next QuickBooks sync reads them', ''],
+        ['Units Sold (YTD), QuickBooks Sales by Product/Service = Direct tires', t.direct],
+        ['TOTAL TIRES SOLD (YTD), direct only', t.total],
+      ]
+    );
+  }
+  if (!tires || !t) {
+    return toCsv(
+      [tires?.error ? `QuickBooks invoices could not be read (${tires.error}): sync QuickBooks` : 'Tire custom fields are not in the latest snapshot: sync QuickBooks'],
+      []
+    );
+  }
+  const rows: Cell[][] = tires.invoices.map((inv) => {
+    const filled = inv.field38 !== null || inv.field24 !== null;
+    const lines = Object.entries(inv.lineTires)
+      .map(([size, qty]) => `${size === 'other' ? 'Other' : `${size}"`}: ${qty}`)
+      .join(' | ');
+    return [
+      inv.doc,
+      inv.customer,
+      inv.txnDate,
+      inv.isCommission ? 'Yes' : 'No',
+      inv.field38,
+      inv.field24,
+      lines,
+      // filled ? 'Counted (fields replace the tire lines)' : 'MISSING: Tires_38 / Tires_24 blank',
+      [
+        filled ? 'Counted (fields replace the tire lines)' : inv.isCommission ? 'MISSING: Tires_38 / Tires_24 blank' : 'Not counted',
+        inv.notNumbers?.length ? `NOT A NUMBER (counted as blank): ${inv.notNumbers.join('; ')}` : '',
+      ]
+        .filter(Boolean)
+        .join(' · '),
+    ];
+  });
+  const tireFields = (tires.fieldNames ?? []).filter((f) => tireFieldSize(f.name));
+  const mapping = toCsv(
+    ['Mapping check', 'Value'],
+    [
+      ['Invoices read (' + tires.from + ' to ' + tires.to + ')', tires.invoicesRead ?? ''],
+      ['QuickBooks newer custom fields included (enhancedAllCustomFields)', tires.enhanced === undefined ? '' : tires.enhanced ? 'Yes' : 'No (only older custom fields)'],
+      [
+        'Tire fields found (→ size)',
+        tireFields.length ? tireFields.map((f) => `${f.name} → ${tireFieldSize(f.name)}" (${f.count} invoices)`).join('; ') : 'NONE: Tires_38 / Tires_24 not found on any invoice',
+      ],
+      ['All custom fields QuickBooks returned', (tires.fieldNames ?? []).map((f) => `${f.name} (${f.count})`).join('; ') || 'none'],
+      ['Commission products / services (commission income account or name)', (tires.commissionItems ?? []).join('; ') || 'none found'],
+    ]
+  );
+  return [
+    mapping,
+    toCsv(
+      ['Invoice', 'Customer', 'Invoice Date', 'Commission Invoice', 'Tires_38', 'Tires_24', 'Tire Lines on Invoice (in Units Sold)', 'Status'],
+      rows.length ? rows : [['No commission invoices or filled tire fields from ' + tires.from + ' to ' + tires.to]]
+    ),
+    toCsv(
+      ['Summary', 'Tires'],
+      [
+        ['Units Sold (YTD), QuickBooks Sales by Product/Service', t.unitsSold],
+        ['− Tire lines on invoices with the fields filled (replaced, not counted twice)', -t.replacedLines],
+        ['= Direct tires', t.direct],
+        ['+ Commission tires 38" (Tires_38)', t.commissionBySize['38']],
+        ['+ Commission tires 24" (Tires_24)', t.commissionBySize['24']],
+        ['TOTAL TIRES SOLD (YTD)', t.total],
+        ['Commission invoices without a tire count', t.missing.length],
+      ]
+    ),
+  ].join('\r\n\r\n');
+}
+
 /** Channel Performance chart (Nov 7 2026): QuickBooks tire sales by customer and channel; ERP rows below for reference */
 async function channelQboCsv(from: string, to: string): Promise<string> {
   const months = ((await loadQboSnapshot())?.salesByCustomerMonth ?? []).filter((m) => m.month >= from.slice(0, 7) && m.month <= to.slice(0, 7));
@@ -402,6 +485,7 @@ const LABELS: Record<OverviewDrillDown, string> = {
   'revenue-ytd': 'revenue-ytd',
   'units-period': 'units-sold',
   'units-ytd': 'units-sold-ytd',
+  'total-tires-ytd': 'total-tires-sold-ytd',
   'blended-margin': 'blended-margin-ytd',
   'open-orders': 'open-orders',
   'commission-expected': 'commission-expected-ytd',
@@ -450,6 +534,10 @@ export async function buildOverviewDrillDown(kind: OverviewDrillDown, dateRange?
     case 'units-ytd':
       span = kind === 'units-ytd' ? r.ytd : r.period;
       csv = unitsCsv(await loadRecognizedSales(), span.from, span.to);
+      break;
+    case 'total-tires-ytd':
+      span = r.ytd;
+      csv = await totalTiresQboCsv();
       break;
     case 'blended-margin':
       span = r.ytd;

@@ -11,6 +11,7 @@
 
 import { adminAuth } from '@/shared/lib/supabase/admin';
 import { roleRepository } from '@/features/roles/repository/role-repository';
+import { auditService } from '@/shared/lib/audit';
 
 import { userRepository } from '../repositories/user.repository';
 import {
@@ -79,6 +80,30 @@ function resetRedirectUrl(): string {
 // ============================================
 // SERVICE
 // ============================================
+
+/**
+ * Fields of a user kept in the audit trail (Build Brief: "every state change
+ * writes an audit row"). Passwords and auth tokens are never included; the
+ * audit service additionally redacts anything named like a secret.
+ */
+function userToAuditData(user: User | UserWithRole): Record<string, unknown> {
+  return {
+    id: user.id,
+    email: user.email,
+    firstName: user.firstName,
+    lastName: user.lastName,
+    phone: user.phone,
+    roleId: user.roleId,
+    status: user.status,
+  };
+}
+
+/** Audit rows must never break user management, so every call is fire-and-forget. */
+function logUserAudit(entry: Parameters<typeof auditService.log>[0]): void {
+  auditService.log(entry).catch((error) => {
+    console.error('Failed to write user audit log:', error);
+  });
+}
 
 export const userService = {
   /**
@@ -275,6 +300,16 @@ export const userService = {
         };
       }
 
+      logUserAudit({
+        action: 'create',
+        module: 'users',
+        entityType: 'User',
+        entityId: user.id,
+        newData: userToAuditData(user),
+        userId: actorId,
+        description: `Created user: ${user.email}`,
+      });
+
       return {
         success: true,
         data: user,
@@ -322,8 +357,10 @@ export const userService = {
       const data = validation.data;
 
       // Check the new role exists (if changing)
-      if (data.roleId && data.roleId !== existing.roleId) {
-        const role = await roleRepository.findById(data.roleId);
+      const roleChanged = Boolean(data.roleId && data.roleId !== existing.roleId);
+      let newRoleName: string | null = null;
+      if (roleChanged) {
+        const role = await roleRepository.findById(data.roleId!);
         if (!role) {
           return {
             success: false,
@@ -331,6 +368,7 @@ export const userService = {
             errors: { roleId: ['Select an existing role'] },
           };
         }
+        newRoleName = role.name;
       }
 
       // Handle password update if provided
@@ -349,6 +387,21 @@ export const userService = {
       const { password: _password, ...userData } = data;
 
       const user = await userRepository.update(id, userData, actorId);
+
+      // A role change is a privileged act, so it is recorded as 'role_assign'
+      // with the old and new role names rather than a plain field update.
+      logUserAudit({
+        action: roleChanged ? 'role_assign' : 'update',
+        module: 'users',
+        entityType: 'User',
+        entityId: user.id,
+        oldData: userToAuditData(existing),
+        newData: userToAuditData(user),
+        userId: actorId,
+        description: roleChanged
+          ? `Changed role for ${user.email}: ${existing.role?.name ?? 'none'} → ${newRoleName ?? 'none'}`
+          : `Updated user: ${user.email}`,
+      });
 
       return {
         success: true,
@@ -421,6 +474,16 @@ export const userService = {
 
       const user = await userRepository.softDelete(id, actorId);
 
+      logUserAudit({
+        action: 'delete',
+        module: 'users',
+        entityType: 'User',
+        entityId: user.id,
+        oldData: userToAuditData(existing),
+        userId: actorId,
+        description: `Deleted user: ${user.email}`,
+      });
+
       return {
         success: true,
         data: user,
@@ -440,6 +503,16 @@ export const userService = {
   async restore(id: string, actorId?: string): Promise<ServiceResult<User>> {
     try {
       const user = await userRepository.restore(id, actorId);
+
+      logUserAudit({
+        action: 'restore',
+        module: 'users',
+        entityType: 'User',
+        entityId: user.id,
+        newData: userToAuditData(user),
+        userId: actorId,
+        description: `Restored user: ${user.email}`,
+      });
 
       return {
         success: true,
@@ -504,6 +577,16 @@ export const userService = {
         };
       }
 
+      // The password itself is never logged - only that it was set, for whom
+      // and by whom (the actor is resolved from the request).
+      logUserAudit({
+        action: 'password_change',
+        module: 'users',
+        entityType: 'User',
+        entityId: user.id,
+        description: `Password set by an administrator for ${user.email}`,
+      });
+
       return {
         success: true,
         data: null,
@@ -542,6 +625,14 @@ export const userService = {
           error: error.message || 'Failed to send the reset email',
         };
       }
+
+      logUserAudit({
+        action: 'password_reset',
+        module: 'users',
+        entityType: 'User',
+        entityId: user.id,
+        description: `Password reset email sent to ${user.email}`,
+      });
 
       return {
         success: true,

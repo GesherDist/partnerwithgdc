@@ -1086,9 +1086,10 @@ class PipedrivePushService {
   async calculateCustomerLTV(customerId: string): Promise<CustomerLTV | null> {
     const { data: orders } = await db
       .from('sales_orders')
-      .select('id, total, created_at')
+      // The column is grand_total, and 'paid' is not an order_status value
+      .select('id, grand_total, created_at')
       .eq('customer_id', customerId)
-      .in('status', ['delivered', 'invoiced', 'paid'])
+      .in('status', ['delivered', 'invoiced'])
       .order('created_at', { ascending: false });
 
     if (!orders || orders.length === 0) {
@@ -1101,7 +1102,10 @@ class PipedrivePushService {
       };
     }
 
-    const totalRevenue = orders.reduce((sum, o) => sum + (Number(o.total) || 0), 0);
+    // grand_total is stored in cents; both consumers of CustomerLTV render
+    // these as dollars ("Total Revenue: $..."), so convert here at the source
+    const totalRevenueCents = orders.reduce((sum, o) => sum + (Number(o.grand_total) || 0), 0);
+    const totalRevenue = totalRevenueCents / 100;
     const orderCount = orders.length;
     const averageOrderValue = totalRevenue / orderCount;
     const lastOrderDate = orders[0]?.created_at || null;

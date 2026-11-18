@@ -67,6 +67,12 @@ const CALCULATION_FORMULAS: Record<string, { title: string; formula: string; not
     formula: `Units = Σ Quantity of tire products in QuickBooks Sales by Product/Service Summary (Accrual), Jan 1 to the last sync\n\nProducts: QuickBooks item type Inventory or Non-inventory; Service items are not units`,
     notes: 'Compared to the same period last year (YTD).',
   },
+  // Nov 18 2026 (Ankur, Nov 10 "Tires Sold")
+  'total-tires-sold-ytd': {
+    title: 'Total Tires Sold (YTD) Calculation',
+    formula: `Total Tires Sold = Direct tires + Commission tires\n\n• Direct = Units Sold (YTD) from QuickBooks Sales by Product/Service\n• Commission = QuickBooks invoice custom fields Tires_38 + Tires_24, invoices dated Jan 1 to the last sync\n\nOn an invoice with Tires_38 / Tires_24 filled, the fields replace any tire lines on that invoice (e.g. $0 tire lines), so no tire is counted twice. Size breakdown: 38" / 24" from the fields and the product names.`,
+    notes: 'Display only: not used in Revenue, Margin or any other calculation (Ankur, Nov 10). Fill Tires_38 / Tires_24 on every commission invoice and leave them blank on normal invoices. The red line counts commission invoices (a "commission" line) with both fields blank; the download lists them.',
+  },
   'blended-margin': {
     title: 'Blended Margin (YTD) Calculation - Definition 3.2',
     // ERP formula (replaced by QuickBooks, Nov 6 2026):
@@ -217,6 +223,14 @@ export function DashboardStatsCard({ stat, dateRange }: DashboardStatsCardProps)
             {stat.subtitle}
           </div>
         )}
+        {/* Nov 18 2026: e.g. Total Tires Sold — commission invoices without a tire count */}
+        {stat.warning && (
+          <div className="text-xs text-red-500 mt-0.5">
+            {stat.warning}
+          </div>
+        )}
+        {/* Nov 18 2026: no comparison row for cards without a change (Total Tires Sold) */}
+        {stat.change !== '' && (
         <div className="mt-1 flex items-center gap-1 text-xs">
           {isUp ? (
             <ArrowUpRight className="h-3 w-3 text-emerald-500" />
@@ -234,6 +248,7 @@ export function DashboardStatsCard({ stat, dateRange }: DashboardStatsCardProps)
             </>
           )}
         </div>
+        )}
       </CardContent>
     </Card>
   );

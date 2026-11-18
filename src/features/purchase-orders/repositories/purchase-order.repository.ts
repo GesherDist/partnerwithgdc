@@ -696,7 +696,8 @@ class PurchaseOrderRepositoryImpl {
   private async getLocationSummary(locationId: string): Promise<LocationSummary | null> {
     const { data, error } = await db
       .from('locations')
-      .select('id, code, name')
+      // The column is location_code; it is exposed as `code` on LocationSummary
+      .select('id, location_code, name')
       .eq('id', locationId)
       .single();
 
@@ -704,7 +705,7 @@ class PurchaseOrderRepositoryImpl {
 
     return {
       id: data.id,
-      code: data.code,
+      code: data.location_code,
       name: data.name,
     };
   }

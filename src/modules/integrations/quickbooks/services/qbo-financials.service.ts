@@ -244,6 +244,52 @@ export interface QboPeriodFigures {
   openSalesOrders?: QboOpenSalesOrders;
   /** Why open sales orders could not be read from QuickBooks (ERP is used instead) */
   openSalesOrdersError?: string;
+  /**
+   * Nov 18 2026 (Total Tires Sold, Ankur Nov 10): tire counts typed on QuickBooks
+   * invoices in the custom fields Tires_38 / Tires_24 (commission invoices), Jan 1
+   * to the sync date. Missing in snapshots taken before Nov 18, 2026.
+   */
+  commissionTires?: QboCommissionTires;
+}
+
+/**
+ * Nov 18 2026: commission tires from the QuickBooks invoice custom fields
+ * Tires_38 / Tires_24 (Ankur, Nov 10: Total Tires Sold = direct sales + commission
+ * tires; display only). A commission invoice is one Service line (qty 1), so the
+ * tires are typed in the two fields. Only invoices that are commission invoices or
+ * have a tire field filled are kept.
+ */
+export interface QboCommissionTires {
+  from: string;
+  to: string;
+  /** A Tires_38 / Tires_24 field was seen on at least one invoice (false = not set up / not filled yet) */
+  fieldsFound: boolean;
+  invoices: Array<{
+    doc: string;
+    customer: string;
+    txnDate: string;
+    // /** Has a line whose product / service name says "commission" */
+    /** Has a line booked to a commission income account, or named "commission" (same rule as Commission Actual) */
+    isCommission: boolean;
+    /** Custom field values; null = blank */
+    field38: number | null;
+    field24: number | null;
+    /** Tire product lines on the same invoice, already in Units Sold (e.g. $0 tire lines) */
+    lineTires: Record<string, number>;
+    /** Tire fields with text that is not a number (counted as blank), e.g. 'Tires_38: "abc"' */
+    notNumbers?: string[];
+  }>;
+  /** Why the invoices could not be read (the card then shows "Sync QuickBooks") */
+  error?: string;
+  // ---- For checking the mapping (shown in the CSV download) ----
+  /** include=enhancedAllCustomFields was accepted by QuickBooks */
+  enhanced?: boolean;
+  /** Invoices read in the date range */
+  invoicesRead?: number;
+  /** Products / services treated as commission (commission income account or name) */
+  commissionItems?: string[];
+  /** Every custom field name QuickBooks returned on those invoices, with how many invoices had it */
+  fieldNames?: Array<{ name: string; count: number }>;
 }
 
 /** Open customer sales orders (confirmed, not invoiced yet), as read on the snapshot date */
@@ -746,8 +792,11 @@ export function unitsFromItemSales(report: Report, itemTypes: Map<string, string
   };
 }
 
-async function fetchQuery(access: QboAccess, sql: string): Promise<Record<string, unknown>> {
-  const url = `${getApiBaseUrl(access.environment as QuickBooksEnvironment)}/v3/company/${access.realmId}/query?query=${encodeURIComponent(sql)}&minorversion=${QBO_API_MINOR_VERSION}`;
+// async function fetchQuery(access: QboAccess, sql: string): Promise<Record<string, unknown>> {
+// Nov 18 2026: optional `include` (e.g. enhancedAllCustomFields for the invoice tire fields)
+async function fetchQuery(access: QboAccess, sql: string, include?: string): Promise<Record<string, unknown>> {
+  // const url = `${getApiBaseUrl(access.environment as QuickBooksEnvironment)}/v3/company/${access.realmId}/query?query=${encodeURIComponent(sql)}&minorversion=${QBO_API_MINOR_VERSION}`;
+  const url = `${getApiBaseUrl(access.environment as QuickBooksEnvironment)}/v3/company/${access.realmId}/query?query=${encodeURIComponent(sql)}&minorversion=${QBO_API_MINOR_VERSION}${include ? `&include=${encodeURIComponent(include)}` : ''}`;
   let response: Response | null = null;
   // Same throttling back-off as fetchReport
   for (let attempt = 0; attempt < 4; attempt++) {
@@ -780,10 +829,12 @@ async function fetchQuery(access: QboAccess, sql: string): Promise<Record<string
 }
 
 /** All rows of a query, 1,000 per page (QuickBooks maximum) */
-async function fetchQueryAll<T>(access: QboAccess, entity: string, select: string, where: string): Promise<T[]> {
+// async function fetchQueryAll<T>(access: QboAccess, entity: string, select: string, where: string): Promise<T[]> {
+async function fetchQueryAll<T>(access: QboAccess, entity: string, select: string, where: string, include?: string): Promise<T[]> {
   const rows: T[] = [];
   for (let start = 1; start < 100_000; start += 1000) {
-    const page = await fetchQuery(access, `SELECT ${select} FROM ${entity} WHERE ${where} STARTPOSITION ${start} MAXRESULTS 1000`);
+    // const page = await fetchQuery(access, `SELECT ${select} FROM ${entity} WHERE ${where} STARTPOSITION ${start} MAXRESULTS 1000`);
+    const page = await fetchQuery(access, `SELECT ${select} FROM ${entity} WHERE ${where} STARTPOSITION ${start} MAXRESULTS 1000`, include);
     const batch = (page[entity] ?? []) as T[];
     rows.push(...batch);
     if (batch.length < 1000) {
@@ -904,6 +955,150 @@ async function fetchOpenSalesOrders(access: QboAccess): Promise<QboOpenSalesOrde
     tires: orders.reduce((n, o) => n + o.quantity, 0),
     statuses,
     orders,
+  };
+}
+
+/**
+ * Tire count custom field → size. Spaces, underscores, dashes, quotes and case do not matter:
+ * "Tires_38", "Tires 38", "tires-38", "Tire 38\"", "TIRES38", "Tyres 38 in", "38 Tires", "38\" Tires" → '38'
+ * (same for 24). Any other field (e.g. "SO Number") → null.
+ */
+export function tireFieldSize(name: string | null | undefined): '38' | '24' | null {
+  const key = (name ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const match = key.match(/^t[iy]res?(38|24)(in|inch|inches)?$/) ?? key.match(/^(38|24)(in|inch|inches)?t[iy]res?$/);
+  return (match?.[1] as '38' | '24' | undefined) ?? null;
+}
+
+/**
+ * Custom field value as a whole number of tires: 1424 / "1424" / "1,424" / "1424 tires" → 1424;
+ * blank → null. Text without a number is kept in `raw` (the CSV shows it) and counts as blank.
+ */
+export function tireFieldValue(field: { StringValue?: string; NumberValue?: number | string }): { value: number | null; raw: string } {
+  const raw = String(field.NumberValue ?? field.StringValue ?? '').trim();
+  const match = raw.replace(/,/g, '').match(/-?\d+(\.\d+)?/);
+  return { value: match ? Math.round(Number(match[0])) : null, raw };
+}
+
+/**
+ * Nov 18 2026 (Total Tires Sold): invoices from `from` to `to` with the Tires_38 /
+ * Tires_24 custom fields. Newer QuickBooks custom fields (Settings → Custom fields)
+ * come back only with include=enhancedAllCustomFields; if QuickBooks refuses that
+ * parameter the query is repeated without it (older fields are returned anyway).
+ *
+ * Commission invoice = a line whose product / service is booked to a commission
+ * income account (same rule as Commission Actual) or is named "commission".
+ */
+async function fetchCommissionTires(
+  access: QboAccess,
+  from: string,
+  to: string,
+  itemTypes: Map<string, string>
+): Promise<QboCommissionTires> {
+  type Field = { DefinitionId?: string; Name?: string; Type?: string; StringValue?: string; NumberValue?: number | string };
+  type Line = {
+    DetailType?: string;
+    SalesItemLineDetail?: { Qty?: number; ItemRef?: { value?: string; name?: string }; ItemAccountRef?: { name?: string } };
+  };
+  type Row = { DocNumber?: string; TxnDate?: string; CustomerRef?: { name?: string }; CustomField?: Field[]; Line?: Line[] };
+  type Item = { Id?: string; Name?: string; FullyQualifiedName?: string; IncomeAccountRef?: { name?: string } };
+
+  // Items booked to a commission income account (inactive items too: old invoices may use them)
+  const commissionItems = new Map<string, string>();
+  const items = await fetchQueryAll<Item>(access, 'Item', '*', 'Active IN (true, false)').catch((error) => {
+    console.error('[QboFinancials] Items for commission tires failed:', error);
+    return [] as Item[];
+  });
+  for (const item of items) {
+    const name = item.FullyQualifiedName ?? item.Name ?? '';
+    if (item.Id && (COMMISSION_ACCOUNT.test(item.IncomeAccountRef?.name ?? '') || COMMISSION_ACCOUNT.test(name))) {
+      commissionItems.set(String(item.Id), name);
+    }
+  }
+
+  const where = `TxnDate >= '${from}' AND TxnDate <= '${to}'`;
+  let enhanced = true;
+  const rows = await fetchQueryAll<Row>(access, 'Invoice', '*', where, 'enhancedAllCustomFields').catch((error) => {
+    console.error('[QboFinancials] Invoices with enhanced custom fields failed, retrying without:', error);
+    enhanced = false;
+    return fetchQueryAll<Row>(access, 'Invoice', '*', where);
+  });
+
+  let fieldsFound = false;
+  const fieldNames = new Map<string, number>();
+  const invoices: QboCommissionTires['invoices'] = [];
+  for (const r of rows) {
+    let field38: number | null = null;
+    let field24: number | null = null;
+    const notNumbers: string[] = [];
+    for (const field of r.CustomField ?? []) {
+      // Every field name QuickBooks returned (for checking the mapping in the CSV)
+      const label = field.Name?.trim() || `(no name, id ${field.DefinitionId ?? '?'})`;
+      fieldNames.set(label, (fieldNames.get(label) ?? 0) + 1);
+      const size = tireFieldSize(field.Name);
+      if (!size) {
+        continue;
+      }
+      fieldsFound = true;
+      const { value, raw } = tireFieldValue(field);
+      if (value === null && raw) {
+        notNumbers.push(`${field.Name}: "${raw}"`);
+      }
+      if (value !== null) {
+        // The same size typed in two fields: add them
+        if (size === '38') {
+          field38 = (field38 ?? 0) + value;
+        } else {
+          field24 = (field24 ?? 0) + value;
+        }
+      }
+    }
+    let isCommission = false;
+    const lineTires: Record<string, number> = {};
+    for (const line of r.Line ?? []) {
+      if (line.DetailType !== 'SalesItemLineDetail') {
+        continue;
+      }
+      const detail = line.SalesItemLineDetail;
+      const item = detail?.ItemRef;
+      const name = item?.name ?? '';
+      if (
+        (item?.value && commissionItems.has(String(item.value))) ||
+        COMMISSION_ACCOUNT.test(detail?.ItemAccountRef?.name ?? '') ||
+        COMMISSION_ACCOUNT.test(name)
+      ) {
+        isCommission = true;
+        continue;
+      }
+      const type = item?.value ? itemTypes.get(String(item.value)) : undefined;
+      const isUnit = type !== undefined ? UNIT_ITEM_TYPES.has(type) : UNIT_ITEM_NAME.test(name);
+      if (isUnit) {
+        const size = sizeOfProduct(name);
+        lineTires[size] = (lineTires[size] ?? 0) + Number(detail?.Qty ?? 0);
+      }
+    }
+    if (isCommission || field38 !== null || field24 !== null || notNumbers.length > 0) {
+      invoices.push({
+        doc: r.DocNumber ?? '',
+        customer: r.CustomerRef?.name ?? '',
+        txnDate: r.TxnDate ?? '',
+        isCommission,
+        field38,
+        field24,
+        lineTires,
+        ...(notNumbers.length ? { notNumbers } : {}),
+      });
+    }
+  }
+  invoices.sort((a, b) => a.txnDate.localeCompare(b.txnDate));
+  return {
+    from,
+    to,
+    fieldsFound,
+    invoices,
+    enhanced,
+    invoicesRead: rows.length,
+    commissionItems: [...new Set(commissionItems.values())].sort(),
+    fieldNames: [...fieldNames.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
   };
 }
 
@@ -1079,6 +1274,20 @@ async function buildPeriodFigures(
     console.error('[QboFinancials] Open sales orders failed:', error);
     return undefined;
   });
+  // Nov 18 2026 (Total Tires Sold): Tires_38 / Tires_24 on this year's invoices. Always stored
+  // (with `error` when it failed) so the dashboard does not ask for a new sync on every view.
+  const commissionTires: QboCommissionTires = await fetchCommissionTires(access, periods.ytd.from, periods.ytd.to, itemTypes).catch(
+    (error) => {
+      console.error('[QboFinancials] Commission tires failed:', error);
+      return {
+        from: periods.ytd.from,
+        to: periods.ytd.to,
+        fieldsFound: false,
+        invoices: [],
+        error: error instanceof Error ? error.message.slice(0, 400) : 'Failed to read invoices',
+      };
+    }
+  );
   const creditPurchases = await creditPurchasesByPeriod(access, [
     ['pm', periods.pm],
     ['t90', periods.t90],
@@ -1133,6 +1342,7 @@ async function buildPeriodFigures(
     ...(openBills ? { openBills } : {}),
     ...(openSalesOrders ? { openSalesOrders } : {}),
     ...(openSalesOrdersError ? { openSalesOrdersError } : {}),
+    commissionTires,
   };
 }
 

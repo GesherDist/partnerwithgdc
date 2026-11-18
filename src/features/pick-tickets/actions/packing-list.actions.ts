@@ -242,24 +242,23 @@ export async function transitionPackingListStatus(id: string, status: PackingLis
       }
     }
 
-    // When transitioning to 'delivered', update sales order status
+    // When transitioning to 'delivered', update sales order status.
+    // Nov 16 2026: through the service, so the change is audited and the
+    // Pipedrive deal follows. The "already invoiced keeps its status" guard
+    // lives in setFulfilmentStatus. Still non-fatal for the packing list.
     if (status === 'delivered') {
       try {
-        const { db } = await import('@/shared/lib/supabase/database');
-        // An order already invoiced (closed out) keeps its status
-        const { data: soNow } = await db.from('sales_orders').select('status').eq('id', result.data.salesOrderId).single();
-        if (soNow?.status !== 'invoiced') {
-          await db
-            .from('sales_orders')
-            .update({
-              status: 'delivered',
-              updated_at: new Date().toISOString(),
-              updated_by: userId || null,
-            })
-            .eq('id', result.data.salesOrderId);
+        const { salesOrderService } = await import('@/features/sales-orders/services');
+        const statusResult = await salesOrderService.setFulfilmentStatus(
+          result.data.salesOrderId,
+          'delivered',
+          userId
+        );
+        if (!statusResult.success) {
+          console.error('[transitionPackingListStatus] Failed to update sales order status:', statusResult.error);
+        } else if (statusResult.data?.changed) {
+          console.log(`[Packing List DELIVERED] Updated SO ${result.data.salesOrderId} to delivered status`);
         }
-
-        console.log(`[Packing List DELIVERED] Updated SO ${result.data.salesOrderId} to delivered status`);
       } catch (error) {
         console.error('[transitionPackingListStatus] Failed to update sales order status:', error);
       }

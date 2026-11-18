@@ -410,13 +410,14 @@ export async function findReceivablePurchaseOrderId(rowId: string): Promise<Acti
   // If all items have received_quantity >= quantity_ordered, don't show button
   const { data: poItems } = await db
     .from('purchase_order_items')
-    .select('quantity_ordered, received_quantity')
-    .eq('purchase_order_id', poId)
-    .is('deleted_at', null);
+    // Columns are quantity_received (not received_quantity); this table has
+    // no deleted_at, and filtering on it made the whole query fail
+    .select('quantity_ordered, quantity_received')
+    .eq('purchase_order_id', poId);
 
   if (poItems && poItems.length > 0) {
     const allReceived = poItems.every(item =>
-      (item.received_quantity || 0) >= (item.quantity_ordered || 0)
+      (item.quantity_received || 0) >= (item.quantity_ordered || 0)
     );
 
     if (allReceived) {
@@ -991,7 +992,7 @@ export async function adminConfirmPurchaseOrder(
 /**
  * Admin Reject Purchase Order
  * Used when admin wants to reject a PO on behalf of the supplier.
- * This sets supplier_rejected_at and rejection_reason.
+ * This sets supplier_rejected_at and supplier_rejection_reason.
  */
 export async function adminRejectPurchaseOrder(
   poId: string,
@@ -1012,7 +1013,8 @@ export async function adminRejectPurchaseOrder(
     // Check current state
     const { data: po, error: fetchError } = await supabase
       .from('purchase_orders')
-      .select('id, po_number, supplier_confirmed_at, supplier_rejected_at')
+      // status is read for the audit "before" snapshot
+      .select('id, po_number, status, supplier_confirmed_at, supplier_rejected_at')
       .eq('id', poId)
       .single();
 
@@ -1034,7 +1036,9 @@ export async function adminRejectPurchaseOrder(
       .update({
         supplier_rejected_at: new Date().toISOString(),
         supplier_rejected_by: auth.user.id,
-        rejection_reason: rejectionReason.trim(),
+        // The column is supplier_rejection_reason; the old name did not exist,
+        // so every admin rejection failed on this update (Nov 16 2026)
+        supplier_rejection_reason: rejectionReason.trim(),
         status: 'cancelled',
         updated_at: new Date().toISOString(),
         updated_by: auth.user.id,
@@ -1045,6 +1049,24 @@ export async function adminRejectPurchaseOrder(
       console.error('[adminRejectPurchaseOrder] Error updating PO:', updateError);
       return { success: false, error: 'Failed to reject purchase order' };
     }
+
+    // The supplier's own rejection is audited in supplier-portal.service; an
+    // admin rejecting on their behalf is the same business event, so it is
+    // recorded too. Fire and forget: never fail a rejection that went through.
+    const { auditService } = await import('@/shared/lib/audit');
+    auditService.log({
+      action: 'update',
+      module: 'purchase_orders',
+      entityType: 'PurchaseOrder',
+      entityId: poId,
+      oldData: { supplierRejectedAt: null, status: po.status },
+      newData: { supplierRejectedAt: new Date().toISOString(), status: 'cancelled' },
+      userId: auth.user.id,
+      description: `Purchase order ${po.po_number} rejected by an admin on the supplier's behalf - ${rejectionReason.trim()}`,
+      metadata: { event: 'po_rejected_by_admin', rejectionReason: rejectionReason.trim() },
+    }).catch((err) => {
+      console.error('Failed to log admin PO rejection audit:', err);
+    });
 
     // Revalidate paths
     revalidatePath('/purchase-orders');

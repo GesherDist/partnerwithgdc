@@ -8,6 +8,8 @@ export const OVERVIEW_DRILLDOWNS = [
   'revenue-ytd',
   'units-period',
   'units-ytd',
+  // Nov 18 2026: Total Tires Sold (YTD), direct + commission tires
+  'total-tires-ytd',
   'blended-margin',
   'open-orders',
   'commission-expected',
@@ -26,6 +28,7 @@ export const STAT_DRILLDOWN: Record<string, OverviewDrillDown> = {
   'revenue-ytd': 'revenue-ytd',
   'units-sold': 'units-period',
   'units-sold-ytd': 'units-ytd',
+  'total-tires-sold-ytd': 'total-tires-ytd',
   'blended-margin': 'blended-margin',
   'open-orders': 'open-orders',
   'commission-expected-ytd': 'commission-expected',
