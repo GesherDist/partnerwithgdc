@@ -52,6 +52,7 @@ import {
 } from '@/features/sales-orders';
 import { deleteSalesOrder, confirmSalesOrder, cancelSalesOrder } from '@/features/sales-orders/actions';
 import { MarkInvoicedDialog } from '@/features/sales-orders/components/MarkInvoicedDialog';
+import { PdfViewerModal } from '@/shared/components/pdf-viewer';
 import type { SalesOrderListItem, OrderStatus, SalesOrderWithItems, SOSortColumn, SOSortDirection } from '@/features/sales-orders/types';
 import { ORDER_STATUS_LABELS } from '@/features/sales-orders/types';
 import { ORDER_SERIES } from '@/shared/lib/global-data';
@@ -284,6 +285,12 @@ export function SalesOrdersPageContent() {
   // Close-out (invoiced in QuickBooks) from the row menu
   const [closeOutOrder, setCloseOutOrder] = useState<SalesOrderListItem | null>(null);
   const [closeOutMode, setCloseOutMode] = useState<'invoice' | 'reopen'>('invoice');
+  // Packing slip PDF from the row menu
+  const [packingSlipOrder, setPackingSlipOrder] = useState<SalesOrderListItem | null>(null);
+  const handlePackingSlipClick = useCallback((order: SalesOrderListItem) => {
+    setPackingSlipOrder(order);
+  }, []);
+
   const handleMarkInvoicedClick = useCallback((order: SalesOrderListItem) => {
     setCloseOutMode('invoice');
     setCloseOutOrder(order);
@@ -390,6 +397,7 @@ export function SalesOrdersPageContent() {
         onCancel={canEdit ? handleCancelClick : undefined}
         onMarkInvoiced={canCloseOut ? handleMarkInvoicedClick : undefined}
         onReopenInvoiced={canCloseOut ? handleReopenInvoicedClick : undefined}
+        onPackingSlip={canViewDetail ? handlePackingSlipClick : undefined}
         pagination={{
           page: meta.page,
           pageSize: meta.limit,
@@ -465,6 +473,17 @@ export function SalesOrdersPageContent() {
       />
 
       {/* Delete Confirmation Dialog */}
+      {/* Packing Slip PDF */}
+      {packingSlipOrder && (
+        <PdfViewerModal
+          open={!!packingSlipOrder}
+          onClose={() => setPackingSlipOrder(null)}
+          pdfUrl={`/api/sales-orders/${packingSlipOrder.id}/packing-slip`}
+          title={`Packing Slip - ${packingSlipOrder.orderNumber}`}
+          fileName={`PackingSlip-${packingSlipOrder.orderNumber}.pdf`}
+        />
+      )}
+
       {/* Mark as Invoiced / Reopen */}
       <MarkInvoicedDialog
         order={closeOutOrder}

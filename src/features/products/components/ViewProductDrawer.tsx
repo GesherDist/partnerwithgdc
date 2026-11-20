@@ -341,6 +341,16 @@ export function ViewProductDrawer({
                       value={product.weightLbs ? `${product.weightLbs} lbs` : null}
                       icon={<Weight className="h-4 w-4" />}
                     />
+                    {/* Nov 19 2026: packing slip pallets */}
+                    <InfoItem
+                      label="Units per Pallet"
+                      value={product.unitsPerPallet ? String(product.unitsPerPallet) : null}
+                    />
+                    <InfoItem
+                      label="Pallet Weight"
+                      value={product.palletWeightLbs !== null && product.palletWeightLbs !== undefined ? `${product.palletWeightLbs} lbs` : null}
+                      icon={<Weight className="h-4 w-4" />}
+                    />
                     <InfoItem
                       label="Barcode"
                       value={product.barcode}

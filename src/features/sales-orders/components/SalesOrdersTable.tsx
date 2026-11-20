@@ -31,6 +31,7 @@ export function SalesOrdersTable({
   onCancel,
   onMarkInvoiced,
   onReopenInvoiced,
+  onPackingSlip,
   toolbarContent,
   pagination,
   sorting,
@@ -49,11 +50,12 @@ export function SalesOrdersTable({
         onCancel,
         onMarkInvoiced,
         onReopenInvoiced,
+        onPackingSlip,
         sortColumn: sorting?.column,
         sortDirection: sorting?.direction,
         onSortChange: sorting?.onSortChange,
       }),
-    [onView, onEdit, onDelete, onConfirm, onCancel, onMarkInvoiced, onReopenInvoiced, onRowClick, sorting]
+    [onView, onEdit, onDelete, onConfirm, onCancel, onMarkInvoiced, onReopenInvoiced, onPackingSlip, onRowClick, sorting]
   );
 
   // ----------------------------------------

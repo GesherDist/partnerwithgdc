@@ -844,6 +844,8 @@ export interface SalesOrdersTableProps {
   // Close-out: invoiced in QuickBooks / undo
   onMarkInvoiced?: (order: SalesOrderListItem) => void;
   onReopenInvoiced?: (order: SalesOrderListItem) => void;
+  /** Opens the order's packing slip PDF */
+  onPackingSlip?: (order: SalesOrderListItem) => void;
   toolbarContent?: React.ReactNode;
   // Server-side pagination
   pagination?: {

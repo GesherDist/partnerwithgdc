@@ -70,6 +70,9 @@ export const createProductSchema = z.object({
     .max(10000, 'Weight too large')
     .optional()
     .nullable(),
+  // Nov 19 2026: packing slip pallets
+  unitsPerPallet: z.number().int('Units per pallet must be a whole number').positive('Units per pallet must be positive').max(1000, 'Units per pallet too large').optional().nullable(),
+  palletWeightLbs: z.number().min(0, 'Pallet weight cannot be negative').max(10000, 'Pallet weight too large').optional().nullable(),
   baseCost: priceInCentsSchema.default(0),
   basePrice: priceInCentsSchema,
   status: productStatusSchema.default('active'),
@@ -112,6 +115,9 @@ export const updateProductSchema = z.object({
     .max(10000, 'Weight too large')
     .optional()
     .nullable(),
+  // Nov 19 2026: packing slip pallets
+  unitsPerPallet: z.number().int('Units per pallet must be a whole number').positive('Units per pallet must be positive').max(1000, 'Units per pallet too large').optional().nullable(),
+  palletWeightLbs: z.number().min(0, 'Pallet weight cannot be negative').max(10000, 'Pallet weight too large').optional().nullable(),
   baseCost: priceInCentsSchema.optional(),
   basePrice: priceInCentsSchema.optional(),
   status: productStatusSchema.optional(),
@@ -157,6 +163,21 @@ export const productFormSchema = z.object({
     .refine(
       (val) => !val || (!isNaN(parseFloat(val)) && parseFloat(val) >= 0),
       'Weight must be a positive number'
+    ),
+  // Nov 19 2026: packing slip pallets
+  unitsPerPallet: z
+    .string()
+    .optional()
+    .refine(
+      (val) => !val || (/^\d+$/.test(val.trim()) && parseInt(val, 10) > 0),
+      'Units per pallet must be a whole number above 0'
+    ),
+  palletWeightLbs: z
+    .string()
+    .optional()
+    .refine(
+      (val) => !val || (!isNaN(parseFloat(val)) && parseFloat(val) >= 0),
+      'Pallet weight must be 0 or more'
     ),
   baseCost: z
     .string()
@@ -229,6 +250,8 @@ export function formToCreateDTO(values: ProductFormInput): CreateProductInput {
     rimSize: values.rimSize || null,
     tireSize: values.tireSize || null,
     weightLbs: values.weightLbs ? parseFloat(values.weightLbs) : null,
+    unitsPerPallet: values.unitsPerPallet ? parseInt(values.unitsPerPallet, 10) : null,
+    palletWeightLbs: values.palletWeightLbs ? parseFloat(values.palletWeightLbs) : null,
     baseCost: Math.round(parseFloat(values.baseCost.replace(/[^0-9.]/g, '')) * 100),
     basePrice: Math.round(parseFloat(values.basePrice.replace(/[^0-9.]/g, '')) * 100),
     status: values.status,
@@ -260,6 +283,8 @@ export function productToFormValues(product: {
   rimSize: string | null;
   tireSize: string | null;
   weightLbs: number | null;
+  unitsPerPallet?: number | null;
+  palletWeightLbs?: number | null;
   baseCost: number;
   basePrice: number;
   status: 'active' | 'inactive' | 'discontinued';
@@ -286,6 +311,8 @@ export function productToFormValues(product: {
     rimSize: product.rimSize || '',
     tireSize: product.tireSize || '',
     weightLbs: product.weightLbs?.toString() || '',
+    unitsPerPallet: product.unitsPerPallet?.toString() || '',
+    palletWeightLbs: product.palletWeightLbs?.toString() || '',
     baseCost: (product.baseCost / 100).toFixed(2),
     basePrice: (product.basePrice / 100).toFixed(2),
     status: product.status,

@@ -22,6 +22,9 @@ interface DbProduct {
   rim_size: string | null;
   tire_size: string | null;
   weight_lbs: string | null;
+  // Nov 19 2026 (migration 176): missing until the migration is run
+  units_per_pallet?: number | null;
+  pallet_weight_lbs?: string | number | null;
   base_cost: number;
   base_price: number;
   status: ProductStatus;
@@ -116,6 +119,29 @@ export class DuplicateSkuError extends Error {
 
 /** Postgres unique-violation error code */
 const UNIQUE_VIOLATION = '23505';
+
+/**
+ * Nov 19 2026: pallet columns of migration 176. Until it is run, a write that
+ * names them fails; the write is then retried without them, so saving a
+ * product keeps working.
+ */
+const PALLET_COLUMNS = ['units_per_pallet', 'pallet_weight_lbs'] as const;
+
+function isMissingPalletColumn(error: { message?: string; details?: string } | null): boolean {
+  if (!error) {
+    return false;
+  }
+  const text = `${error.message ?? ''} ${error.details ?? ''}`;
+  return PALLET_COLUMNS.some((column) => text.includes(column));
+}
+
+function withoutPalletColumns(row: Record<string, unknown>): Record<string, unknown> {
+  const rest = { ...row };
+  for (const column of PALLET_COLUMNS) {
+    delete rest[column];
+  }
+  return rest;
+}
 
 // ============================================
 // HELPERS
@@ -301,9 +327,7 @@ class ProductRepositoryImpl {
    * Create a new product
    */
   async create(data: CreateProductDTO, userId?: string): Promise<Product> {
-    const { data: result, error } = await db
-      .from('products')
-      .insert({
+    const row: Record<string, unknown> = {
         sku: data.sku,
         name: data.name,
         description: data.description ?? null,
@@ -330,9 +354,25 @@ class ProductRepositoryImpl {
         is_taxable: data.isTaxable ?? false,
         created_by: userId ?? null,
         updated_by: userId ?? null,
-      })
+    };
+    // Nov 19 2026: pallet columns only when set (migration 176)
+    if (data.unitsPerPallet !== undefined && data.unitsPerPallet !== null) {row.units_per_pallet = data.unitsPerPallet;}
+    if (data.palletWeightLbs !== undefined && data.palletWeightLbs !== null) {row.pallet_weight_lbs = data.palletWeightLbs;}
+
+    let { data: result, error } = await db
+      .from('products')
+      .insert(row)
       .select()
       .single();
+
+    if (error && isMissingPalletColumn(error)) {
+      console.warn('[ProductRepository] Pallet columns missing (run migration 176); saved without them');
+      ({ data: result, error } = await db
+        .from('products')
+        .insert(withoutPalletColumns(row))
+        .select()
+        .single());
+    }
 
     if (error) {
       if (error.code === UNIQUE_VIOLATION) {
@@ -377,14 +417,28 @@ class ProductRepositoryImpl {
     // Other Fields
     if (data.barcode !== undefined) {updateData.barcode = data.barcode;}
     if (data.isTaxable !== undefined) {updateData.is_taxable = data.isTaxable;}
+    // Nov 19 2026: packing slip pallets (migration 176)
+    if (data.unitsPerPallet !== undefined) {updateData.units_per_pallet = data.unitsPerPallet;}
+    if (data.palletWeightLbs !== undefined) {updateData.pallet_weight_lbs = data.palletWeightLbs;}
 
-    const { data: result, error } = await db
+    let { data: result, error } = await db
       .from('products')
       .update(updateData)
       .eq('id', id)
       .is('deleted_at', null)
       .select()
       .single();
+
+    if (error && isMissingPalletColumn(error)) {
+      console.warn('[ProductRepository] Pallet columns missing (run migration 176); saved without them');
+      ({ data: result, error } = await db
+        .from('products')
+        .update(withoutPalletColumns(updateData))
+        .eq('id', id)
+        .is('deleted_at', null)
+        .select()
+        .single());
+    }
 
     if (error) {
       if (error.code === UNIQUE_VIOLATION) {
@@ -506,6 +560,9 @@ class ProductRepositoryImpl {
       rimSize: data.rim_size,
       tireSize: data.tire_size,
       weightLbs: data.weight_lbs ? Number(data.weight_lbs) : null,
+      unitsPerPallet: data.units_per_pallet ? Number(data.units_per_pallet) : null,
+      palletWeightLbs:
+        data.pallet_weight_lbs === null || data.pallet_weight_lbs === undefined ? null : Number(data.pallet_weight_lbs),
       baseCost: data.base_cost,
       basePrice: data.base_price,
       status: data.status,

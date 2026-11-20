@@ -31,6 +31,9 @@ export interface Product {
   rimSize: string | null;
   tireSize: string | null;
   weightLbs: number | null;
+  /** Nov 19 2026: packing slip pallets (null = not set, or migration 176 not run) */
+  unitsPerPallet: number | null;
+  palletWeightLbs: number | null;
   baseCost: number;
   basePrice: number;
   status: ProductStatus;
@@ -89,6 +92,8 @@ export interface CreateProductDTO {
   rimSize?: string | null;
   tireSize?: string | null;
   weightLbs?: number | null;
+  unitsPerPallet?: number | null;
+  palletWeightLbs?: number | null;
   baseCost: number;
   basePrice: number;
   status?: ProductStatus;
@@ -119,6 +124,8 @@ export interface UpdateProductDTO {
   rimSize?: string | null;
   tireSize?: string | null;
   weightLbs?: number | null;
+  unitsPerPallet?: number | null;
+  palletWeightLbs?: number | null;
   baseCost?: number;
   basePrice?: number;
   status?: ProductStatus;
@@ -187,6 +194,8 @@ export interface ProductFormValues {
   rimSize: string;
   tireSize: string;
   weightLbs: string; // String for form input, converted to number
+  unitsPerPallet?: string;
+  palletWeightLbs?: string;
   baseCost: string; // String in dollars, converted to cents
   basePrice: string; // String in dollars, converted to cents
   status: ProductStatus;
@@ -291,6 +300,8 @@ export const DEFAULT_PRODUCT_FORM_VALUES: ProductFormValues = {
   rimSize: '',
   tireSize: '',
   weightLbs: '',
+  unitsPerPallet: '',
+  palletWeightLbs: '',
   baseCost: '',
   basePrice: '',
   status: 'active',

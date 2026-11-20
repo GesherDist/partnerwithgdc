@@ -44,6 +44,8 @@ interface ProductFormProps {
     rimSize: string | null;
     tireSize: string | null;
     weightLbs: number | null;
+    unitsPerPallet?: number | null;
+    palletWeightLbs?: number | null;
     baseCost: number;
     basePrice: number;
     status: 'active' | 'inactive' | 'discontinued';
@@ -261,6 +263,39 @@ export function ProductForm({
                   <FormControl>
                     <Input {...field} type="url" placeholder="https://..." />
                   </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+
+          {/* Nov 19 2026: packing slip pallets */}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <FormField
+              control={form.control}
+              name="unitsPerPallet"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Units per Pallet</FormLabel>
+                  <FormControl>
+                    <Input {...field} value={field.value ?? ''} type="number" step="1" min="1" placeholder="8" />
+                  </FormControl>
+                  <FormDescription>Used for the pallet count on the packing slip</FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="palletWeightLbs"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Pallet Weight (lbs)</FormLabel>
+                  <FormControl>
+                    <Input {...field} value={field.value ?? ''} type="number" step="0.01" min="0" placeholder="25" />
+                  </FormControl>
+                  <FormDescription>Weight of one empty pallet, for the gross weight</FormDescription>
                   <FormMessage />
                 </FormItem>
               )}

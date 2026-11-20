@@ -222,6 +222,8 @@ const [isReleasingHold, setIsReleasingHold] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
   const [showPdfModal, setShowPdfModal] = useState(false);
   const [showInvoicePdfModal, setShowInvoicePdfModal] = useState(false);
+  // Nov 19 2026 (Jenny / Ankur): packing slip download, no prices
+  const [showPackingSlipModal, setShowPackingSlipModal] = useState(false);
   const [existingInvoice, setExistingInvoice] = useState<InvoiceListItem | null>(null);
   // Set once an invoice is created here, so the button hides even if the invoice can't be re-read
   const [invoiceCreated, setInvoiceCreated] = useState(false);
@@ -913,6 +915,14 @@ const handleReleaseHold = async () => {
                   <FileText className="mr-2 h-4 w-4" />
                   View PDF
                 </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowPackingSlipModal(true)}
+                >
+                  <FileText className="mr-2 h-4 w-4" />
+                  Packing Slip
+                </Button>
                 {canEdit && onEdit && (
                   <Button variant="outline" size="sm" onClick={handleEdit}>
                     Edit Order
@@ -1085,6 +1095,17 @@ const handleReleaseHold = async () => {
             pdfUrl={`/api/sales-orders/${order.id}/pdf`}
             title={`Sales Order - ${order.orderNumber}`}
             fileName={`SalesOrder-${order.orderNumber}.pdf`}
+          />
+        )}
+
+        {/* Packing Slip Viewer Modal (Nov 19 2026) */}
+        {order && (
+          <PdfViewerModal
+            open={showPackingSlipModal}
+            onClose={() => setShowPackingSlipModal(false)}
+            pdfUrl={`/api/sales-orders/${order.id}/packing-slip`}
+            title={`Packing Slip - ${order.orderNumber}`}
+            fileName={`PackingSlip-${order.orderNumber}.pdf`}
           />
         )}
 

@@ -7,7 +7,7 @@
  */
 
 import { ColumnDef } from '@tanstack/react-table';
-import { CheckCircle, XCircle, ArrowUpDown, ArrowUp, ArrowDown, FileCheck, RotateCcw } from 'lucide-react';
+import { CheckCircle, XCircle, ArrowUpDown, ArrowUp, ArrowDown, FileCheck, FileText, RotateCcw } from 'lucide-react';
 import { Badge } from '@/shared/components/ui/badge';
 import { Checkbox } from '@/shared/components/ui/checkbox';
 import { DataTableRowActions, createCommonRowActions } from '@/shared/components/data-table/DataTableRowActions';
@@ -34,6 +34,7 @@ interface ColumnOptions {
   onCancel?: (order: SalesOrderListItem) => void;
   onMarkInvoiced?: (order: SalesOrderListItem) => void;
   onReopenInvoiced?: (order: SalesOrderListItem) => void;
+  onPackingSlip?: (order: SalesOrderListItem) => void;
   // Sorting options
   sortColumn?: SOSortColumn | null;
   sortDirection?: SOSortDirection;
@@ -98,7 +99,7 @@ function formatAmount(cents: number, currencyCode: string = 'USD'): string {
 export function getSalesOrdersTableColumns(
   options: ColumnOptions = {}
 ): ColumnDef<SalesOrderListItem>[] {
-  const { onView, onEdit, onDelete, onConfirm, onCancel, onMarkInvoiced, onReopenInvoiced, sortColumn, sortDirection, onSortChange } = options;
+  const { onView, onEdit, onDelete, onConfirm, onCancel, onMarkInvoiced, onReopenInvoiced, onPackingSlip, sortColumn, sortDirection, onSortChange } = options;
 
   return [
     // Select Checkbox
@@ -302,12 +303,25 @@ export function getSalesOrdersTableColumns(
         // be cancelled, so the menu no longer offers it (Nov 12 2026)
         const canCancelOrder = (ORDER_STATUS_TRANSITIONS[status] ?? []).includes('cancelled');
 
-        const { actions, separatorAfter } = createCommonRowActions({
+        const { actions, separatorAfter: commonSeparators } = createCommonRowActions({
           onView: onView ? () => onView(row.original) : undefined,
           // Only show edit button for editable statuses (draft, pending)
           onEdit: onEdit && isEditable ? () => onEdit(row.original) : undefined,
           onDelete: onDelete ? () => onDelete(row.original) : undefined,
         });
+
+        // Packing slip PDF, right after View (Jenny / Ankur, Nov 2026).
+        // Separators are indexes, so the ones at or after the new item move down by one.
+        let separatorAfter = commonSeparators;
+        if (onPackingSlip) {
+          const insertAt = onView ? 1 : 0;
+          actions.splice(insertAt, 0, {
+            label: 'Packing Slip',
+            icon: <FileText className="h-4 w-4" />,
+            onClick: () => onPackingSlip(row.original),
+          });
+          separatorAfter = commonSeparators.map((index) => (index >= insertAt ? index + 1 : index));
+        }
 
         // Add status change actions
         const statusActions = [];
