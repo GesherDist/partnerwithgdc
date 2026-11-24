@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 
 import { Button } from '@/shared/components/ui/button';
-import { Badge } from '@/shared/components/ui/badge';
+// import { Badge } from '@/shared/components/ui/badge'; (Nov 20 2026: only used by the hidden Credit Status badge)
 import { Card, CardContent } from '@/shared/components/ui/card';
 import {
   Tabs,
@@ -55,8 +55,8 @@ import { CustomerDocumentsTab } from '@/modules/customer-documents';
 import {
   CUSTOMER_STATUS_LABELS,
   CUSTOMER_CHANNEL_LABELS,
-  CREDIT_STATUS_LABELS,
-  CREDIT_STATUS_COLORS,
+  // CREDIT_STATUS_LABELS, (Nov 20 2026: Credit Status hidden)
+  // CREDIT_STATUS_COLORS,
 } from '../types';
 import { toast } from 'sonner';
 
@@ -228,12 +228,13 @@ function CustomerDetailsTab({
                 Credit & Payment
               </h3>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                {/* Nov 20 2026 (Ankur, Nov 19 call): credit status hidden, overdue invoices warning only
                 <div>
                   <div className="text-xs text-muted-foreground mb-1">Credit Status</div>
                   <Badge className={CREDIT_STATUS_COLORS[customer.creditStatus]}>
                     {CREDIT_STATUS_LABELS[customer.creditStatus]}
                   </Badge>
-                </div>
+                </div> */}
                 <InfoItem label="Credit Limit" value={formatCreditLimit(customer.creditLimit)} />
                 <InfoItem label="Open Balance" value={formatOpenBalance(customer.openBalance)} />
                 <InfoItem label="Payment Terms" value={customer.creditTerms || 'Net 30'} />

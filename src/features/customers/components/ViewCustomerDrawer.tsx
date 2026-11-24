@@ -40,8 +40,8 @@ import {
   CUSTOMER_STATUS_COLORS,
   CUSTOMER_CHANNEL_LABELS,
   CUSTOMER_CHANNEL_COLORS,
-  CREDIT_STATUS_LABELS,
-  CREDIT_STATUS_COLORS,
+  // CREDIT_STATUS_LABELS, (Nov 20 2026: Credit Status hidden)
+  // CREDIT_STATUS_COLORS,
 } from '../types';
 
 // ============================================
@@ -178,9 +178,10 @@ function CustomerDetailsTab({ customer }: { customer: Customer }) {
         <Badge className={CUSTOMER_CHANNEL_COLORS[customer.channel]}>
           {CUSTOMER_CHANNEL_LABELS[customer.channel]}
         </Badge>
+        {/* Nov 20 2026 (Ankur, Nov 19 call): no credit hold / credit status, overdue invoices warning only
         <Badge className={CREDIT_STATUS_COLORS[customer.creditStatus]}>
           {CREDIT_STATUS_LABELS[customer.creditStatus]}
-        </Badge>
+        </Badge> */}
       </div>
 
       {/* Basic Info */}
@@ -275,6 +276,7 @@ function CustomerDetailsTab({ customer }: { customer: Customer }) {
       {/* Credit & Payment */}
       <Section title="Credit & Payment">
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+          {/* Nov 20 2026 (Ankur, Nov 19 call): credit status hidden
           <InfoItem
             label="Credit Status"
             value={
@@ -283,7 +285,7 @@ function CustomerDetailsTab({ customer }: { customer: Customer }) {
               </Badge>
             }
             icon={<CreditCard className="h-4 w-4" />}
-          />
+          /> */}
           <InfoItem
             label="Credit Limit"
             value={formatCreditLimit(customer.creditLimit)}

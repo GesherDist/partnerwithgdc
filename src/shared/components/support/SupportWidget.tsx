@@ -180,20 +180,40 @@ export function SupportWidget() {
     addFiles(Array.from(e.dataTransfer.files));
   };
 
+  // Nov 20 2026 (Ankur, Nov 19 call): the floating button covered the last table
+  // rows (⋮ menu, Total); it now sits in the top header next to the bell.
+  // return (
+  //   <div className="fixed bottom-6 right-6 z-50">
+  //     <Popover open={open} onOpenChange={handleOpenChange}>
+  //       <PopoverTrigger asChild>
+  //         <Button size="lg" className="rounded-full shadow-lg gap-2 pl-4 pr-5">
+  //           <MessageCircle className="h-5 w-5" />
+  //           Help
+  //         </Button>
+  //       </PopoverTrigger>
+  //
+  //       <PopoverContent
+  //         side="top"
+  //         align="end"
+  //         sideOffset={12}
   return (
-    <div className="fixed bottom-6 right-6 z-50">
+    <div>
       <Popover open={open} onOpenChange={handleOpenChange}>
         <PopoverTrigger asChild>
-          <Button size="lg" className="rounded-full shadow-lg gap-2 pl-4 pr-5">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-9 gap-1.5 px-3 text-white hover:bg-white/10 hover:text-white focus-visible:ring-0 focus-visible:ring-offset-0"
+          >
             <MessageCircle className="h-5 w-5" />
-            Help
+            <span className="hidden sm:inline">Help</span>
           </Button>
         </PopoverTrigger>
 
         <PopoverContent
-          side="top"
+          side="bottom"
           align="end"
-          sideOffset={12}
+          sideOffset={8}
           className="w-[380px] overflow-hidden p-0 shadow-xl"
           // Keep the form open while a file preview is shown
           onInteractOutside={(e) => preview && e.preventDefault()}

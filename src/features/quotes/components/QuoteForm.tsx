@@ -22,7 +22,8 @@ import { QuoteAddressSection } from './QuoteAddressSection';
 import { QuoteItemsTable } from './QuoteItemsTable';
 import { QuoteSummaryCards } from './QuoteSummaryCards';
 import { QuoteNotesSection } from './QuoteNotesSection';
-import { CreditWarning } from '@/shared/components/ui/credit-warning';
+// import { CreditWarning } from '@/shared/components/ui/credit-warning';
+import { OverdueInvoicesWarning } from '@/shared/components/ui/overdue-invoices-warning';
 
 import { quoteFormSchema, type QuoteFormInput } from '../lib/schemas';
 import { getCustomerAddresses, getProductPrice } from '../actions';
@@ -488,13 +489,15 @@ function QuoteFormComponent({
           grandTotal={quoteSummary.grandTotal}
           currencySymbol="$"
           creditSlot={
-            customerId ? (
-              <CreditWarning
-                customerId={customerId}
-                orderTotal={quoteSummary.grandTotal}
-                readOnly={true}
-              />
-            ) : undefined
+            // Nov 20 2026 (Ankur, Nov 19 call): no credit status / limit check, only overdue invoices (warning)
+            // customerId ? (
+            //   <CreditWarning
+            //     customerId={customerId}
+            //     orderTotal={quoteSummary.grandTotal}
+            //     readOnly={true}
+            //   />
+            // ) : undefined
+            customerId ? <OverdueInvoicesWarning customerId={customerId} /> : undefined
           }
         />
 

@@ -10,6 +10,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { Menu, Search, LogOut, User, Settings } from 'lucide-react';
 import { NotificationBell } from '@/features/notifications/components';
+import { SupportWidget } from '../support/SupportWidget';
 
 import { cn } from '@/shared/lib/utils';
 import { Button } from '@/shared/components/ui/button';
@@ -109,6 +110,9 @@ export function Header({ className }: HeaderProps) {
         >
           <Search className="h-5 w-5" />
         </Button>
+
+        {/* Help & Support (Nov 20 2026: moved here from the floating bottom-right button) */}
+        <SupportWidget />
 
         {/* Notifications */}
         <NotificationBell />

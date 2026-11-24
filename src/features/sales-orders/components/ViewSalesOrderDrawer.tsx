@@ -8,7 +8,9 @@
  */
 
 import { useEffect, useState, useTransition } from 'react';
-import { Loader2, MapPin, Package, FileText, Calendar, User, Building2, Truck, AlertTriangle, ShieldCheck, CheckCircle, XCircle, ClipboardList, Receipt, Eye, FileCheck, RotateCcw } from 'lucide-react';
+// import { Loader2, MapPin, Package, FileText, Calendar, User, Building2, Truck, AlertTriangle, ShieldCheck, CheckCircle, XCircle, ClipboardList, Receipt, Eye, FileCheck, RotateCcw } from 'lucide-react';
+// Nov 20 2026: AlertTriangle / ShieldCheck were only used by the credit hold banner
+import { Loader2, MapPin, Package, FileText, Calendar, User, Building2, Truck, CheckCircle, XCircle, ClipboardList, Receipt, Eye, FileCheck, RotateCcw } from 'lucide-react';
 
 import { Button } from '@/shared/components/ui/button';
 import { useAuthStore } from '@/shared/stores';
@@ -43,7 +45,8 @@ import {
 } from '@/shared/components/ui/alert-dialog';
 import { Textarea } from '@/shared/components/ui/textarea';
 import { Label } from '@/shared/components/ui/label';
-import { getSalesOrder, releaseSalesOrderHold, confirmSalesOrder, cancelSalesOrder, updateSalesOrderSeries } from '../actions';
+// import { getSalesOrder, releaseSalesOrderHold, confirmSalesOrder, cancelSalesOrder, updateSalesOrderSeries } from '../actions';
+import { getSalesOrder, confirmSalesOrder, cancelSalesOrder, updateSalesOrderSeries } from '../actions';
 import { createInvoiceFromSalesOrder, getInvoiceBySalesOrder } from '@/features/invoices/actions';
 import type { InvoiceListItem } from '@/features/invoices/types';
 import { INVOICES_READ_ONLY } from '@/features/invoices/lib/permissions';
@@ -51,8 +54,8 @@ import type { SalesOrderWithItems } from '../types';
 import {
   ORDER_STATUS_LABELS,
   ORDER_STATUS_COLORS,
-  ORDER_CREDIT_STATUS_LABELS,
-  ORDER_CREDIT_STATUS_COLORS,
+  // ORDER_CREDIT_STATUS_LABELS, (Nov 20 2026: credit hold badge removed)
+  // ORDER_CREDIT_STATUS_COLORS,
   ORDER_SERIES_OPTIONS,
   ORDER_STATUS_TRANSITIONS,
 } from '../types';
@@ -72,6 +75,7 @@ import { toast } from 'sonner';
 import { AllocationManager } from './AllocationManager';
 import { CommissionSection, CommissionBadge } from './CommissionSection';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/components/ui/tabs';
+import { OverdueInvoicesWarning } from '@/shared/components/ui/overdue-invoices-warning';
 
 // ============================================
 // TYPES
@@ -199,7 +203,8 @@ export function ViewSalesOrderDrawer({
   // ----------------------------------------
 
   const canEditPermission = hasMounted && hasPermission('orders.edit');
-  const canReleaseHold = hasMounted && hasPermission('sales_orders.release_hold');
+  // Nov 20 2026 (Ankur, Nov 19 call): no credit hold release, overdue-invoices warning only
+  // const canReleaseHold = hasMounted && hasPermission('sales_orders.release_hold');
   // Mark as Invoiced / Reopen: same permission as the server actions
   const canCloseOut = hasMounted && hasPermission('orders.approve');
 
@@ -210,7 +215,7 @@ export function ViewSalesOrderDrawer({
   const [order, setOrder] = useState<SalesOrderWithItems | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-const [isReleasingHold, setIsReleasingHold] = useState(false);
+// const [isReleasingHold, setIsReleasingHold] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [showConfirmAllocationsModal, setShowConfirmAllocationsModal] = useState(false);
@@ -292,25 +297,26 @@ const [isReleasingHold, setIsReleasingHold] = useState(false);
     setShowPdfModal(true);
   };
 
-const handleReleaseHold = async () => {
-    if (!order) { return; }
-
-    setIsReleasingHold(true);
-    try {
-      const result = await releaseSalesOrderHold(order.id);
-      if (result.success) {
-        toast.success('Credit hold released successfully');
-        // Refresh order data
-        await fetchOrder();
-      } else {
-        toast.error(result.error || 'Failed to release hold');
-      }
-    } catch {
-      toast.error('Failed to release hold');
-    } finally {
-      setIsReleasingHold(false);
-    }
-  };
+// Nov 20 2026: credit hold release removed from the drawer (the server action stays)
+// const handleReleaseHold = async () => {
+  //   if (!order) { return; }
+  //
+  //   setIsReleasingHold(true);
+  //   try {
+  //     const result = await releaseSalesOrderHold(order.id);
+  //     if (result.success) {
+  //       toast.success('Credit hold released successfully');
+  //       // Refresh order data
+  //       await fetchOrder();
+  //     } else {
+  //       toast.error(result.error || 'Failed to release hold');
+  //     }
+  //   } catch {
+  //     toast.error('Failed to release hold');
+  //   } finally {
+  //     setIsReleasingHold(false);
+  //   }
+  // };
 
   const handleOrderSeriesChange = async (newValue: string) => {
     if (!order) { return; }
@@ -489,8 +495,8 @@ const handleReleaseHold = async () => {
     ['confirmed', 'processing', 'shipped', 'delivered'].includes(order.status) &&
     canEditPermission;
 
-  // Check if order is on credit hold
-  const isOnHold = order?.creditStatus === 'hold';
+  // Check if order is on credit hold (Nov 20 2026: no longer shown)
+  // const isOnHold = order?.creditStatus === 'hold';
 
   // ----------------------------------------
   // RENDER
@@ -533,11 +539,12 @@ const handleReleaseHold = async () => {
                   <Badge className={ORDER_STATUS_COLORS[order.status]}>
                     {ORDER_STATUS_LABELS[order.status]}
                   </Badge>
+                  {/* Nov 20 2026 (Ankur, Nov 19 call): no credit hold, only an overdue-invoices warning (below)
                   {isOnHold && (
                     <Badge className={ORDER_CREDIT_STATUS_COLORS['hold']}>
                       {ORDER_CREDIT_STATUS_LABELS['hold']}
                     </Badge>
-                  )}
+                  )} */}
                   {order.isCommissionOnly && <CommissionBadge />}
                 </div>
 
@@ -549,7 +556,12 @@ const handleReleaseHold = async () => {
                   </p>
                 )}
 
-                {/* Credit Hold Banner */}
+                {/* Nov 20 2026 (Ankur, Nov 19 call): "I think it's just a warning we need to display.
+                    I don't think we need to manually release … overdue invoices is more important."
+                    Overdue QuickBooks invoices of the customer; nothing is blocked. */}
+                <OverdueInvoicesWarning customerId={order.customerId} customerName={order.customer?.name} />
+
+                {/* Credit Hold Banner (old, before Nov 20 2026: hold + Release button)
                 {isOnHold && (
                   <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 p-4">
                     <div className="flex items-start gap-3">
@@ -585,7 +597,7 @@ const handleReleaseHold = async () => {
                       </div>
                     </div>
                   </div>
-                )}
+                )} */}
 
                 {/* Order Info */}
                 <Section title="Order Information">

@@ -21,7 +21,7 @@ import {
 import { Separator } from '@/shared/components/ui/separator';
 
 import type { CustomerFormInput } from '../lib/schemas';
-import { CREDIT_STATUSES, CREDIT_STATUS_LABELS } from '../types';
+// import { CREDIT_STATUSES, CREDIT_STATUS_LABELS } from '../types'; (Nov 20 2026: Credit Status field hidden)
 
 // ============================================
 // CONSTANTS
@@ -43,7 +43,7 @@ const CREDIT_TERMS_OPTIONS = [
 export function CustomerCreditSection() {
   const { register, formState: { errors }, watch, setValue } = useFormContext<CustomerFormInput>();
 
-  const creditStatus = watch('creditStatus');
+  // const creditStatus = watch('creditStatus'); (Nov 20 2026: Credit Status field hidden)
   const creditTerms = watch('creditTerms');
 
   return (
@@ -62,7 +62,7 @@ export function CustomerCreditSection() {
 
       {/* Form Grid */}
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
-        {/* Credit Status */}
+        {/* Credit Status (Nov 20 2026, Ankur Nov 19 call: hidden; the saved value is kept as it is)
         <div className="space-y-2">
           <Label htmlFor="creditStatus">Credit Status</Label>
           <Select
@@ -83,7 +83,7 @@ export function CustomerCreditSection() {
           {errors.creditStatus && (
             <p className="text-sm text-destructive">{errors.creditStatus.message}</p>
           )}
-        </div>
+        </div> */}
 
         {/* Credit Limit */}
         <div className="space-y-2">

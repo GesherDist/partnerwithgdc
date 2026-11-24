@@ -27,7 +27,8 @@ import { BillingShippingSection } from './BillingShippingSection';
 import { OrderItemsTable } from './OrderItemsTable';
 import { OrderSummaryCards } from './OrderSummaryCards';
 import { NotesSection } from './NotesSection';
-import { CreditWarning } from '@/shared/components/ui/credit-warning';
+// import { CreditWarning } from '@/shared/components/ui/credit-warning';
+import { OverdueInvoicesWarning } from '@/shared/components/ui/overdue-invoices-warning';
 
 import type { SalesOrderFormProps } from '../types';
 import { salesOrderFormSchema, type SalesOrderFormInput } from '../lib/schemas';
@@ -203,7 +204,8 @@ function SalesOrderFormComponent({
   // ----------------------------------------
 
   const [isLoadingAddresses, setIsLoadingAddresses] = useState(false);
-  const [_isCreditOverridden, setIsCreditOverridden] = useState(false);
+  // Nov 20 2026: credit override removed with the credit check (only an overdue-invoices warning now)
+  // const [_isCreditOverridden, setIsCreditOverridden] = useState(false);
 
   // Track if this is the initial load (for edit mode)
   // Skip price updates on initial load to preserve existing prices
@@ -264,10 +266,10 @@ function SalesOrderFormComponent({
         handleCustomerChange(customerId);
       }
 
-      // Reset credit override when customer changes
-      if (customerChanged) {
-        setIsCreditOverridden(false);
-      }
+      // Reset credit override when customer changes (Nov 20 2026: credit override removed)
+      // if (customerChanged) {
+      //   setIsCreditOverridden(false);
+      // }
 
       // Skip price updates on initial load (preserve existing prices when editing)
       if (isInitialLoad.current) {
@@ -330,9 +332,9 @@ function SalesOrderFormComponent({
   }, [customerId, handleCustomerChange, methods, setValue, masterData.products]);
 
   // Credit check handlers
-  const handleCreditOverridden = useCallback(() => {
-    setIsCreditOverridden(true);
-  }, []);
+  // const handleCreditOverridden = useCallback(() => {
+  //   setIsCreditOverridden(true);
+  // }, []);
 
   // ----------------------------------------
   // AUTO-FILL: Product Price (uses price matrix based on customer channel)
@@ -525,13 +527,15 @@ function SalesOrderFormComponent({
           grandTotal={orderSummary.grandTotal}
           currencySymbol="$"
           creditSlot={
-            customerId ? (
-              <CreditWarning
-                customerId={customerId}
-                orderTotal={orderSummary.grandTotal}
-                onCreditOverridden={handleCreditOverridden}
-              />
-            ) : undefined
+            // Nov 20 2026 (Ankur, Nov 19 call): no credit status / limit check, only overdue invoices (warning)
+            // customerId ? (
+            //   <CreditWarning
+            //     customerId={customerId}
+            //     orderTotal={orderSummary.grandTotal}
+            //     onCreditOverridden={handleCreditOverridden}
+            //   />
+            // ) : undefined
+            customerId ? <OverdueInvoicesWarning customerId={customerId} /> : undefined
           }
         />
 
