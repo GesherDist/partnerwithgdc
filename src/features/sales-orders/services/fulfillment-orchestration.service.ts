@@ -1362,6 +1362,457 @@ export async function markAllocationFulfilled(params: {
 }
 
 // ============================================
+// MANUAL MARK AS SHIPPED (Nov 25 2026)
+// ============================================
+//
+// Ankur, Nov 24 2026 call: outgoing loads go with whatever carrier the broker
+// picks, so there is no carrier integration. AAA warranty C-SO: 2 tires left
+// Nebraska but the Inventory tab still showed them "allocated". The user marks
+// the C-SO shipped by hand; the reserved tires leave their location.
+//
+// Per open allocation of the order:
+// - GDC warehouse:   on_hand -= qty, allocated -= qty at that warehouse
+// - Dealer location: on_hand -= qty, allocated -= qty at that dealer location
+// - Manufacturer direct / Dealer fulfillment: no stock of ours, not touched
+// The allocation becomes "fulfilled" (Operations Dashboard stops counting it
+// as outstanding).
+//
+// Pick tickets (so tires never leave twice):
+// - already shipped by a pick ticket: stock is not touched again, the
+//   allocation is only marked fulfilled
+// - picking / picked / packing / packed: refused, finish it on the pick ticket
+// - pending / assigned (not started): the line is taken off that pick ticket
+//
+// All or nothing: when a step fails, every stock change already made is put
+// back and the allocations get their old status again.
+
+/** Pick ticket statuses where picking started but the tires have not shipped */
+const PICK_TICKET_IN_PROGRESS = ['picking', 'picked', 'packing', 'packed'];
+
+export interface ManualShipLine {
+  allocationId: string;
+  allocationStatus: string;
+  salesOrderItemId: string;
+  productId: string;
+  sku: string;
+  quantity: number;
+  source: 'gdc_inventory' | 'platinum_dealer_inventory';
+  locationId: string | null;
+  dealerLocationId: string | null;
+  locationName: string;
+  /** Pick ticket number that already shipped these tires (stock not touched again) */
+  alreadyShippedBy: string | null;
+  /** Not-started pick tickets that will lose this line */
+  openPickTickets: Array<{ id: string; number: string }>;
+}
+
+export interface ManualShipPlan {
+  /** Tires that leave a location of ours */
+  lines: ManualShipLine[];
+  /** Order lines whose stock is not changed, with the reason */
+  notTouched: Array<{ sku: string; quantity: number; reason: string }>;
+  /** Reasons the order cannot be marked shipped */
+  blockers: string[];
+}
+
+type PlanItemRow = {
+  id: string;
+  sku: string | null;
+  quantity: number | null;
+  product_id: string | null;
+  products: { item_type: string | null } | Array<{ item_type: string | null }> | null;
+};
+
+type PlanAllocationRow = {
+  id: string;
+  status: string;
+  quantity: number;
+  fulfillment_source: FulfillmentSource;
+  location_id: string | null;
+  dealer_location_id: string | null;
+  sales_order_item_id: string;
+};
+
+type PlanPickTicketRow = {
+  sales_order_item_id: string;
+  pick_tickets: unknown;
+};
+
+/**
+ * Work out what "Mark as Shipped" would do for a sales order. Reads only.
+ */
+export async function planManualShip(salesOrderId: string): Promise<{ success: boolean; error?: string; data?: ManualShipPlan }> {
+  try {
+    const plan: ManualShipPlan = { lines: [], notTouched: [], blockers: [] };
+
+    const { data: itemData, error: itemError } = await db
+      .from('sales_order_items')
+      .select('id, sku, quantity, product_id, products:product_id (item_type)')
+      .eq('sales_order_id', salesOrderId);
+    if (itemError) {
+      return { success: false, error: `Could not load the order lines: ${itemError.message}` };
+    }
+    const items = (itemData ?? []) as unknown as PlanItemRow[];
+    if (items.length === 0) {
+      return { success: true, data: plan };
+    }
+    const itemIds = items.map((item) => item.id);
+
+    const { data: allocationData, error: allocationError } = await db
+      .from('fulfillment_allocations')
+      .select('id, status, quantity, fulfillment_source, location_id, dealer_location_id, sales_order_item_id')
+      .in('sales_order_item_id', itemIds);
+    if (allocationError) {
+      return { success: false, error: `Could not load the order allocations: ${allocationError.message}` };
+    }
+    const allocations = (allocationData ?? []) as PlanAllocationRow[];
+
+    const { data: pickTicketData, error: pickTicketError } = await db
+      .from('pick_ticket_items')
+      .select('sales_order_item_id, pick_tickets!inner (id, pick_ticket_number, status, warehouse_id, deleted_at)')
+      .in('sales_order_item_id', itemIds)
+      .is('pick_tickets.deleted_at', null)
+      .neq('pick_tickets.status', 'cancelled');
+    if (pickTicketError) {
+      return { success: false, error: `Could not check pick tickets: ${pickTicketError.message}` };
+    }
+    const pickTickets = ((pickTicketData ?? []) as PlanPickTicketRow[])
+      .map((row) => {
+        const pt = (Array.isArray(row.pick_tickets) ? row.pick_tickets[0] : row.pick_tickets) as
+          | { id: string; pick_ticket_number: string; status: string; warehouse_id: string | null }
+          | null;
+        return pt ? { itemId: row.sales_order_item_id, ...pt } : null;
+      })
+      .filter((pt): pt is NonNullable<typeof pt> => pt !== null);
+
+    // Location names for the dialog
+    const warehouseIds = [...new Set(allocations.map((a) => a.location_id).filter((id): id is string => !!id))];
+    const dealerLocationIds = [...new Set(allocations.map((a) => a.dealer_location_id).filter((id): id is string => !!id))];
+    const warehouseNames = new Map<string, string>();
+    const dealerNames = new Map<string, string>();
+    if (warehouseIds.length > 0) {
+      const { data } = await db.from('locations').select('id, name').in('id', warehouseIds);
+      (data ?? []).forEach((row: { id: string; name: string | null }) => warehouseNames.set(row.id, row.name || 'Warehouse'));
+    }
+    if (dealerLocationIds.length > 0) {
+      const { data } = await db.from('platinum_dealer_locations').select('id, location_name').in('id', dealerLocationIds);
+      (data ?? []).forEach((row: { id: string; location_name: string | null }) => dealerNames.set(row.id, row.location_name || 'Dealer location'));
+    }
+
+    for (const item of items) {
+      const sku = item.sku || 'Item';
+      const product = Array.isArray(item.products) ? item.products[0] : item.products;
+      if (product?.item_type === 'service' || product?.item_type === 'non_inventory') {
+        continue;
+      }
+
+      const itemAllocations = allocations.filter((a) => a.sales_order_item_id === item.id && a.status !== 'cancelled');
+      const open = itemAllocations.filter((a) => a.status !== 'fulfilled');
+      if (itemAllocations.length === 0) {
+        plan.notTouched.push({ sku, quantity: Number(item.quantity ?? 0), reason: 'No allocation on this line, stock not changed' });
+        continue;
+      }
+
+      for (const allocation of open) {
+        const quantity = Number(allocation.quantity ?? 0);
+        if (allocation.fulfillment_source === 'direct') {
+          plan.notTouched.push({ sku, quantity, reason: 'Manufacturer direct, no warehouse stock' });
+          continue;
+        }
+        if (allocation.fulfillment_source === 'platinum_dealer_fulfillment') {
+          plan.notTouched.push({ sku, quantity, reason: "Dealer fulfillment, the dealer's own stock" });
+          continue;
+        }
+        if (!item.product_id || quantity <= 0) {
+          continue;
+        }
+
+        if (allocation.fulfillment_source === 'gdc_inventory') {
+          if (!allocation.location_id) {
+            plan.blockers.push(`${sku}: the GDC allocation has no warehouse. Set the warehouse on the allocation first.`);
+            continue;
+          }
+          const locationName = warehouseNames.get(allocation.location_id) || 'Warehouse';
+          const tickets = pickTickets.filter((pt) => pt.itemId === item.id && pt.warehouse_id === allocation.location_id);
+          const shipped = tickets.find((pt) => pt.status === 'shipped');
+          const inProgress = tickets.filter((pt) => PICK_TICKET_IN_PROGRESS.includes(pt.status));
+          if (!shipped && inProgress.length > 0) {
+            const list = inProgress.map((pt) => `${pt.pick_ticket_number} (${pt.status})`).join(', ');
+            plan.blockers.push(`${sku} at ${locationName}: pick ticket ${list} has started. Finish it on the pick ticket instead.`);
+            continue;
+          }
+          plan.lines.push({
+            allocationId: allocation.id,
+            allocationStatus: allocation.status,
+            salesOrderItemId: item.id,
+            productId: item.product_id,
+            sku,
+            quantity,
+            source: 'gdc_inventory',
+            locationId: allocation.location_id,
+            dealerLocationId: null,
+            locationName,
+            alreadyShippedBy: shipped ? shipped.pick_ticket_number : null,
+            openPickTickets: shipped
+              ? []
+              : tickets
+                  .filter((pt) => PICK_TICKET_NOT_STARTED.includes(pt.status))
+                  .map((pt) => ({ id: pt.id, number: pt.pick_ticket_number })),
+          });
+        } else if (allocation.fulfillment_source === 'platinum_dealer_inventory') {
+          if (!allocation.dealer_location_id) {
+            plan.blockers.push(`${sku}: the dealer allocation has no dealer location. Set it on the allocation first.`);
+            continue;
+          }
+          plan.lines.push({
+            allocationId: allocation.id,
+            allocationStatus: allocation.status,
+            salesOrderItemId: item.id,
+            productId: item.product_id,
+            sku,
+            quantity,
+            source: 'platinum_dealer_inventory',
+            locationId: null,
+            dealerLocationId: allocation.dealer_location_id,
+            locationName: dealerNames.get(allocation.dealer_location_id) || 'Dealer location',
+            alreadyShippedBy: null,
+            openPickTickets: [],
+          });
+        }
+      }
+    }
+
+    return { success: true, data: plan };
+  } catch (error) {
+    console.error('[planManualShip] error:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Could not check the order' };
+  }
+}
+
+/**
+ * Take tires out of a location: on_hand -= quantity and the reservation is
+ * released (allocated -= quantity, never below 0). Compare and set, like
+ * updateWarehouseAllocated, so a save by another user at the same moment is
+ * not lost. Refused when fewer tires are on hand than leave.
+ * `undo`: put back a change made a moment ago (rollback), no checks.
+ */
+async function moveShippedStock(params: {
+  table: 'inventory' | 'platinum_dealer_inventory';
+  keyColumn: 'location_id' | 'dealer_location_id';
+  keyValue: string;
+  productId: string;
+  quantity: number;
+  locationName: string;
+  undo?: { released: number };
+}): Promise<{ success: boolean; error?: string; released?: number }> {
+  const attempts = params.undo ? STOCK_RESTORE_ATTEMPTS : STOCK_WRITE_ATTEMPTS;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const { data: row, error: fetchError } = await db
+      .from(params.table)
+      .select('on_hand, allocated')
+      .eq(params.keyColumn, params.keyValue)
+      .eq('product_id', params.productId)
+      .maybeSingle();
+    if (fetchError) {
+      return { success: false, error: fetchError.message };
+    }
+    if (!row) {
+      return { success: false, error: `No stock record for this product at ${params.locationName}` };
+    }
+    const onHand = Number(row.on_hand ?? 0);
+    const allocated = Number(row.allocated ?? 0);
+
+    let next: { on_hand: number; allocated: number };
+    let released = 0;
+    if (params.undo) {
+      released = params.undo.released;
+      next = { on_hand: onHand + params.quantity, allocated: allocated + released };
+    } else {
+      if (onHand < params.quantity) {
+        return {
+          success: false,
+          error: `Only ${onHand} on hand at ${params.locationName}, ${params.quantity} would leave. Check the inventory first.`,
+        };
+      }
+      released = Math.min(params.quantity, Math.max(0, allocated));
+      next = { on_hand: onHand - params.quantity, allocated: allocated - released };
+    }
+
+    const { data: written, error: updateError } = await db
+      .from(params.table)
+      .update(next)
+      .eq(params.keyColumn, params.keyValue)
+      .eq('product_id', params.productId)
+      // only when nobody changed the row since it was read
+      .eq('on_hand', row.on_hand)
+      .eq('allocated', row.allocated)
+      .select('on_hand');
+    if (updateError) {
+      return { success: false, error: updateError.message };
+    }
+    if (written && written.length > 0) {
+      return { success: true, released };
+    }
+    // Changed by someone else in between: read again and retry
+  }
+  if (params.undo) {
+    console.error(
+      `[moveShippedStock] Rollback could not put back ${params.quantity} units at ${params.locationName} (product ${params.productId})`
+    );
+  }
+  return { success: false, error: STOCK_BUSY_ERROR };
+}
+
+/**
+ * Manual "Mark as Shipped": take the order's reserved tires out of their
+ * locations and mark the allocations fulfilled. `finish` runs last (the
+ * sales order status / ship date); when it fails, everything is put back.
+ */
+export async function shipSalesOrderAllocationsManually(params: {
+  salesOrderId: string;
+  orderNumber: string;
+  userId?: string;
+  /** Refuse when no reserved tire is left to take out (stock-only use) */
+  requireStock?: boolean;
+  finish: () => Promise<{ success: boolean; error?: string }>;
+}): Promise<{ success: boolean; error?: string; shippedUnits: number; warnings: string[] }> {
+  const warnings: string[] = [];
+  const planResult = await planManualShip(params.salesOrderId);
+  if (!planResult.success || !planResult.data) {
+    return { success: false, error: planResult.error || 'Could not check the order', shippedUnits: 0, warnings };
+  }
+  const plan = planResult.data;
+  if (plan.blockers.length > 0) {
+    return { success: false, error: plan.blockers.join(' '), shippedUnits: 0, warnings };
+  }
+  if (params.requireStock && !plan.lines.some((line) => !line.alreadyShippedBy)) {
+    return { success: false, error: 'No reserved tires are left to take out of stock for this order.', shippedUnits: 0, warnings };
+  }
+
+  type Done = { line: ManualShipLine; released: number | null };
+  const done: Done[] = [];
+
+  const rollback = async () => {
+    for (const step of [...done].reverse()) {
+      if (step.released !== null) {
+        await moveShippedStock({
+          table: step.line.source === 'gdc_inventory' ? 'inventory' : 'platinum_dealer_inventory',
+          keyColumn: step.line.source === 'gdc_inventory' ? 'location_id' : 'dealer_location_id',
+          keyValue: (step.line.locationId || step.line.dealerLocationId) as string,
+          productId: step.line.productId,
+          quantity: step.line.quantity,
+          locationName: step.line.locationName,
+          undo: { released: step.released },
+        });
+      }
+      await updateAllocation({
+        id: step.line.allocationId,
+        status: step.line.allocationStatus as FulfillmentAllocation['status'],
+      });
+    }
+  };
+
+  let shippedUnits = 0;
+  for (const line of plan.lines) {
+    let released: number | null = null;
+
+    if (!line.alreadyShippedBy) {
+      const isWarehouse = line.source === 'gdc_inventory';
+      const move = await moveShippedStock({
+        table: isWarehouse ? 'inventory' : 'platinum_dealer_inventory',
+        keyColumn: isWarehouse ? 'location_id' : 'dealer_location_id',
+        keyValue: (isWarehouse ? line.locationId : line.dealerLocationId) as string,
+        productId: line.productId,
+        quantity: line.quantity,
+        locationName: line.locationName,
+      });
+      if (!move.success) {
+        await rollback();
+        return { success: false, error: `${line.sku} at ${line.locationName}: ${move.error}`, shippedUnits: 0, warnings };
+      }
+      released = move.released ?? 0;
+    }
+
+    const { error: statusError } = await updateAllocation({ id: line.allocationId, status: 'fulfilled' });
+    if (statusError) {
+      done.push({ line, released });
+      await rollback();
+      return {
+        success: false,
+        error: `${line.sku}: the allocation could not be marked fulfilled (${statusError.message}). Nothing was changed.`,
+        shippedUnits: 0,
+        warnings,
+      };
+    }
+    done.push({ line, released });
+    if (released !== null) {
+      shippedUnits += line.quantity;
+    }
+  }
+
+  const finished = await params.finish();
+  if (!finished.success) {
+    await rollback();
+    return { success: false, error: finished.error || 'Could not update the sales order', shippedUnits: 0, warnings };
+  }
+
+  // Stock movement log (history only; a failure never undoes the ship)
+  for (const step of done) {
+    if (step.released === null) {
+      continue;
+    }
+    const note = `Shipped ${step.line.quantity} units - ${params.orderNumber} marked shipped manually`;
+    try {
+      if (step.line.source === 'gdc_inventory' && step.line.locationId) {
+        await logInventoryMovement({
+          productId: step.line.productId,
+          locationId: step.line.locationId,
+          movementType: 'ship',
+          quantity: -step.line.quantity,
+          referenceType: 'sales_order',
+          referenceId: params.salesOrderId,
+          referenceNumber: params.orderNumber,
+          notes: note,
+          createdBy: params.userId,
+        });
+      } else if (step.line.dealerLocationId) {
+        await logDealerInventoryMovement({
+          productId: step.line.productId,
+          dealerLocationId: step.line.dealerLocationId,
+          movementType: 'ship',
+          quantity: -step.line.quantity,
+          referenceType: 'fulfillment_allocation',
+          referenceId: step.line.allocationId,
+          referenceNumber: params.orderNumber,
+          notes: note,
+          createdBy: params.userId,
+        });
+      }
+    } catch (logError) {
+      console.error('[shipSalesOrderAllocationsManually] movement log:', logError);
+    }
+  }
+
+  // Lines shipped here come off pick tickets that never started, so they cannot ship again
+  for (const step of done) {
+    if (step.line.openPickTickets.length === 0) {
+      continue;
+    }
+    try {
+      const changed = await removeItemFromPickTickets(step.line.openPickTickets, step.line.salesOrderItemId);
+      if (changed.length > 0) {
+        warnings.push(`${step.line.sku} was taken off pick ticket ${changed.join(', ')}`);
+      }
+    } catch (pickTicketError) {
+      console.error('[shipSalesOrderAllocationsManually] pick tickets:', pickTicketError);
+      warnings.push(`${step.line.sku}: check pick ticket ${step.line.openPickTickets.map((pt) => pt.number).join(', ')}`);
+    }
+  }
+
+  return { success: true, shippedUnits, warnings };
+}
+
+// ============================================
 // INVENTORY OPERATIONS
 // ============================================
 

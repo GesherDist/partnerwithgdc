@@ -70,6 +70,10 @@ import { ConfirmAllocationsModal } from './ConfirmAllocationsModal';
 import { EditOrderPricesDialog } from './EditOrderPricesDialog';
 import { OrderNumberInlineEdit } from './OrderNumberInlineEdit';
 import { MarkInvoicedDialog, INVOICEABLE_ORDER_STATUSES } from './MarkInvoicedDialog';
+// Nov 25 2026 (Ankur, Nov 24 call): manual Mark as Shipped
+import { MarkShippedDialog } from './MarkShippedDialog';
+import { SalesOrderActivityLogDialog } from './SalesOrderActivityLogDialog';
+import { MANUAL_SHIP_ORDER_STATUSES, STOCK_ONLY_SHIP_ORDER_STATUSES } from '../types';
 import { PRICE_EDITABLE_ORDER_STATUSES } from '../types';
 import { toast } from 'sonner';
 import { AllocationManager } from './AllocationManager';
@@ -223,6 +227,9 @@ export function ViewSalesOrderDrawer({
   const [showCancelDialog, setShowCancelDialog] = useState(false);
   const [showInvoiceDialog, setShowInvoiceDialog] = useState(false);
   const [closeOutMode, setCloseOutMode] = useState<'invoice' | 'reopen' | null>(null);
+  const [showMarkShippedDialog, setShowMarkShippedDialog] = useState(false);
+  // Activity log of the whole chain (Nov 26 2026)
+  const [showActivityLog, setShowActivityLog] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
   const [showPdfModal, setShowPdfModal] = useState(false);
@@ -535,10 +542,21 @@ export function ViewSalesOrderDrawer({
             ) : order ? (
               <div className="space-y-4">
                 {/* Status Badges */}
-                <div className="flex flex-wrap gap-2">
+                {/* <div className="flex flex-wrap gap-2"> */}
+                <div className="flex flex-wrap items-center gap-2">
                   <Badge className={ORDER_STATUS_COLORS[order.status]}>
                     {ORDER_STATUS_LABELS[order.status]}
                   </Badge>
+                  {/* Whole chain: quote → order → allocations → stock → pick ticket → shipped → invoiced */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="ml-auto order-last"
+                    onClick={() => setShowActivityLog(true)}
+                  >
+                    <Eye className="mr-2 h-4 w-4" />
+                    View Log
+                  </Button>
                   {/* Nov 20 2026 (Ankur, Nov 19 call): no credit hold, only an overdue-invoices warning (below)
                   {isOnHold && (
                     <Badge className={ORDER_CREDIT_STATUS_COLORS['hold']}>
@@ -547,6 +565,11 @@ export function ViewSalesOrderDrawer({
                   )} */}
                   {order.isCommissionOnly && <CommissionBadge />}
                 </div>
+
+                {/* Marked shipped by hand (Nov 25 2026) */}
+                {order.shippedAt && (
+                  <p className="text-sm text-muted-foreground">Shipped on {order.shippedAt}</p>
+                )}
 
                 {/* Closed out: invoiced in QuickBooks */}
                 {order.status === 'invoiced' && (order.invoicedAt || order.qboInvoiceNumber) && (
@@ -968,6 +991,21 @@ export function ViewSalesOrderDrawer({
                     Create Invoice
                   </Button>
                 )}
+                {canEditPermission && MANUAL_SHIP_ORDER_STATUSES.includes(order.status) && (
+                  <Button variant="outline" size="sm" onClick={() => setShowMarkShippedDialog(true)} disabled={isPending}>
+                    <Truck className="mr-2 h-4 w-4" />
+                    Mark as Shipped
+                  </Button>
+                )}
+                {/* Already shipped / delivered / invoiced but tires still reserved (e.g. AAA warranty C-SO) */}
+                {canEditPermission && STOCK_ONLY_SHIP_ORDER_STATUSES.includes(order.status) && (
+                  <Button variant="outline" size="sm" onClick={() => setShowMarkShippedDialog(true)} disabled={isPending}>
+                    <Truck className="mr-2 h-4 w-4" />
+                    {/* Take Out of Stock */}
+                    {/* Nov 25 2026: one name for both, "Mark as Shipped" (user) */}
+                    Mark as Shipped
+                  </Button>
+                )}
                 {canCloseOut && INVOICEABLE_ORDER_STATUSES.includes(order.status) && (
                   <Button variant="outline" size="sm" onClick={() => setCloseOutMode('invoice')} disabled={isPending}>
                     <FileCheck className="mr-2 h-4 w-4" />
@@ -985,6 +1023,20 @@ export function ViewSalesOrderDrawer({
             </div>
           </div>
         )}
+
+        {/* Manual Mark as Shipped (Nov 25 2026) */}
+        <MarkShippedDialog
+          order={order}
+          stockOnly={!!order && STOCK_ONLY_SHIP_ORDER_STATUSES.includes(order.status)}
+          open={showMarkShippedDialog}
+          onOpenChange={setShowMarkShippedDialog}
+          onDone={() => fetchOrder()}
+        />
+        <SalesOrderActivityLogDialog
+          order={order ? { id: order.id, orderNumber: order.orderNumber } : null}
+          open={showActivityLog}
+          onOpenChange={setShowActivityLog}
+        />
 
         {/* Mark as Invoiced / Reopen */}
         <MarkInvoicedDialog

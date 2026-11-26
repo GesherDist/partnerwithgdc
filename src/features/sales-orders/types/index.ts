@@ -64,6 +64,15 @@ export const ORDER_STATUS_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   cancelled: [],
 };
 
+/** Statuses from which a C-SO can be marked shipped by hand (Nov 25 2026) */
+export const MANUAL_SHIP_ORDER_STATUSES: OrderStatus[] = ['confirmed', 'processing'];
+/**
+ * Orders already past shipping (e.g. closed out before the tires were taken
+ * out of stock): "Take Out of Stock" moves the reserved tires out, the status
+ * stays as it is.
+ */
+export const STOCK_ONLY_SHIP_ORDER_STATUSES: OrderStatus[] = ['shipped', 'delivered', 'invoiced'];
+
 // ============================================
 // FULFILLMENT SOURCE (Where product is sourced from)
 // ============================================
@@ -227,6 +236,9 @@ export interface SalesOrder {
   invoicedBy: string | null;
   qboInvoiceNumber: string | null;
   statusBeforeInvoiced: OrderStatus | null;
+  // Manual Mark as Shipped (migration 177, Nov 25 2026)
+  shippedAt: string | null;
+  shippedBy: string | null;
 
   // Commission-only order: Galileo invoices the customer, Gesher earns a per-tire commission
   isCommissionOnly: boolean;
@@ -846,6 +858,8 @@ export interface SalesOrdersTableProps {
   onReopenInvoiced?: (order: SalesOrderListItem) => void;
   /** Opens the order's packing slip PDF */
   onPackingSlip?: (order: SalesOrderListItem) => void;
+  /** Manual "Mark as Shipped" / "Take Out of Stock" from the row menu (Nov 25 2026) */
+  onMarkShipped?: (order: SalesOrderListItem) => void;
   toolbarContent?: React.ReactNode;
   // Server-side pagination
   pagination?: {

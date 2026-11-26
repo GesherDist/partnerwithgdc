@@ -66,6 +66,8 @@ interface DbSalesOrder {
   invoiced_by?: string | null;
   qbo_invoice_number?: string | null;
   status_before_invoiced?: string | null;
+  shipped_at?: string | null;
+  shipped_by?: string | null;
   is_commission_only?: boolean | null;
   commission_rate?: number | null;
   commission_amount?: number | null;
@@ -1247,6 +1249,8 @@ class SalesOrderRepositoryImpl {
       invoicedBy: data.invoiced_by ?? null,
       qboInvoiceNumber: data.qbo_invoice_number ?? null,
       statusBeforeInvoiced: (data.status_before_invoiced as OrderStatus | null | undefined) ?? null,
+      shippedAt: data.shipped_at ?? null,
+      shippedBy: data.shipped_by ?? null,
       isCommissionOnly: data.is_commission_only === true,
       commissionRate: data.commission_rate ?? DEFAULT_COMMISSION_RATE_CENTS,
       commissionAmount: Number(data.commission_amount ?? 0),

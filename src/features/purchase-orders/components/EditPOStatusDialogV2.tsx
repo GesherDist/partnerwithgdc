@@ -51,7 +51,9 @@ import { Textarea } from '@/shared/components/ui/textarea';
 // ============================================
 
 type ProductionStatus = 'not_started' | 'in_production' | 'ready_to_ship' | 'shipped';
-type LoadStatus = 'available' | 'open' | 'hold' | 'in_transit' | 'sold' | 'invoiced' | 'closed';
+// type LoadStatus = 'available' | 'open' | 'hold' | 'in_transit' | 'sold' | 'invoiced' | 'closed';
+// Nov 25 2026 (Ankur, Nov 24 call): 'delivered' added, so the container can be marked delivered from the PO
+type LoadStatus = 'available' | 'open' | 'hold' | 'in_transit' | 'delivered' | 'sold' | 'invoiced' | 'closed';
 // Extended load status from POListItem (includes additional operations dashboard statuses)
 type ExtendedLoadStatus = LoadStatus | 'not_invoiced' | 'po_needed' | 'partially_paid' | 'paid' | 'disputed' | null;
 
@@ -147,6 +149,13 @@ const LOAD_STATUS_OPTIONS: {
     color: 'bg-purple-100 text-purple-700 border-purple-200',
   },
   {
+    value: 'delivered',
+    label: 'Delivered',
+    description: 'Container arrived at the warehouse; stock POs go into warehouse stock',
+    icon: PackageCheck,
+    color: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+  },
+  {
     value: 'sold',
     label: 'Sold',
     description: 'Items sold, pending delivery',
@@ -178,6 +187,12 @@ const EXTENDED_STATUS_LABELS: Record<string, { label: string; color: string }> =
   disputed: { label: 'Disputed', color: 'bg-rose-100 text-rose-700 border-rose-200' },
 };
 
+/** Today in the user's time zone (yyyy-mm-dd) */
+function localToday(): string {
+  const now = new Date();
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+
 // ============================================
 // COMPONENT
 // ============================================
@@ -202,6 +217,9 @@ export function EditPOStatusDialogV2({
   // State for selections
   const [selectedProductionStatus, setSelectedProductionStatus] = useState<ProductionStatus | null>(null);
   const [selectedLoadStatus, setSelectedLoadStatus] = useState<LoadStatus | null>(null);
+  // Delivery date for "Delivered" (Nov 25 2026)
+  const [deliveredOn, setDeliveredOn] = useState(localToday());
+  const deliveredOnValid = /^\d{4}-\d{2}-\d{2}$/.test(deliveredOn) && deliveredOn <= localToday();
 
   // Current step: 'confirmation' | 'production' | 'shipment'
   const [currentStep, setCurrentStep] = useState<'confirmation' | 'production' | 'shipment'>('confirmation');
@@ -214,7 +232,8 @@ export function EditPOStatusDialogV2({
 
   // Helper to check if a status is a base LoadStatus
   const isBaseLoadStatus = (status: ExtendedLoadStatus): status is LoadStatus => {
-    const baseStatuses: LoadStatus[] = ['available', 'open', 'hold', 'in_transit', 'sold', 'invoiced', 'closed'];
+    // const baseStatuses: LoadStatus[] = ['available', 'open', 'hold', 'in_transit', 'sold', 'invoiced', 'closed'];
+    const baseStatuses: LoadStatus[] = ['available', 'open', 'hold', 'in_transit', 'delivered', 'sold', 'invoiced', 'closed'];
     return status !== null && baseStatuses.includes(status as LoadStatus);
   };
 
@@ -224,6 +243,7 @@ export function EditPOStatusDialogV2({
       setSelectedProductionStatus(currentProductionStatus);
       // Only set selectedLoadStatus if it's a base LoadStatus (not extended like 'paid', 'disputed')
       setSelectedLoadStatus(isBaseLoadStatus(currentLoadStatus) ? currentLoadStatus : null);
+      setDeliveredOn(localToday());
       // Reset admin confirm/reject state
       setShowRejectForm(false);
       setRejectionReason('');
@@ -323,13 +343,26 @@ export function EditPOStatusDialogV2({
     }
 
     startTransition(async () => {
-      const result = await updateShipmentLoadStatus(poId, selectedLoadStatus, shipmentId || undefined);
+      // const result = await updateShipmentLoadStatus(poId, selectedLoadStatus, shipmentId || undefined);
+      const result = await updateShipmentLoadStatus(
+        poId,
+        selectedLoadStatus,
+        shipmentId || undefined,
+        selectedLoadStatus === 'delivered' ? { deliveredOn } : {}
+      );
 
       if (result.success) {
         const statusOption = LOAD_STATUS_OPTIONS.find(s => s.value === selectedLoadStatus);
+        const receivedUnits = result.data?.receivedUnits ?? 0;
         toast.success('Shipment status updated', {
-          description: `${poNumber} shipment is now "${statusOption?.label}"`,
+          description:
+            selectedLoadStatus === 'delivered' && receivedUnits > 0
+              ? `${poNumber} delivered. ${receivedUnits} tires added to warehouse stock.`
+              : `${poNumber} shipment is now "${statusOption?.label}"`,
         });
+        if (result.warning) {
+          toast.warning(result.warning);
+        }
         onSuccess?.();
         onOpenChange(false);
       } else {
@@ -694,6 +727,30 @@ export function EditPOStatusDialogV2({
                   })}
                 </RadioGroup>
               </div>
+
+              {/* Delivered: delivery date (Nov 25 2026) */}
+              {selectedLoadStatus === 'delivered' && currentLoadStatus !== 'delivered' && (
+                <div className="space-y-1">
+                  <Label htmlFor="po-delivered-on" className="text-xs font-medium text-muted-foreground">
+                    Delivery date
+                  </Label>
+                  <Input
+                    id="po-delivered-on"
+                    type="date"
+                    max={localToday()}
+                    value={deliveredOn}
+                    onChange={(e) => setDeliveredOn(e.target.value)}
+                    disabled={isPending}
+                  />
+                  {!deliveredOnValid && (
+                    <p className="text-xs text-red-600">Enter a date that is not in the future</p>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    Tires of a stock PO (not sold to a customer) go into the PO&apos;s warehouse stock. Otherwise use
+                    &quot;Receive into Warehouse&quot; on the PO.
+                  </p>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -769,7 +826,13 @@ export function EditPOStatusDialogV2({
               <Button
                 type="button"
                 onClick={handleUpdateLoadStatus}
-                disabled={isPending || !selectedLoadStatus || selectedLoadStatus === currentLoadStatus}
+                // disabled={isPending || !selectedLoadStatus || selectedLoadStatus === currentLoadStatus}
+                disabled={
+                  isPending ||
+                  !selectedLoadStatus ||
+                  selectedLoadStatus === currentLoadStatus ||
+                  (selectedLoadStatus === 'delivered' && !deliveredOnValid)
+                }
               >
                 {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Update Shipment Status

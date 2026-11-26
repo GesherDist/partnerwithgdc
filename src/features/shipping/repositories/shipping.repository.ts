@@ -779,7 +779,11 @@ const TRACKING_TO_LOAD_STATUS: Record<string, string> = {
 };
 
 /** Action Required texts written by tracking automation (safe to replace) */
-const AUTO_ACTION_MESSAGES = new Set([
+// const AUTO_ACTION_MESSAGES = new Set([
+// Nov 26 2026: exported for the CMA CGM "container on another booking" note
+export const CMA_OTHER_TRIP_ACTION = 'Container reused on another CMA booking - confirm delivery';
+export const AUTO_ACTION_MESSAGES = new Set([
+  CMA_OTHER_TRIP_ACTION,
   'PO Confirmed - Awaiting Shipping Details', // set by the supplier portal
   'In Transit - Awaiting Delivery',
   'Arrived at Port - Awaiting Customs',

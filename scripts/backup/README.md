@@ -101,13 +101,13 @@ The first run may stop with a permission error on a Supabase-managed schema. In 
 Cron uses the server's time zone. Check it with `timedatectl`. AWS servers are usually on UTC.
 Ubuntu's cron ignores `CRON_TZ`, so set the time in the server's own zone.
 
-On a UTC server, `30 6` runs at 06:30 UTC, which is 1:30 AM New York time in winter and 2:30 AM in summer:
+On a UTC server, `0 6` runs at 06:00 UTC, which is 1:00 AM New York time in winter and 2:00 AM in summer (11:30 AM in India):
 
 ```bash
 sudo crontab -e
 ```
 ```
-30 6 * * * bash /path/to/partnerwithgdc/scripts/backup/db-backup.sh >/dev/null 2>&1
+0 6 * * * bash /path/to/partnerwithgdc/scripts/backup/db-backup.sh >/dev/null 2>&1
 ```
 
 The script writes its own log to `/var/backups/gesher-db/logs/backup-YYYY-MM.log`.

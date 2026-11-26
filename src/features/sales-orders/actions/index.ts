@@ -1650,6 +1650,62 @@ export async function reopenInvoicedSalesOrder(id: string): Promise<ActionResult
   return result;
 }
 
+/**
+ * What "Mark as Shipped" would do (read only): tires that leave each
+ * location, lines not touched, and reasons it is refused.
+ */
+export async function getManualShipPlan(
+  id: string
+): Promise<ActionResult<import('../services/fulfillment-orchestration.service').ManualShipPlan>> {
+  const auth = await authorize('orders.edit');
+  if (!auth.ok) {
+    return auth.result;
+  }
+
+  const { planManualShip } = await import('../services/fulfillment-orchestration.service');
+  const plan = await planManualShip(id);
+  if (!plan.success || !plan.data) {
+    return { success: false, error: plan.error || 'Could not check the order' };
+  }
+  return { success: true, data: plan.data };
+}
+
+/**
+ * Manual "Mark as Shipped" (Ankur, Nov 24 2026 call): the order left with the
+ * broker's carrier. Reserved tires leave their warehouse / dealer location and
+ * the ship date is saved.
+ */
+export async function markSalesOrderShipped(
+  id: string,
+  details: { shippedAt?: string | null } = {}
+): Promise<ActionResult<{ shippedUnits: number }>> {
+  const auth = await authorize('orders.edit');
+  if (!auth.ok) {
+    return auth.result;
+  }
+
+  const { shipSalesOrderAllocationsManually } = await import('../services/fulfillment-orchestration.service');
+  const result = await salesOrderService.markShippedManually(id, details, auth.user.id, shipSalesOrderAllocationsManually);
+  if (!result.success || !result.data) {
+    return { success: false, error: result.error || 'Could not mark the order shipped' };
+  }
+
+  revalidatePath('/sales-orders');
+  revalidatePath(`/sales-orders/${id}`);
+  revalidatePath('/inventory');
+  revalidatePath('/operations');
+  revalidatePath('/pick-tickets');
+
+  const response: ActionResult<{ shippedUnits: number }> = {
+    success: true,
+    data: { shippedUnits: result.data.shippedUnits },
+  };
+  if (result.data.warnings.length > 0) {
+    response.warning = result.data.warnings.join('; ');
+  }
+  return response;
+}
+
 export async function cancelSalesOrder(
   id: string,
   reason?: string
@@ -2487,5 +2543,104 @@ export async function syncOrderToPipedrive(
       success: false,
       error: 'Failed to sync order to Pipedrive',
     };
+  }
+}
+
+// ============================================
+// ACTIVITY LOG (Nov 26 2026)
+// ============================================
+
+export interface SalesOrderActivityEntry {
+  id: string;
+  createdAt: string;
+  action: string;
+  module: string;
+  entityType: string | null;
+  description: string | null;
+  userName: string | null;
+  changes: Array<{ field: string; from: string; to: string }>;
+}
+
+/** Short text for a changed value in the log */
+function activityValue(value: unknown): string {
+  if (value === null || value === undefined || value === '') {
+    return '–';
+  }
+  const text = typeof value === 'object' ? JSON.stringify(value) : String(value);
+  return text.length > 80 ? `${text.slice(0, 77)}…` : text;
+}
+
+/**
+ * The whole chain of one customer sales order, oldest first: its quote, the
+ * order itself, allocations, stock moves for it, pick tickets / packing lists,
+ * shipments, linked POs, ship and invoice. Same permission as opening the order.
+ */
+export async function getSalesOrderActivityLog(id: string): Promise<ActionResult<SalesOrderActivityEntry[]>> {
+  const auth = await authorize('orders.view_detail');
+  if (!auth.ok) {
+    return auth.result;
+  }
+
+  try {
+    const { data: order, error: orderError } = await db
+      .from('sales_orders')
+      .select('id, order_number, quote_id')
+      .eq('id', id)
+      .maybeSingle();
+    if (orderError || !order) {
+      return { success: false, error: 'Sales order not found' };
+    }
+
+    // Records linked to the order (a missing table or column just adds nothing)
+    const linkedIds = async (table: string): Promise<string[]> => {
+      const { data, error } = await db.from(table).select('id').eq('sales_order_id', id).limit(200);
+      if (error) {
+        console.error(`[getSalesOrderActivityLog] ${table}:`, error.message);
+        return [];
+      }
+      return (data ?? []).map((row: { id: string }) => row.id);
+    };
+    const [pickTickets, packingLists, shipments, purchaseOrders] = await Promise.all([
+      linkedIds('pick_tickets'),
+      linkedIds('packing_lists'),
+      linkedIds('shipments'),
+      linkedIds('purchase_orders'),
+    ]);
+
+    const { auditLogRepository } = await import('@/features/audit-logs/repositories/audit-log.repository');
+    const logs = await auditLogRepository.findChain({
+      entityIds: [order.id, order.quote_id, ...pickTickets, ...packingLists, ...shipments, ...purchaseOrders].filter(
+        (value): value is string => !!value
+      ),
+      // Allocation logs keep the order id in metadata
+      metadataMatches: [{ key: 'salesOrderId', value: order.id }],
+      // Stock moves name the order number ("Allocated 2 units for sales order …")
+      descriptionContains: order.order_number,
+    });
+
+    const entries: SalesOrderActivityEntry[] = logs.map((log) => {
+      const changes = log.changes && typeof log.changes === 'object' ? log.changes : {};
+      return {
+        id: log.id,
+        createdAt: new Date(log.createdAt).toISOString(),
+        action: log.action,
+        module: log.module,
+        entityType: log.entityType,
+        description: log.description,
+        userName: log.userName || log.userEmail || null,
+        changes: Object.entries(changes)
+          .filter(([field]) => !['updated_at', 'updatedAt', 'updated_by', 'updatedBy'].includes(field))
+          .slice(0, 15)
+          .map(([field, change]) => {
+            const pair = (change ?? {}) as { from?: unknown; to?: unknown };
+            return { field, from: activityValue(pair.from), to: activityValue(pair.to) };
+          }),
+      };
+    });
+
+    return { success: true, data: entries };
+  } catch (error) {
+    console.error('[getSalesOrderActivityLog] Error:', error);
+    return { success: false, error: 'Could not load the activity log' };
   }
 }

@@ -18,6 +18,7 @@ import type {
   CmaCgmSyncResult,
   CmaCgmEquipmentEventTypeCode,
   CmaCgmTransportEventTypeCode,
+  CmaCgmOtherTrip,
 } from '../types';
 
 import {
@@ -26,6 +27,8 @@ import {
   updateShipmentLoadStatus,
   updatePurchaseOrderStatus,
   purchaseOrderStatusForTracking,
+  AUTO_ACTION_MESSAGES,
+  CMA_OTHER_TRIP_ACTION,
 } from '../repositories/shipping.repository';
 
 import { createAdminClient } from '@/shared/lib/supabase/admin';
@@ -61,6 +64,101 @@ function isEquipmentEvent(event: CmaCgmEvent): event is CmaCgmEquipmentEvent {
 
 function isTransportEvent(event: CmaCgmEvent): event is CmaCgmTransportEvent {
   return event.eventType === 'TRANSPORT';
+}
+
+// ============================================
+// TRIP OF THE CONTAINER (Nov 26 2026)
+// ============================================
+//
+// CMA reuses containers. The feed holds the container's latest booking, which
+// can be another customer's trip after our load was unloaded (e.g. container
+// CMAU5516400 of SO2600044: empty picked up in Kansas City on Nov 23 for an
+// export to Korea). Our loads are always imports into the US, so a booking
+// that exports from the US, or ends outside the US, is not ours.
+
+/** Shipment phase of an event in CMA's data ("Export" / "Import"), lower case */
+function eventPhase(event: CmaCgmEvent): string {
+  return (event.carrierSpecificData?.transportationPhase || '').toLowerCase();
+}
+
+/** UN/LOCODE of where the event happened, when known */
+function eventLocationCode(event: CmaCgmEvent): string | undefined {
+  const code = isEquipmentEvent(event)
+    ? event.eventLocation?.UNLocationCode ||
+      event.transportCall?.UNLocationCode ||
+      event.transportCall?.location?.UNLocationCode
+    : event.transportCall?.UNLocationCode || event.transportCall?.location?.UNLocationCode;
+  return (code || event.carrierSpecificData?.internalLocationCode || undefined)?.toUpperCase();
+}
+
+/** Readable place of the event (name, else UN/LOCODE) */
+function eventPlace(event: CmaCgmEvent): string | undefined {
+  const name = isEquipmentEvent(event)
+    ? event.eventLocation?.locationName || event.transportCall?.location?.locationName
+    : event.transportCall?.location?.locationName;
+  return name || eventLocationCode(event);
+}
+
+function isUsLocation(code: string | undefined): boolean {
+  return !!code && code.startsWith('US');
+}
+
+/** Booking the event belongs to ('' when the feed gives none) */
+function eventBooking(event: CmaCgmEvent): string {
+  const refs = isEquipmentEvent(event) || isTransportEvent(event) ? event.documentReferences : undefined;
+  return refs?.find((r) => r.documentReferenceType === 'BKG')?.documentReferenceValue || '';
+}
+
+/** True when this booking's events show a trip that is not a US import */
+function isOtherTrip(events: CmaCgmEvent[]): boolean {
+  // Leaves the US (export phase at a US place): never one of our loads
+  const exportsFromUs = events.some((e) => eventPhase(e) === 'export' && isUsLocation(eventLocationCode(e)));
+  if (exportsFromUs) {
+    return true;
+  }
+  // Destination side known and none of it is in the US
+  const importSide = events
+    .filter((e) => {
+      const locationType = (e.carrierSpecificData?.shipmentLocationType || '').toUpperCase();
+      return eventPhase(e) === 'import' || locationType === 'POD' || locationType === 'FPD';
+    })
+    .map(eventLocationCode)
+    .filter((code): code is string => !!code);
+  return importSide.length > 0 && !importSide.some(isUsLocation);
+}
+
+/**
+ * Keep only the events of our own trip. Events are grouped by booking; a
+ * booking that is another customer's trip is dropped. When nothing of ours is
+ * left, the first actual event of the newest other trip is described instead.
+ */
+function selectOwnTrip(events: CmaCgmEvent[]): { ownEvents: CmaCgmEvent[]; otherTrip?: CmaCgmOtherTrip } {
+  const byBooking = new Map<string, CmaCgmEvent[]>();
+  for (const event of events) {
+    const key = eventBooking(event);
+    byBooking.set(key, [...(byBooking.get(key) ?? []), event]);
+  }
+
+  const ownEvents: CmaCgmEvent[] = [];
+  const otherEvents: CmaCgmEvent[] = [];
+  for (const group of byBooking.values()) {
+    (isOtherTrip(group) ? otherEvents : ownEvents).push(...group);
+  }
+
+  if (ownEvents.length > 0 || otherEvents.length === 0) {
+    return { ownEvents };
+  }
+
+  // Events come newest first: the oldest actual event is where that trip began
+  const firstActual = [...otherEvents].reverse().find((e) => e.eventClassifierCode === 'ACT');
+  return {
+    ownEvents: [],
+    otherTrip: {
+      startedAt: firstActual?.eventDateTime || firstActual?.eventCreatedDateTime,
+      location: firstActual ? eventPlace(firstActual) : undefined,
+      label: firstActual?.carrierSpecificData?.internalEventLabel,
+    },
+  };
 }
 
 // ============================================
@@ -187,6 +285,48 @@ export function mapCmaCgmEventToStatus(event: CmaCgmEvent): CmaCgmMappedStatus {
     };
   }
 
+  // Nov 26 2026: corrections the plain event code cannot see
+  const phase = eventPhase(event);
+  const isActual = event.eventClassifierCode === 'ACT';
+  const mode = event.transportCall?.modeOfTransport;
+  const code = isEquipmentEvent(event) ? event.equipmentEventTypeCode : event.transportEventTypeCode;
+  const isVesselMove = mode !== 'RAIL' && mode !== 'TRUCK' && mode !== 'BARGE';
+  if (
+    isActual &&
+    isEquipmentEvent(event) &&
+    event.emptyIndicatorCode === 'EMPTY' &&
+    phase === 'import' &&
+    (code === 'GTIN' || code === 'DROP')
+  ) {
+    // Empty container back at the depot after our trip: the load was unloaded
+    statusMapping = {
+      trackingStatus: 'delivered',
+      loadStatus: 'delivered',
+      description: 'Empty container returned - load delivered',
+    };
+  } else if (isActual && phase === 'export' && !((code === 'LOAD' || code === 'DEPA') && isVesselMove)) {
+    // Origin side before the vessel leaves (empty pick-up, stuffing, gate in,
+    // inland rail): the trip is only starting. Mapping these to "arrived at
+    // port" / "out for delivery" blocked the later vessel statuses.
+    statusMapping = {
+      trackingStatus: 'container_picked',
+      loadStatus: 'open',
+      description: 'Container being prepared at origin',
+    };
+  } else if (mode === 'RAIL' && isActual) {
+    // Rail moves are not vessel moves ("Vessel arrived at port" was wrong)
+    if (code === 'LOAD' || code === 'DEPA') {
+      statusMapping = { trackingStatus: 'on_rail', loadStatus: 'in_transit', description: 'Container on rail' };
+    } else if (code === 'DISC' || code === 'ARRI') {
+      statusMapping = { trackingStatus: 'at_ramp', loadStatus: 'in_transit', description: 'Container arrived at rail ramp' };
+    }
+  }
+  // CMA's own wording is clearer than the generic one (e.g. "Discharged")
+  const cmaLabel = event.carrierSpecificData?.internalEventLabel;
+  if (cmaLabel && statusMapping.trackingStatus !== 'delivered') {
+    statusMapping = { ...statusMapping, description: cmaLabel };
+  }
+
   // Extract location information
   let location: string | undefined;
   if (isEquipmentEvent(event)) {
@@ -244,6 +384,9 @@ function getEstimatedArrival(events: CmaCgmEvent[]): string | undefined {
       isTransportEvent(e) &&
       e.transportEventTypeCode === 'ARRI' &&
       e.eventClassifierCode !== 'ACT' &&
+      // Nov 26 2026: vessel arrival only - a planned train arrival inland is not the port ETA
+      e.transportCall?.modeOfTransport !== 'RAIL' &&
+      e.transportCall?.modeOfTransport !== 'TRUCK' &&
       Boolean(e.eventDateTime)
   );
   return arrival?.eventDateTime?.slice(0, 10);
@@ -324,14 +467,32 @@ export async function fetchContainerEvents(
     // The feed also carries planned/estimated (future) events. Status must
     // come from what actually happened: with no actual event yet (booking
     // only) there is no status change, only the estimated arrival.
-    const latestActual = sortedEvents.find((e) => e.eventClassifierCode === 'ACT');
+    // const latestActual = sortedEvents.find((e) => e.eventClassifierCode === 'ACT');
+    //
+    // return {
+    //   success: true,
+    //   containerNumber,
+    //   events: sortedEvents,
+    //   latestEvent: latestActual,
+    //   estimatedArrival: getEstimatedArrival(sortedEvents),
+    // };
+
+    // Nov 26 2026: only our own trip counts (containers are reused by CMA)
+    const { ownEvents, otherTrip } = selectOwnTrip(sortedEvents);
+    if (otherTrip) {
+      console.log(
+        `[CMA-CGM] ${containerNumber} is on another booking (${otherTrip.label || 'trip'} ${otherTrip.startedAt || ''} ${otherTrip.location || ''}) - status not changed`
+      );
+    }
+    const latestActual = ownEvents.find((e) => e.eventClassifierCode === 'ACT');
 
     return {
       success: true,
       containerNumber,
-      events: sortedEvents,
+      events: ownEvents,
       latestEvent: latestActual,
-      estimatedArrival: getEstimatedArrival(sortedEvents),
+      estimatedArrival: getEstimatedArrival(ownEvents),
+      otherTrip,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
@@ -477,6 +638,38 @@ async function saveEstimatedArrivalOnly(shipmentId: string, estimatedArrival?: s
     .eq('id', shipmentId);
 }
 
+/**
+ * Nov 26 2026: the container is on another customer's booking, so the feed no
+ * longer shows our trip. Status, ETA and delay stay as they are; only the sync
+ * time is stamped and the operations team gets a note to confirm delivery
+ * (a note they typed themselves is never overwritten).
+ */
+async function saveOtherTrip(shipmentId: string): Promise<void> {
+  const supabase = createAdminClient();
+  const { data: current } = await supabase
+    .from('shipments')
+    .select('action_required')
+    .eq('id', shipmentId)
+    .maybeSingle();
+  const currentAction = current?.action_required?.trim() || '';
+  const canReplaceAction = !currentAction || AUTO_ACTION_MESSAGES.has(currentAction);
+  await supabase
+    .from('shipments')
+    .update({
+      cma_cgm_last_sync: new Date().toISOString(),
+      cma_cgm_last_event_code: 'REUSED',
+      ...(canReplaceAction ? { action_required: CMA_OTHER_TRIP_ACTION } : {}),
+    })
+    .eq('id', shipmentId);
+}
+
+/** Message for the operations team when the container is on another booking */
+function otherTripMessage(containerNumber: string, otherTrip: CmaCgmOtherTrip): string {
+  const when = otherTrip.startedAt ? ` on ${otherTrip.startedAt.slice(0, 10)}` : '';
+  const where = otherTrip.location ? ` at ${otherTrip.location}` : '';
+  return `${containerNumber} is now on another CMA booking (${otherTrip.label || 'new trip'}${when}${where}). This load's own trip is no longer in CMA's data - status not changed. Please confirm delivery and mark it Delivered.`;
+}
+
 // ============================================
 // CONTAINER SYNC
 // ============================================
@@ -577,6 +770,18 @@ export async function syncAllContainers(): Promise<CmaCgmSyncResult> {
           containerNumber: container.containerNumber,
           error: result.error || 'Unknown error',
         });
+        continue;
+      }
+
+      // Nov 26 2026: container reused on another booking - do not touch the status
+      if (result.otherTrip) {
+        await saveOtherTrip(container.shipmentId);
+        skippedCount++;
+        errors.push({
+          containerNumber: container.containerNumber,
+          error: otherTripMessage(container.containerNumber, result.otherTrip),
+        });
+        await new Promise((resolve) => setTimeout(resolve, 1000));
         continue;
       }
 
@@ -690,6 +895,11 @@ export async function syncShipmentContainer(
   const result = await fetchContainerEvents(shipment.container_number);
   if (!result.success) {
     return { success: false, message: result.error || 'CMA CGM tracking failed' };
+  }
+  // Nov 26 2026: container reused on another booking - do not touch the status
+  if (result.otherTrip) {
+    await saveOtherTrip(shipment.id);
+    return { success: false, message: otherTripMessage(shipment.container_number, result.otherTrip) };
   }
   if (!result.latestEvent) {
     await saveEstimatedArrivalOnly(shipment.id, result.estimatedArrival);

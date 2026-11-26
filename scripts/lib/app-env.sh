@@ -51,7 +51,7 @@ app_env_value() {
 urldecode() { local s=${1//+/ }; printf '%b' "${s//%/\\x}"; }
 
 # Fill DB_* / PGPASSWORD / PGSSLMODE from DIRECT_URL, alerts from SMTP_* /
-# SUPPORT_EMAIL. Values already set (from /etc/gesher/*.env) always win.
+# ALERT_EMAIL_TO (else SUPPORT_EMAIL). Values already set (from /etc/gesher/*.env) always win.
 load_app_env() {
   local file
   if ! file=$(find_app_env_file); then
@@ -99,6 +99,9 @@ load_app_env() {
     fi
   fi
   : "${ALERT_EMAIL_FROM:=$(app_env_value SMTP_FROM_EMAIL "$file")}"
+  # : "${ALERT_EMAIL_TO:=$(app_env_value SUPPORT_EMAIL "$file")}"
+  # Nov 25 2026: ALERT_EMAIL_TO in the app .env (comma-separated) wins; else SUPPORT_EMAIL
+  : "${ALERT_EMAIL_TO:=$(app_env_value ALERT_EMAIL_TO "$file")}"
   : "${ALERT_EMAIL_TO:=$(app_env_value SUPPORT_EMAIL "$file")}"
 
   local app_url

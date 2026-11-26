@@ -22,8 +22,11 @@ import type {
   OrderStatus,
   CreateSalesOrderItemDTO,
 } from '../types';
-import { ORDER_STATUS_TRANSITIONS as STATUS_TRANSITIONS, PRICE_EDITABLE_ORDER_STATUSES } from '../types';
+import { ORDER_STATUS_TRANSITIONS as STATUS_TRANSITIONS, PRICE_EDITABLE_ORDER_STATUSES, MANUAL_SHIP_ORDER_STATUSES, STOCK_ONLY_SHIP_ORDER_STATUSES } from '../types';
 import { auditService } from '@/shared/lib/audit';
+// Type only (erased at build): see markShippedManually
+import type { shipSalesOrderAllocationsManually } from './fulfillment-orchestration.service';
+type ShipAllocationsFn = typeof shipSalesOrderAllocationsManually;
 import { db } from '@/shared/lib/supabase/database';
 
 // Helper to convert sales order to audit data (exclude large/sensitive fields)
@@ -750,6 +753,128 @@ export const salesOrderService = {
         success: false,
         error: 'Failed to cancel sales order',
       };
+    }
+  },
+
+  /**
+   * Manual "Mark as Shipped" (Ankur, Nov 24 2026 call). Outgoing loads go with
+   * whatever carrier the broker picks, so there is no carrier integration: the
+   * user marks a confirmed / processing C-SO shipped with the ship date. The
+   * reserved warehouse / dealer tires leave their location (on_hand and
+   * allocated go down) and the allocations become fulfilled. See
+   * shipSalesOrderAllocationsManually for the pick ticket rules. All or
+   * nothing: if the order cannot be saved, the stock is put back.
+   */
+  async markShippedManually(
+    id: string,
+    details: { shippedAt?: string | null },
+    userId: string | undefined,
+    // Passed in by the server action: this service is also bundled into client
+    // pages (invoices), and the allocation service pulls in server-only code
+    shipAllocations: ShipAllocationsFn
+  ): Promise<ServiceResult<{ shippedUnits: number; warnings: string[] }>> {
+    try {
+      const existing = await salesOrderRepository.findById(id);
+      if (!existing) {
+        return { success: false, error: 'Sales order not found' };
+      }
+      // Already shipped / delivered / invoiced: only the stock moves, status stays
+      const stockOnly = STOCK_ONLY_SHIP_ORDER_STATUSES.includes(existing.status);
+      if (!stockOnly && !MANUAL_SHIP_ORDER_STATUSES.includes(existing.status)) {
+        return {
+          success: false,
+          error: `Only confirmed or processing orders can be marked shipped (this one is ${existing.status})`,
+        };
+      }
+
+      const today = new Date().toISOString().slice(0, 10);
+      // The user's "today" can be a day ahead of UTC
+      const latest = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const shippedAt = details.shippedAt?.trim() || today;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(shippedAt) || Number.isNaN(Date.parse(shippedAt))) {
+        return { success: false, error: 'Enter a valid ship date' };
+      }
+      if (shippedAt > latest) {
+        return { success: false, error: 'Ship date cannot be in the future' };
+      }
+
+      let dateSaved = true;
+      // const { shipSalesOrderAllocationsManually } = await import('./fulfillment-orchestration.service');
+      const shipped = await shipAllocations({
+        salesOrderId: id,
+        orderNumber: existing.orderNumber,
+        userId,
+        requireStock: stockOnly,
+        // Runs after the stock moved; a failure here puts the stock back
+        finish: async () => {
+          const now = new Date().toISOString();
+          const base: Record<string, unknown> = stockOnly
+            ? { updated_at: now, updated_by: userId || null }
+            : { status: 'shipped', updated_at: now, updated_by: userId || null };
+          let { data, error } = await db
+            .from('sales_orders')
+            .update({ ...base, shipped_at: shippedAt, shipped_by: userId || null })
+            .eq('id', id)
+            .eq('status', existing.status) // nobody changed the order meanwhile
+            .select('id');
+          // Migration 177 not run yet: still ship, without the date
+          if (error && /shipped_(at|by)/.test(error.message)) {
+            console.warn('[markShippedManually] shipped_at column missing (run migration 177); status saved without the date');
+            dateSaved = false;
+            ({ data, error } = await db
+              .from('sales_orders')
+              .update(base)
+              .eq('id', id)
+              .eq('status', existing.status)
+              .select('id'));
+          }
+          if (error) {
+            return { success: false, error: error.message };
+          }
+          if (!data || data.length === 0) {
+            return { success: false, error: 'The order was changed by someone else. Refresh and try again.' };
+          }
+          return { success: true };
+        },
+      });
+      if (!shipped.success) {
+        return { success: false, error: shipped.error || 'Could not mark the order shipped' };
+      }
+      const newStatus: OrderStatus = stockOnly ? existing.status : 'shipped';
+
+      const warnings = [...shipped.warnings];
+      if (!dateSaved) {
+        warnings.push('The ship date was not saved (database update pending)');
+      }
+
+      auditService.log({
+        action: 'update', // status_change
+        module: 'sales_orders',
+        entityType: 'SalesOrder',
+        entityId: id,
+        oldData: { status: existing.status },
+        newData: { status: newStatus, shippedAt, shippedUnits: shipped.shippedUnits },
+        userId,
+        description: stockOnly
+          ? `Sales order ${existing.orderNumber} (${existing.status}): ${shipped.shippedUnits} reserved tires taken out of stock, shipped on ${shippedAt}`
+          : `Sales order ${existing.orderNumber} marked shipped manually on ${shippedAt} (${shipped.shippedUnits} tires left stock): ${existing.status} → shipped`,
+      }).catch((err) => {
+        console.error('Failed to log sales order shipped audit:', err);
+      });
+
+      if (!stockOnly) {
+        try {
+          await refreshPipedrivePurchaseHistory(id, [existing.status, 'shipped']);
+          syncPipedriveOrderStatus(id);
+        } catch (error) {
+          console.error('[markShippedManually] Pipedrive update failed (ship kept):', error);
+        }
+      }
+
+      return { success: true, data: { shippedUnits: shipped.shippedUnits, warnings } };
+    } catch (error) {
+      console.error('SalesOrderService.markShippedManually error:', error);
+      return { success: false, error: 'Failed to mark the order shipped' };
     }
   },
 

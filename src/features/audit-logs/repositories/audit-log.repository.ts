@@ -225,6 +225,52 @@ export const auditLogRepository = {
   },
 
   /**
+   * Nov 26 2026: every log of one chain (e.g. a customer sales order with its
+   * quote, allocations, pick tickets, POs and stock moves), oldest first.
+   * Rows match any of: entity_id in entityIds, metadata.<key> = value, or the
+   * description contains the text. Read only; each part is capped.
+   */
+  async findChain(params: {
+    entityIds: string[];
+    metadataMatches?: Array<{ key: string; value: string }>;
+    descriptionContains?: string | null;
+    limit?: number;
+  }): Promise<AuditLog[]> {
+    const limit = params.limit ?? 500;
+    const queries: Array<PromiseLike<{ data: unknown[] | null; error: { message: string } | null }>> = [];
+    const ids = [...new Set(params.entityIds.filter(Boolean))];
+    if (ids.length > 0) {
+      queries.push(db.from('audit_logs').select('*').in('entity_id', ids).order('created_at', { ascending: false }).limit(limit));
+    }
+    for (const match of params.metadataMatches ?? []) {
+      queries.push(
+        db.from('audit_logs').select('*').eq(`metadata->>${match.key}`, match.value).order('created_at', { ascending: false }).limit(limit)
+      );
+    }
+    const text = params.descriptionContains?.trim();
+    if (text) {
+      // Escape LIKE wildcards in the order number
+      const escaped = text.replace(/[\\%_]/g, (c) => `\\${c}`);
+      queries.push(
+        db.from('audit_logs').select('*').ilike('description', `%${escaped}%`).order('created_at', { ascending: false }).limit(limit)
+      );
+    }
+
+    const results = await Promise.all(queries);
+    const byId = new Map<string, DbAuditLog>();
+    for (const result of results) {
+      if (result.error) {
+        throw new Error(`Failed to fetch audit logs: ${result.error.message}`);
+      }
+      for (const row of (result.data ?? []) as DbAuditLog[]) {
+        byId.set(row.id, row);
+      }
+    }
+    const rows = [...byId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at));
+    return (await fillUserNames(rows)).map((row) => this.mapToAuditLog(row));
+  },
+
+  /**
    * Get distinct modules from audit logs (for filter dropdown)
    */
   async getDistinctModules(): Promise<string[]> {

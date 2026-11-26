@@ -7,12 +7,14 @@
  */
 
 import { ColumnDef } from '@tanstack/react-table';
-import { CheckCircle, XCircle, ArrowUpDown, ArrowUp, ArrowDown, FileCheck, FileText, RotateCcw } from 'lucide-react';
+// import { CheckCircle, XCircle, ArrowUpDown, ArrowUp, ArrowDown, FileCheck, FileText, RotateCcw } from 'lucide-react';
+import { CheckCircle, XCircle, ArrowUpDown, ArrowUp, ArrowDown, FileCheck, FileText, RotateCcw, Truck } from 'lucide-react';
 import { Badge } from '@/shared/components/ui/badge';
 import { Checkbox } from '@/shared/components/ui/checkbox';
 import { DataTableRowActions, createCommonRowActions } from '@/shared/components/data-table/DataTableRowActions';
 
 import type { SalesOrderListItem, SOSortColumn, SOSortDirection } from '../types';
+import { MANUAL_SHIP_ORDER_STATUSES, STOCK_ONLY_SHIP_ORDER_STATUSES } from '../types';
 import {
   ORDER_STATUS_LABELS,
   ORDER_STATUS_COLORS,
@@ -35,6 +37,7 @@ interface ColumnOptions {
   onMarkInvoiced?: (order: SalesOrderListItem) => void;
   onReopenInvoiced?: (order: SalesOrderListItem) => void;
   onPackingSlip?: (order: SalesOrderListItem) => void;
+  onMarkShipped?: (order: SalesOrderListItem) => void;
   // Sorting options
   sortColumn?: SOSortColumn | null;
   sortDirection?: SOSortDirection;
@@ -99,7 +102,8 @@ function formatAmount(cents: number, currencyCode: string = 'USD'): string {
 export function getSalesOrdersTableColumns(
   options: ColumnOptions = {}
 ): ColumnDef<SalesOrderListItem>[] {
-  const { onView, onEdit, onDelete, onConfirm, onCancel, onMarkInvoiced, onReopenInvoiced, onPackingSlip, sortColumn, sortDirection, onSortChange } = options;
+  // const { onView, onEdit, onDelete, onConfirm, onCancel, onMarkInvoiced, onReopenInvoiced, onPackingSlip, sortColumn, sortDirection, onSortChange } = options;
+  const { onView, onEdit, onDelete, onConfirm, onCancel, onMarkInvoiced, onReopenInvoiced, onPackingSlip, onMarkShipped, sortColumn, sortDirection, onSortChange } = options;
 
   return [
     // Select Checkbox
@@ -331,6 +335,19 @@ export function getSalesOrdersTableColumns(
             label: 'Confirm Order',
             icon: <CheckCircle className="h-4 w-4" />,
             onClick: () => onConfirm(row.original),
+          });
+        }
+
+        // Manual ship (Ankur, Nov 24 2026 call): same dialog as the order drawer
+        // Shipped / delivered / invoiced orders: status stays, only reserved stock comes out
+        if (
+          onMarkShipped &&
+          (MANUAL_SHIP_ORDER_STATUSES.includes(status) || STOCK_ONLY_SHIP_ORDER_STATUSES.includes(status))
+        ) {
+          statusActions.push({
+            label: 'Mark as Shipped',
+            icon: <Truck className="h-4 w-4" />,
+            onClick: () => onMarkShipped(row.original),
           });
         }
 

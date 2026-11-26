@@ -89,7 +89,7 @@ sudo crontab -e
 
 The full root crontab, with the backup line from `scripts/backup/README.md`:
 ```
-30 6 * * * bash /path/to/partnerwithgdc/scripts/backup/db-backup.sh >/dev/null 2>&1
+0 6 * * * bash /path/to/partnerwithgdc/scripts/backup/db-backup.sh >/dev/null 2>&1
 */5 * * * * bash /path/to/partnerwithgdc/scripts/monitoring/server-health.sh >/dev/null 2>&1
 ```
 

@@ -52,9 +52,10 @@ import {
 } from '@/features/sales-orders';
 import { deleteSalesOrder, confirmSalesOrder, cancelSalesOrder } from '@/features/sales-orders/actions';
 import { MarkInvoicedDialog } from '@/features/sales-orders/components/MarkInvoicedDialog';
+import { MarkShippedDialog } from '@/features/sales-orders/components/MarkShippedDialog';
 import { PdfViewerModal } from '@/shared/components/pdf-viewer';
 import type { SalesOrderListItem, OrderStatus, SalesOrderWithItems, SOSortColumn, SOSortDirection } from '@/features/sales-orders/types';
-import { ORDER_STATUS_LABELS } from '@/features/sales-orders/types';
+import { ORDER_STATUS_LABELS, STOCK_ONLY_SHIP_ORDER_STATUSES } from '@/features/sales-orders/types';
 import { ORDER_SERIES } from '@/shared/lib/global-data';
 
 // ============================================
@@ -290,6 +291,11 @@ export function SalesOrdersPageContent() {
   const handlePackingSlipClick = useCallback((order: SalesOrderListItem) => {
     setPackingSlipOrder(order);
   }, []);
+  // Manual Mark as Shipped / Take Out of Stock from the row menu (Nov 25 2026)
+  const [markShippedOrder, setMarkShippedOrder] = useState<SalesOrderListItem | null>(null);
+  const handleMarkShippedClick = useCallback((order: SalesOrderListItem) => {
+    setMarkShippedOrder(order);
+  }, []);
 
   const handleMarkInvoicedClick = useCallback((order: SalesOrderListItem) => {
     setCloseOutMode('invoice');
@@ -398,6 +404,7 @@ export function SalesOrdersPageContent() {
         onMarkInvoiced={canCloseOut ? handleMarkInvoicedClick : undefined}
         onReopenInvoiced={canCloseOut ? handleReopenInvoicedClick : undefined}
         onPackingSlip={canViewDetail ? handlePackingSlipClick : undefined}
+        onMarkShipped={canEdit ? handleMarkShippedClick : undefined}
         pagination={{
           page: meta.page,
           pageSize: meta.limit,
@@ -483,6 +490,15 @@ export function SalesOrdersPageContent() {
           fileName={`PackingSlip-${packingSlipOrder.orderNumber}.pdf`}
         />
       )}
+
+      {/* Mark as Shipped / Take Out of Stock */}
+      <MarkShippedDialog
+        order={markShippedOrder}
+        stockOnly={!!markShippedOrder && STOCK_ONLY_SHIP_ORDER_STATUSES.includes(markShippedOrder.status)}
+        open={!!markShippedOrder}
+        onOpenChange={(open) => !open && setMarkShippedOrder(null)}
+        onDone={() => refetchOrders()}
+      />
 
       {/* Mark as Invoiced / Reopen */}
       <MarkInvoicedDialog

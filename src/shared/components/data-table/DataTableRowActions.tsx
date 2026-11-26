@@ -84,13 +84,16 @@ export function DataTableRowActions({
           </Button>
         )}
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-[160px]">
+      {/* <DropdownMenuContent align="end" className="w-[160px]"> */}
+      {/* Nov 26 2026: grows to fit long labels ("Mark as Shipped") on one line; 160px stays the minimum */}
+      <DropdownMenuContent align="end" className="w-max min-w-[160px]">
         {actions.map((action, index) => (
           <div key={action.label}>
             <DropdownMenuItem
               onClick={action.onClick}
               disabled={action.disabled}
-              className={action.destructive ? 'text-destructive' : undefined}
+              // className={action.destructive ? 'text-destructive' : undefined}
+              className={action.destructive ? 'whitespace-nowrap text-destructive' : 'whitespace-nowrap'}
             >
               {action.icon && (
                 <span className="mr-2 h-4 w-4">{action.icon}</span>

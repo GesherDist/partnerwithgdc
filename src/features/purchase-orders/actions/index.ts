@@ -30,6 +30,8 @@ interface ActionResult<T = unknown> {
   success: boolean;
   data?: T;
   error?: string;
+  /** Done, but something needs a look (shown as a warning toast) */
+  warning?: string;
 }
 
 // ============================================
@@ -627,8 +629,10 @@ export async function updatePOSupplierStatus(
 export async function updateShipmentLoadStatus(
   poId: string,
   loadStatus: string,
-  shipmentId?: string
-): Promise<ActionResult> {
+  shipmentId?: string,
+  // Nov 25 2026 (Ankur, Nov 24 call): "Delivered" from the PO screen with the delivery date
+  options: { deliveredOn?: string | null } = {}
+): Promise<ActionResult<{ receivedUnits: number }>> {
   const auth = await authorize('purchase_orders.edit');
   if (!auth.ok) {
     return auth.result;
@@ -637,12 +641,54 @@ export async function updateShipmentLoadStatus(
   try {
     const supabase = await createClient();
 
+    // ----------------------------------------
+    // Delivered (Nov 25 2026): PO 50/51 are in transit to Kansas and there is
+    // no live carrier tracking yet. Marking the container delivered here saves
+    // the delivery date on the shipment and the PO (Operations Dashboard), and
+    // puts clear stock POs into their warehouse once, the same way a delivered
+    // container does from the Operations Dashboard / CMA / email.
+    // ----------------------------------------
+    const isDelivered = loadStatus === 'delivered';
+    let deliveredOn: string | null = null;
+    let wasDelivered = false;
+    const { poReceivingService } = await import('@/features/inventory/services/po-receiving.service');
+    if (isDelivered) {
+      deliveredOn = options.deliveredOn?.trim() || new Date().toISOString().slice(0, 10);
+      // The user's "today" can be a day ahead of UTC
+      const latest = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(deliveredOn) || Number.isNaN(Date.parse(deliveredOn))) {
+        return { success: false, error: 'Enter a valid delivery date' };
+      }
+      if (deliveredOn > latest) {
+        return { success: false, error: 'Delivery date cannot be in the future' };
+      }
+      const { data: poRow } = await supabase
+        .from('purchase_orders')
+        .select('status')
+        .eq('id', poId)
+        .maybeSingle();
+      if (!poRow) {
+        return { success: false, error: 'Purchase order not found' };
+      }
+      if (['draft', 'sent', 'cancelled'].includes(poRow.status)) {
+        return { success: false, error: `Purchase order is ${poRow.status}; it must be confirmed before it can be delivered` };
+      }
+      // Read before the update: stock is received only on the change to delivered
+      wasDelivered = await poReceivingService.isPurchaseOrderDelivered(poId);
+      if (!wasDelivered && shipmentId) {
+        wasDelivered = await poReceivingService.isShipmentDelivered(shipmentId);
+      }
+    }
+    // Extra shipment fields for Delivered (none for the other statuses, as before)
+    const deliveredFields: Record<string, unknown> = isDelivered ? { actual_arrival: deliveredOn } : {};
+
     // If we have a shipment ID, update it directly
     if (shipmentId) {
       const { error } = await supabase
         .from('shipments')
         .update({
           load_status: loadStatus,
+          ...deliveredFields,
           updated_at: new Date().toISOString(),
           updated_by: auth.user.id,
         })
@@ -673,6 +719,7 @@ export async function updateShipmentLoadStatus(
           .from('shipments')
           .update({
             load_status: loadStatus,
+            ...deliveredFields,
             updated_at: new Date().toISOString(),
             updated_by: auth.user.id,
           })
@@ -700,6 +747,7 @@ export async function updateShipmentLoadStatus(
             .from('shipments')
             .update({
               load_status: loadStatus,
+              ...deliveredFields,
               updated_at: new Date().toISOString(),
               updated_by: auth.user.id,
             })
@@ -708,12 +756,70 @@ export async function updateShipmentLoadStatus(
       }
     }
 
+    let receivedUnits = 0;
+    let warning: string | undefined;
+    if (isDelivered) {
+      // The PO row too (Operations Dashboard reads load_status / actual_delivery_date there)
+      const { error: poError } = await supabase
+        .from('purchase_orders')
+        .update({
+          load_status: 'delivered',
+          actual_delivery_date: deliveredOn,
+          updated_at: new Date().toISOString(),
+          updated_by: auth.user.id,
+        })
+        .eq('id', poId);
+      if (poError) {
+        console.error('[updateShipmentLoadStatus] PO delivered fields:', poError);
+        warning = 'The shipment is delivered, but the delivery date was not saved on the PO.';
+      }
+
+      // Put the tires into stock once (only on the change to delivered)
+      const before = await poReceivingService.getReceivingInfo(poId);
+      if (!wasDelivered) {
+        await poReceivingService.autoReceiveForPurchaseOrder(poId, auth.user.id);
+      }
+      const after = await poReceivingService.getReceivingInfo(poId);
+      if (before.success && after.success) {
+        const receivedBefore = before.data.items.reduce((sum, item) => sum + item.received, 0);
+        const receivedAfter = after.data.items.reduce((sum, item) => sum + item.received, 0);
+        receivedUnits = Math.max(0, receivedAfter - receivedBefore);
+        // Not received automatically: pre-sold leftovers, no physical warehouse on the PO,
+        // or delivered before. The user picks qty + warehouse with "Receive into Warehouse".
+        const left = after.data.canReceive
+          ? after.data.items.filter((item) => item.isStockItem).reduce((sum, item) => sum + item.suggested, 0)
+          : 0;
+        if (left > 0) {
+          const note = `${left} tires are not in warehouse stock yet. Open the PO and use "Receive into Warehouse" to pick the warehouse.`;
+          warning = warning ? `${warning} ${note}` : note;
+        }
+      }
+
+      const { auditService } = await import('@/shared/lib/audit');
+      auditService.log({
+        action: 'update',
+        module: 'purchase_orders',
+        entityType: 'PurchaseOrder',
+        entityId: poId,
+        newData: { loadStatus: 'delivered', actualDeliveryDate: deliveredOn, receivedUnits },
+        userId: auth.user.id,
+        description: `Container marked delivered from the PO screen on ${deliveredOn}${receivedUnits > 0 ? ` (${receivedUnits} tires received into stock)` : ''}`,
+      }).catch((err) => {
+        console.error('[updateShipmentLoadStatus] audit:', err);
+      });
+
+      revalidatePath('/inventory');
+      revalidatePath('/master-inventory');
+      revalidatePath('/dashboard');
+    }
+
     revalidatePath('/purchase-orders');
     revalidatePath(`/purchase-orders/${poId}`);
     revalidatePath('/dashboard/operations');
     revalidatePath('/operations');
 
-    return { success: true };
+    // return { success: true };
+    return { success: true, data: { receivedUnits }, warning };
   } catch (err) {
     console.error('[updateShipmentLoadStatus] Error:', err);
     return {

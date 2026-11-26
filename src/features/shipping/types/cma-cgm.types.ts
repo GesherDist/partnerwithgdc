@@ -244,7 +244,25 @@ export interface CmaCgmTrackingResult {
   latestEvent?: CmaCgmEvent;
   /** Estimated/planned arrival at the final port (YYYY-MM-DD), when the API provides one */
   estimatedArrival?: string;
+  /**
+   * Nov 26 2026: CMA reuses containers. When the feed only holds a later trip
+   * of the container for another customer (e.g. empty picked up in the US for
+   * an export), our own trip is no longer in it. The status must not change.
+   */
+  otherTrip?: CmaCgmOtherTrip;
   error?: string;
+}
+
+/**
+ * A trip of the container that is not our load (another booking)
+ */
+export interface CmaCgmOtherTrip {
+  /** First actual event of that trip (ISO date-time) */
+  startedAt?: string;
+  /** Where that trip started (location name or UN/LOCODE) */
+  location?: string;
+  /** CMA label of that first event, e.g. "Empty Picked-up at Depot" */
+  label?: string;
 }
 
 /**
