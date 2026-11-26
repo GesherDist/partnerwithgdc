@@ -155,22 +155,33 @@ export async function updateShipment(id: string, data: UpdateShipmentInput) {
 
 export async function trackShipmentNow(
   id: string
-): Promise<{ success: true; message: string } | { success: false; error: string }> {
+  // ): Promise<{ success: true; message: string } | { success: false; error: string }> {
+  // Nov 26 2026: needsConfirm = container reused on another booking (warning, not error)
+): Promise<
+  { success: true; message: string } | { success: false; error: string; needsConfirm?: boolean }
+> {
   const auth = await authorize('shipments.track');
   if (!auth.ok) {return { success: false, error: auth.result.error || 'Not allowed' };}
 
   const { syncShipmentContainer } = await import('@/features/shipping/services');
   const result = await syncShipmentContainer(id);
 
-  if (result.success) {
+  // if (result.success) {
+  // Nov 26 2026: the reused-container case writes the Action Required note, so refresh too
+  if (result.success || result.needsConfirm) {
     revalidatePath('/shipments');
     revalidatePath('/operations');
+  }
+  if (result.success) {
     syncShipmentToPipedrive(id);
   }
 
+  // return result.success
+  //   ? { success: true as const, message: result.message }
+  //   : { success: false as const, error: result.message };
   return result.success
     ? { success: true as const, message: result.message }
-    : { success: false as const, error: result.message };
+    : { success: false as const, error: result.message, needsConfirm: result.needsConfirm };
 }
 
 // ============================================

@@ -5,7 +5,7 @@
  * Replaces manual email-based tracking with direct API calls.
  *
  * API: operation/trackandtrace/v1
- * Auth: API Key (keyId header)
+ * Auth: API Key (keyId header); OAuth2 client_credentials as fallback (Nov 26 2026)
  */
 
 import type {
@@ -47,11 +47,149 @@ function getApiKey(): string | null {
   return process.env.CMA_CGM_API_KEY || null;
 }
 
+// /**
+//  * Check if CMA CGM integration is configured
+//  */
+// export function isCmaCgmConfigured(): boolean {
+//   return !!getApiKey();
+// }
+
 /**
  * Check if CMA CGM integration is configured
+ * Nov 26 2026: API key OR OAuth2 client credentials (either one is enough)
  */
 export function isCmaCgmConfigured(): boolean {
-  return !!getApiKey();
+  return !!getApiKey() || !!getOAuthCredentials();
+}
+
+// ============================================
+// OAUTH2 (Nov 26 2026)
+// ============================================
+// CMA's docs (Quick Start Guide, [API] LOGISTIC TRACKING SERVICE collection)
+// list Track & Trace as a private API: OAuth2 client_credentials, client id +
+// secret sent as HTTP Basic, scope tandtcommercial:read:be. The keyId header
+// works today, so it stays first; OAuth2 is used when keyId is refused
+// (401/403) or when no API key is set. Needs CMA_CGM_CLIENT_ID and
+// CMA_CGM_CLIENT_SECRET from the portal (My Organization -> API application /
+// Client settings). Without them, behaviour is exactly as before.
+
+const CMA_CGM_TOKEN_URL = 'https://auth.cma-cgm.com/as/token.oauth2';
+const CMA_CGM_TOKEN_SCOPE = 'tandtcommercial:read:be';
+
+function getOAuthCredentials(): { clientId: string; clientSecret: string } | null {
+  const clientId = process.env.CMA_CGM_CLIENT_ID;
+  const clientSecret = process.env.CMA_CGM_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    return null;
+  }
+  return { clientId, clientSecret };
+}
+
+/** Token cached in memory until shortly before it expires */
+let cachedToken: { value: string; expiresAt: number } | null = null;
+
+/**
+ * Get an OAuth2 access token (client_credentials). Returns null when the
+ * client credentials are not set or the token request fails.
+ */
+async function getAccessToken(forceRefresh = false): Promise<string | null> {
+  const creds = getOAuthCredentials();
+  if (!creds) {
+    return null;
+  }
+
+  if (!forceRefresh && cachedToken && cachedToken.expiresAt > Date.now()) {
+    return cachedToken.value;
+  }
+
+  try {
+    const basic = Buffer.from(`${creds.clientId}:${creds.clientSecret}`).toString('base64');
+    const response = await fetch(CMA_CGM_TOKEN_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${basic}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Accept: 'application/json',
+      },
+      body: new URLSearchParams({
+        grant_type: 'client_credentials',
+        scope: CMA_CGM_TOKEN_SCOPE,
+      }).toString(),
+      signal: AbortSignal.timeout(CMA_CGM_TIMEOUT),
+    });
+
+    if (!response.ok) {
+      // Never log the body in full - it can echo request details
+      console.error(`[CMA-CGM] OAuth2 token request failed: ${response.status}`);
+      cachedToken = null;
+      return null;
+    }
+
+    const data = (await response.json()) as { access_token?: string; expires_in?: number };
+    if (!data.access_token) {
+      console.error('[CMA-CGM] OAuth2 token response had no access_token');
+      cachedToken = null;
+      return null;
+    }
+
+    // Refresh 60s early; default to 5 minutes if expires_in is missing
+    const lifetimeMs = Math.max((data.expires_in ?? 300) - 60, 30) * 1000;
+    cachedToken = { value: data.access_token, expiresAt: Date.now() + lifetimeMs };
+    return cachedToken.value;
+  } catch (error) {
+    console.error(
+      '[CMA-CGM] OAuth2 token request error:',
+      error instanceof Error ? error.message : error
+    );
+    cachedToken = null;
+    return null;
+  }
+}
+
+/**
+ * Call the Track & Trace API: keyId first, OAuth2 Bearer as fallback.
+ */
+async function fetchCmaCgm(url: string): Promise<Response | null> {
+  const apiKey = getApiKey();
+  let response: Response | null = null;
+
+  if (apiKey) {
+    response = await fetch(url, {
+      method: 'GET',
+      headers: { keyId: apiKey, Accept: 'application/json' },
+      signal: AbortSignal.timeout(CMA_CGM_TIMEOUT),
+    });
+    // Anything except an auth refusal is final (incl. 404 / 5xx)
+    if (response.status !== 401 && response.status !== 403) {
+      return response;
+    }
+    if (!getOAuthCredentials()) {
+      return response; // no fallback configured - keep the original error
+    }
+    console.warn(`[CMA-CGM] keyId refused (${response.status}) - trying OAuth2`);
+  }
+
+  let token = await getAccessToken();
+  if (!token) {
+    return response; // keyId error (if any) is the best we have
+  }
+
+  const callWithToken = (bearer: string) =>
+    fetch(url, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${bearer}`, Accept: 'application/json' },
+      signal: AbortSignal.timeout(CMA_CGM_TIMEOUT),
+    });
+
+  let oauthResponse = await callWithToken(token);
+  if (oauthResponse.status === 401) {
+    // Cached token may have been revoked - get a fresh one once
+    token = await getAccessToken(true);
+    if (token) {
+      oauthResponse = await callWithToken(token);
+    }
+  }
+  return oauthResponse;
 }
 
 // ============================================
@@ -398,9 +536,11 @@ function getEstimatedArrival(events: CmaCgmEvent[]): string | undefined {
 export async function fetchContainerEvents(
   containerNumber: string
 ): Promise<CmaCgmTrackingResult> {
-  const apiKey = getApiKey();
-
-  if (!apiKey) {
+  // const apiKey = getApiKey();
+  //
+  // if (!apiKey) {
+  // Nov 26 2026: API key or OAuth2 client credentials
+  if (!isCmaCgmConfigured()) {
     console.log('[CMA-CGM] API key not configured - skipping tracking');
     return {
       success: false,
@@ -414,14 +554,24 @@ export async function fetchContainerEvents(
 
     console.log(`[CMA-CGM] Fetching events for container: ${containerNumber}`);
 
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        keyId: apiKey,
-        Accept: 'application/json',
-      },
-      signal: AbortSignal.timeout(CMA_CGM_TIMEOUT),
-    });
+    // const response = await fetch(url, {
+    //   method: 'GET',
+    //   headers: {
+    //     keyId: apiKey,
+    //     Accept: 'application/json',
+    //   },
+    //   signal: AbortSignal.timeout(CMA_CGM_TIMEOUT),
+    // });
+    // Nov 26 2026: keyId first, OAuth2 Bearer fallback (see fetchCmaCgm)
+    const response = await fetchCmaCgm(url);
+
+    if (!response) {
+      return {
+        success: false,
+        containerNumber,
+        error: 'CMA CGM OAuth2 token could not be obtained - check CMA_CGM_CLIENT_ID / CMA_CGM_CLIENT_SECRET',
+      };
+    }
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -664,10 +814,26 @@ async function saveOtherTrip(shipmentId: string): Promise<void> {
 }
 
 /** Message for the operations team when the container is on another booking */
+// function otherTripMessage(containerNumber: string, otherTrip: CmaCgmOtherTrip): string {
+//   const when = otherTrip.startedAt ? ` on ${otherTrip.startedAt.slice(0, 10)}` : '';
+//   const where = otherTrip.location ? ` at ${otherTrip.location}` : '';
+//   return `${containerNumber} is now on another CMA booking (${otherTrip.label || 'new trip'}${when}${where}). This load's own trip is no longer in CMA's data - status not changed. Please confirm delivery and mark it Delivered.`;
+// }
+// Nov 26 2026: plainer wording - the old text read like an error
 function otherTripMessage(containerNumber: string, otherTrip: CmaCgmOtherTrip): string {
-  const when = otherTrip.startedAt ? ` on ${otherTrip.startedAt.slice(0, 10)}` : '';
-  const where = otherTrip.location ? ` at ${otherTrip.location}` : '';
-  return `${containerNumber} is now on another CMA booking (${otherTrip.label || 'new trip'}${when}${where}). This load's own trip is no longer in CMA's data - status not changed. Please confirm delivery and mark it Delivered.`;
+  const when = otherTrip.startedAt ? ` on ${formatTripDate(otherTrip.startedAt)}` : '';
+  const where = otherTrip.location ? ` (${otherTrip.location})` : '';
+  return `${containerNumber} was emptied and picked up for another booking${when}${where}, so this load was already unloaded. Status not changed - please confirm the delivery date and mark it Delivered.`;
+}
+
+/** "2026-11-23T09:54:01-06:00" -> "Nov 23, 2026" (date as CMA reported it, no timezone shift) */
+function formatTripDate(iso: string): string {
+  const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
+  if (!y || !m || !d) {
+    return iso.slice(0, 10);
+  }
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${months[m - 1]} ${d}, ${y}`;
 }
 
 // ============================================
@@ -872,7 +1038,9 @@ export async function trackContainer(
  */
 export async function syncShipmentContainer(
   shipmentId: string
-): Promise<{ success: boolean; message: string; trackingStatus?: string }> {
+  // ): Promise<{ success: boolean; message: string; trackingStatus?: string }> {
+  // Nov 26 2026: needsConfirm = container reused, not an error (UI shows a warning)
+): Promise<{ success: boolean; message: string; trackingStatus?: string; needsConfirm?: boolean }> {
   if (!isCmaCgmConfigured()) {
     return { success: false, message: 'CMA CGM API key not configured' };
   }
@@ -899,7 +1067,12 @@ export async function syncShipmentContainer(
   // Nov 26 2026: container reused on another booking - do not touch the status
   if (result.otherTrip) {
     await saveOtherTrip(shipment.id);
-    return { success: false, message: otherTripMessage(shipment.container_number, result.otherTrip) };
+    // return { success: false, message: otherTripMessage(shipment.container_number, result.otherTrip) };
+    return {
+      success: false,
+      needsConfirm: true,
+      message: otherTripMessage(shipment.container_number, result.otherTrip),
+    };
   }
   if (!result.latestEvent) {
     await saveEstimatedArrivalOnly(shipment.id, result.estimatedArrival);

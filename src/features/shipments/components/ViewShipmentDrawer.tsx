@@ -57,6 +57,13 @@ export function ViewShipmentDrawer({
       if (result.success) {
         toast.success('Tracking updated', { description: result.message });
         await refetch();
+      // } else {
+      //   toast.error('Tracking failed', { description: result.error });
+      // }
+      } else if (result.needsConfirm) {
+        // Nov 26 2026: container reused on another booking - not an error, Jenny confirms delivery
+        toast.warning('Please confirm delivery', { description: result.error, duration: 10000 });
+        await refetch(); // shows the Action Required note
       } else {
         toast.error('Tracking failed', { description: result.error });
       }
