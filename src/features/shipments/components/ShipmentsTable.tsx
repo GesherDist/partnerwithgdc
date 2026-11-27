@@ -1,6 +1,8 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+// import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
+import { getShipmentIdsWithCmaApiLogs } from '../actions';
 import {
   useReactTable,
   getCoreRowModel,
@@ -110,6 +112,35 @@ export function ShipmentsTable({
     });
   }, [data, internalSortColumn, internalSortDirection, externalSorting]);
 
+  // Nov 27 2026: rows that have CMA API responses (eye icon only for these)
+  const [cmaLogIds, setCmaLogIds] = useState<Set<string>>(new Set());
+  const rowIdsKey = useMemo(
+    () => data.filter((s) => s.trackingNumber).map((s) => s.id).join(','),
+    [data]
+  );
+  useEffect(() => {
+    if (!rowIdsKey) {
+      setCmaLogIds(new Set());
+      return;
+    }
+    let cancelled = false;
+    getShipmentIdsWithCmaApiLogs(rowIdsKey.split(','))
+      .then((ids) => {
+        if (!cancelled) {
+          setCmaLogIds(new Set(ids));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCmaLogIds(new Set());
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+    // data: look again when the list reloads (e.g. after Track now)
+  }, [rowIdsKey, data]);
+
   const columns = ShipmentsTableColumns({
     onView,
     onEdit,
@@ -118,6 +149,7 @@ export function ShipmentsTable({
     sortColumn,
     sortDirection,
     onSortChange: handleSortChange,
+    cmaLogShipmentIds: cmaLogIds,
   });
 
   const table = useReactTable({

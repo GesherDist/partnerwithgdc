@@ -19,4 +19,6 @@ export {
   trackContainer,
   getActiveContainersForTracking,
   syncShipmentContainer,
+  getCmaCgmApiLogs,
+  getShipmentIdsWithCmaApiLogs,
 } from './cma-cgm-tracking.service';

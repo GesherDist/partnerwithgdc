@@ -13,6 +13,7 @@ import { MoreHorizontal, Eye, Pencil, Trash2, ArrowUpDown, ArrowUp, ArrowDown, R
 import { cn } from '@/shared/lib/utils';
 import type { ShipmentListItem, ShipmentSortColumn, ShipmentSortDirection } from '../types';
 import { LOAD_STATUS_COLORS, LOAD_STATUS_LABELS } from '../types';
+import { CmaApiLogsButton } from './CmaApiLogsButton';
 
 interface ColumnsOptions {
   onView?: (shipment: ShipmentListItem) => void;
@@ -23,6 +24,8 @@ interface ColumnsOptions {
   sortColumn?: ShipmentSortColumn | null;
   sortDirection?: ShipmentSortDirection;
   onSortChange?: (column: ShipmentSortColumn) => void;
+  /** Nov 27 2026: shipments with CMA API responses - eye icon only for these */
+  cmaLogShipmentIds?: Set<string>;
 }
 
 // Sortable header component
@@ -63,7 +66,7 @@ function SortableHeader({
 }
 
 export function ShipmentsTableColumns(options: ColumnsOptions = {}): ColumnDef<ShipmentListItem>[] {
-  const { onView, onEdit, onDelete, onEditStatus, sortColumn, sortDirection, onSortChange } = options;
+  const { onView, onEdit, onDelete, onEditStatus, sortColumn, sortDirection, onSortChange, cmaLogShipmentIds } = options;
 
   return [
     {
@@ -118,9 +121,23 @@ export function ShipmentsTableColumns(options: ColumnsOptions = {}): ColumnDef<S
     {
       accessorKey: 'trackingNumber',
       header: 'Tracking',
+      // cell: ({ row }) => (
+      //   <span className="font-mono text-xs">
+      //     {row.original.trackingNumber || '-'}
+      //   </span>
+      // ),
+      // Nov 27 2026: eye icon opens the CMA CGM API responses for this shipment
       cell: ({ row }) => (
-        <span className="font-mono text-xs">
-          {row.original.trackingNumber || '-'}
+        <span className="inline-flex items-center gap-1">
+          <span className="font-mono text-xs">{row.original.trackingNumber || '-'}</span>
+          {/* {row.original.trackingNumber && ( */}
+          {/* Nov 27 2026: only when there is at least one saved API response */}
+          {row.original.trackingNumber && cmaLogShipmentIds?.has(row.original.id) && (
+            <CmaApiLogsButton
+              shipmentId={row.original.id}
+              containerNumber={row.original.trackingNumber}
+            />
+          )}
         </span>
       ),
     },

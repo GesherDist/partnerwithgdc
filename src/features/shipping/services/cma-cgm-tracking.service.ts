@@ -19,6 +19,9 @@ import type {
   CmaCgmEquipmentEventTypeCode,
   CmaCgmTransportEventTypeCode,
   CmaCgmOtherTrip,
+  CmaCgmApiLog,
+  CmaCgmApiLogSource,
+  CmaCgmApiLogOutcome,
 } from '../types';
 
 import {
@@ -584,10 +587,19 @@ export async function fetchContainerEvents(
       } catch {
         // not JSON
       }
+      // Nov 27 2026: keep CMA's reply for the API log
+      let errorBody: unknown = errorText;
+      try {
+        errorBody = JSON.parse(errorText);
+      } catch {
+        // keep the text
+      }
       return {
         success: false,
         containerNumber,
         error: `API error: ${response.status}${reason ? ` - ${reason}` : ''}`,
+        httpStatus: response.status,
+        rawResponse: errorBody,
       };
     }
 
@@ -600,6 +612,8 @@ export async function fetchContainerEvents(
         containerNumber,
         events: [],
         latestEvent: undefined,
+        httpStatus: response.status,
+        rawResponse: events ?? [],
       };
     }
 
@@ -643,6 +657,9 @@ export async function fetchContainerEvents(
       latestEvent: latestActual,
       estimatedArrival: getEstimatedArrival(ownEvents),
       otherTrip,
+      // Nov 27 2026: full reply (all trips) for the API log
+      httpStatus: response.status,
+      rawResponse: events,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
@@ -837,6 +854,111 @@ function formatTripDate(iso: string): string {
 }
 
 // ============================================
+// API LOG (Nov 27 2026)
+// ============================================
+// Every call made for a shipment is kept with CMA's full reply (table
+// cma_cgm_api_logs, migration 178) so the team can see what CMA returned.
+// Logging never stops tracking: if the table is missing it is just skipped.
+
+const API_LOG_RETENTION_DAYS = 90;
+
+async function logCmaCgmApiCall(params: {
+  shipmentId: string;
+  containerNumber: string;
+  source: CmaCgmApiLogSource;
+  outcome: CmaCgmApiLogOutcome;
+  result: CmaCgmTrackingResult;
+  message?: string;
+}): Promise<void> {
+  try {
+    const raw = params.result.rawResponse;
+    const { error } = await createAdminClient()
+      .from('cma_cgm_api_logs')
+      .insert({
+        shipment_id: params.shipmentId,
+        container_number: params.containerNumber,
+        source: params.source,
+        outcome: params.outcome,
+        http_status: params.result.httpStatus ?? null,
+        message: params.message ?? params.result.error ?? null,
+        event_count: Array.isArray(raw) ? raw.length : null,
+        response: raw === undefined ? null : raw,
+      });
+    if (error) {
+      console.error(`[CMA-CGM] API log not saved for ${params.containerNumber}: ${error.message}`);
+    }
+  } catch (error) {
+    console.error(
+      `[CMA-CGM] API log not saved for ${params.containerNumber}:`,
+      error instanceof Error ? error.message : error
+    );
+  }
+}
+
+/** Delete API logs older than the retention period (run by the daily sync) */
+async function pruneCmaCgmApiLogs(): Promise<void> {
+  try {
+    const cutoff = new Date(Date.now() - API_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    const { error } = await createAdminClient().from('cma_cgm_api_logs').delete().lt('created_at', cutoff);
+    if (error) {
+      console.error(`[CMA-CGM] Old API logs not deleted: ${error.message}`);
+    }
+  } catch (error) {
+    console.error('[CMA-CGM] Old API logs not deleted:', error instanceof Error ? error.message : error);
+  }
+}
+
+/**
+ * Which of these shipments have at least one logged call (eye icon shown only
+ * for them). Returns an empty list if the table is not set up yet.
+ */
+export async function getShipmentIdsWithCmaApiLogs(shipmentIds: string[]): Promise<string[]> {
+  const ids = [...new Set(shipmentIds.filter(Boolean))].slice(0, 200);
+  if (ids.length === 0) {
+    return [];
+  }
+  const found = new Set<string>();
+  // One small query per shipment (limit 1) instead of pulling every log row
+  await Promise.all(
+    ids.map(async (id) => {
+      const { data, error } = await createAdminClient()
+        .from('cma_cgm_api_logs')
+        .select('shipment_id')
+        .eq('shipment_id', id)
+        .limit(1);
+      if (!error && data && data.length > 0) {
+        found.add(id);
+      }
+    })
+  );
+  return [...found];
+}
+
+/** API calls logged for one shipment, newest first */
+export async function getCmaCgmApiLogs(shipmentId: string, limit = 50): Promise<CmaCgmApiLog[]> {
+  const { data, error } = await createAdminClient()
+    .from('cma_cgm_api_logs')
+    .select('id, container_number, source, outcome, http_status, message, event_count, response, created_at')
+    .eq('shipment_id', shipmentId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) {
+    throw new Error(error.message);
+  }
+  return (data || []).map((r) => ({
+    id: r.id,
+    containerNumber: r.container_number,
+    source: r.source as CmaCgmApiLogSource,
+    outcome: r.outcome as CmaCgmApiLogOutcome,
+    httpStatus: r.http_status,
+    message: r.message,
+    eventCount: r.event_count,
+    response: r.response,
+    createdAt: r.created_at,
+  }));
+}
+
+// ============================================
 // CONTAINER SYNC
 // ============================================
 
@@ -926,11 +1048,22 @@ export async function syncAllContainers(): Promise<CmaCgmSyncResult> {
 
       // Fetch events from API
       const result = await fetchContainerEvents(container.containerNumber);
+      // Nov 27 2026: keep every call with CMA's reply
+      const logCall = (outcome: CmaCgmApiLogOutcome, message?: string) =>
+        logCmaCgmApiCall({
+          shipmentId: container.shipmentId,
+          containerNumber: container.containerNumber,
+          source: 'daily_sync',
+          outcome,
+          result,
+          message,
+        });
 
       if (!result.success) {
         console.error(
           `[CMA-CGM] Failed to fetch events for ${container.containerNumber}: ${result.error}`
         );
+        await logCall('error');
         failureCount++;
         errors.push({
           containerNumber: container.containerNumber,
@@ -942,6 +1075,7 @@ export async function syncAllContainers(): Promise<CmaCgmSyncResult> {
       // Nov 26 2026: container reused on another booking - do not touch the status
       if (result.otherTrip) {
         await saveOtherTrip(container.shipmentId);
+        await logCall('other_trip', otherTripMessage(container.containerNumber, result.otherTrip));
         skippedCount++;
         errors.push({
           containerNumber: container.containerNumber,
@@ -954,6 +1088,12 @@ export async function syncAllContainers(): Promise<CmaCgmSyncResult> {
       if (!result.latestEvent) {
         console.log(`[CMA-CGM] No actual events yet for ${container.containerNumber}`);
         await saveEstimatedArrivalOnly(container.shipmentId, result.estimatedArrival);
+        await logCall(
+          'no_events',
+          result.estimatedArrival
+            ? `Booked - no movement yet. Estimated arrival ${result.estimatedArrival}`
+            : 'No actual events yet - status not changed'
+        );
         skippedCount++;
         await new Promise((resolve) => setTimeout(resolve, 1000));
         continue;
@@ -973,8 +1113,13 @@ export async function syncAllContainers(): Promise<CmaCgmSyncResult> {
       );
 
       if (updated) {
+        await logCall(
+          'updated',
+          `${mappedStatus.trackingStatus}: ${mappedStatus.eventDescription}${mappedStatus.location ? ` - ${mappedStatus.location}` : ''}`
+        );
         successCount++;
       } else {
+        await logCall('error', 'Tracking received but the shipment could not be updated');
         failureCount++;
         errors.push({
           containerNumber: container.containerNumber,
@@ -1000,6 +1145,9 @@ export async function syncAllContainers(): Promise<CmaCgmSyncResult> {
   console.log(
     `[CMA-CGM] Sync complete: ${successCount} success, ${failureCount} failed, ${skippedCount} skipped`
   );
+
+  // Nov 27 2026: keep the API log to the last 90 days
+  await pruneCmaCgmApiLogs();
 
   return {
     success: failureCount === 0,
@@ -1037,7 +1185,9 @@ export async function trackContainer(
  * so the operations team does not wait for the daily sync.
  */
 export async function syncShipmentContainer(
-  shipmentId: string
+  shipmentId: string,
+  // Nov 27 2026: for the API log - 'track_now' from the button, 'auto' after a container number is saved
+  source: CmaCgmApiLogSource = 'auto'
   // ): Promise<{ success: boolean; message: string; trackingStatus?: string }> {
   // Nov 26 2026: needsConfirm = container reused, not an error (UI shows a warning)
 ): Promise<{ success: boolean; message: string; trackingStatus?: string; needsConfirm?: boolean }> {
@@ -1061,12 +1211,19 @@ export async function syncShipmentContainer(
   }
 
   const result = await fetchContainerEvents(shipment.container_number);
+  // Nov 27 2026: keep every call with CMA's reply
+  const containerNumber: string = shipment.container_number;
+  const logCall = (outcome: CmaCgmApiLogOutcome, message?: string) =>
+    logCmaCgmApiCall({ shipmentId: shipment.id, containerNumber, source, outcome, result, message });
+
   if (!result.success) {
+    await logCall('error');
     return { success: false, message: result.error || 'CMA CGM tracking failed' };
   }
   // Nov 26 2026: container reused on another booking - do not touch the status
   if (result.otherTrip) {
     await saveOtherTrip(shipment.id);
+    await logCall('other_trip', otherTripMessage(containerNumber, result.otherTrip));
     // return { success: false, message: otherTripMessage(shipment.container_number, result.otherTrip) };
     return {
       success: false,
@@ -1076,12 +1233,17 @@ export async function syncShipmentContainer(
   }
   if (!result.latestEvent) {
     await saveEstimatedArrivalOnly(shipment.id, result.estimatedArrival);
-    return {
-      success: true,
-      message: result.estimatedArrival
-        ? `Booked - no movement yet. Estimated arrival ${result.estimatedArrival}`
-        : `No CMA CGM events yet for ${shipment.container_number}`,
-    };
+    // return {
+    //   success: true,
+    //   message: result.estimatedArrival
+    //     ? `Booked - no movement yet. Estimated arrival ${result.estimatedArrival}`
+    //     : `No CMA CGM events yet for ${shipment.container_number}`,
+    // };
+    const noEventsMessage = result.estimatedArrival
+      ? `Booked - no movement yet. Estimated arrival ${result.estimatedArrival}`
+      : `No CMA CGM events yet for ${shipment.container_number}`;
+    await logCall('no_events', noEventsMessage);
+    return { success: true, message: noEventsMessage };
   }
 
   const mappedStatus = mapCmaCgmEventToStatus(result.latestEvent);
@@ -1092,6 +1254,14 @@ export async function syncShipmentContainer(
     shipment.container_number,
     mappedStatus,
     result.estimatedArrival
+  );
+
+  // Nov 27 2026: API log
+  await logCall(
+    updated ? 'updated' : 'error',
+    updated
+      ? `${mappedStatus.trackingStatus}: ${mappedStatus.eventDescription}${mappedStatus.location ? ` - ${mappedStatus.location}` : ''}`
+      : 'Tracking received but the shipment could not be updated'
   );
 
   return updated

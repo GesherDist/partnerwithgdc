@@ -164,7 +164,9 @@ export async function trackShipmentNow(
   if (!auth.ok) {return { success: false, error: auth.result.error || 'Not allowed' };}
 
   const { syncShipmentContainer } = await import('@/features/shipping/services');
-  const result = await syncShipmentContainer(id);
+  // const result = await syncShipmentContainer(id);
+  // Nov 27 2026: logged as "Track now" in the CMA API log
+  const result = await syncShipmentContainer(id, 'track_now');
 
   // if (result.success) {
   // Nov 26 2026: the reused-container case writes the Action Required note, so refresh too
@@ -182,6 +184,49 @@ export async function trackShipmentNow(
   return result.success
     ? { success: true as const, message: result.message }
     : { success: false as const, error: result.message, needsConfirm: result.needsConfirm };
+}
+
+// ============================================
+// CMA CGM API LOG (Nov 27 2026)
+// ============================================
+
+/**
+ * Every CMA CGM call made for this shipment with CMA's reply, newest first
+ * (eye icon next to the container number).
+ */
+export async function getShipmentCmaApiLogs(id: string): Promise<
+  | { success: true; data: import('@/features/shipping/types').CmaCgmApiLog[] }
+  | { success: false; error: string }
+> {
+  const auth = await authorize('shipments.view_detail');
+  if (!auth.ok) {return { success: false, error: auth.result.error || 'Not allowed' };}
+
+  try {
+    const { getCmaCgmApiLogs } = await import('@/features/shipping/services');
+    return { success: true, data: await getCmaCgmApiLogs(id) };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Could not load the API log';
+    // Table not created yet (migration 178 not run)
+    if (/cma_cgm_api_logs/.test(message)) {
+      return { success: false, error: 'API log table not set up yet - run migration 178_cma_cgm_api_logs.sql' };
+    }
+    return { success: false, error: message };
+  }
+}
+
+/**
+ * Shipments (of the ones on screen) that have at least one CMA API log -
+ * the eye icon is shown only for these.
+ */
+export async function getShipmentIdsWithCmaApiLogs(ids: string[]): Promise<string[]> {
+  const auth = await authorize('shipments.view_module');
+  if (!auth.ok) {return [];}
+  try {
+    const { getShipmentIdsWithCmaApiLogs: lookup } = await import('@/features/shipping/services');
+    return await lookup(ids);
+  } catch {
+    return [];
+  }
 }
 
 // ============================================

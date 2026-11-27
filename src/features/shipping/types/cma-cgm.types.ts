@@ -251,6 +251,27 @@ export interface CmaCgmTrackingResult {
    */
   otherTrip?: CmaCgmOtherTrip;
   error?: string;
+  /** Nov 27 2026: CMA's HTTP status and reply as received (for the API log) */
+  httpStatus?: number;
+  rawResponse?: unknown;
+}
+
+/**
+ * Nov 27 2026: one logged CMA CGM call (table cma_cgm_api_logs)
+ */
+export type CmaCgmApiLogSource = 'daily_sync' | 'track_now' | 'auto';
+export type CmaCgmApiLogOutcome = 'updated' | 'no_events' | 'other_trip' | 'error';
+
+export interface CmaCgmApiLog {
+  id: string;
+  containerNumber: string;
+  source: CmaCgmApiLogSource;
+  outcome: CmaCgmApiLogOutcome;
+  httpStatus: number | null;
+  message: string | null;
+  eventCount: number | null;
+  response: unknown;
+  createdAt: string;
 }
 
 /**
