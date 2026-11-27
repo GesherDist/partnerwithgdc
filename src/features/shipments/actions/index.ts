@@ -195,15 +195,42 @@ export async function trackShipmentNow(
  * (eye icon next to the container number).
  */
 export async function getShipmentCmaApiLogs(id: string): Promise<
-  | { success: true; data: import('@/features/shipping/types').CmaCgmApiLog[] }
+  | {
+      success: true;
+      data: import('@/features/shipping/types').CmaCgmApiLog[];
+      /** Readable summary of the newest reply that has events */
+      summary: import('@/features/shipping/types').CmaJourneySummary | null;
+      summaryFrom: string | null;
+    }
   | { success: false; error: string }
 > {
   const auth = await authorize('shipments.view_detail');
   if (!auth.ok) {return { success: false, error: auth.result.error || 'Not allowed' };}
 
   try {
-    const { getCmaCgmApiLogs } = await import('@/features/shipping/services');
-    return { success: true, data: await getCmaCgmApiLogs(id) };
+    // const { getCmaCgmApiLogs } = await import('@/features/shipping/services');
+    // return { success: true, data: await getCmaCgmApiLogs(id) };
+    const { getCmaCgmApiLogs, summarizeCmaJourney } = await import('@/features/shipping/services');
+    const logs = await getCmaCgmApiLogs(id);
+    // const latest = logs.find((l) => Array.isArray(l.response) && l.response.length > 0);
+    // const summary = latest
+    //   ? summarizeCmaJourney(latest.response as import('@/features/shipping/types').CmaCgmEvent[])
+    //   : null;
+    // return { success: true, data: logs, summary, summaryFrom: latest?.createdAt ?? null };
+    // Nov 27 2026: when the container was reused, show our own (previous) trip
+    // from the newest log that has it, with the reuse notice on top
+    type Ev = import('@/features/shipping/types').CmaCgmEvent;
+    const withEvents = logs.filter((l) => Array.isArray(l.response) && l.response.length > 0);
+    const summaries = withEvents.map((l) => ({ log: l, s: summarizeCmaJourney(l.response as Ev[]) }));
+    const newest = summaries[0];
+    const ownTrip = summaries.find((x) => !x.s.otherTrip && x.s.timeline.length > 0);
+    let summary = newest?.s ?? null;
+    let summaryFrom = newest?.log.createdAt ?? null;
+    if (newest?.s.otherTrip && ownTrip) {
+      summary = { ...ownTrip.s, otherTrip: newest.s.otherTrip };
+      summaryFrom = ownTrip.log.createdAt;
+    }
+    return { success: true, data: logs, summary, summaryFrom };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Could not load the API log';
     // Table not created yet (migration 178 not run)

@@ -21,4 +21,5 @@ export {
   syncShipmentContainer,
   getCmaCgmApiLogs,
   getShipmentIdsWithCmaApiLogs,
+  summarizeCmaJourney,
 } from './cma-cgm-tracking.service';

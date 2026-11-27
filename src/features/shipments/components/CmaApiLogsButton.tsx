@@ -21,8 +21,10 @@ import {
 import { Badge } from '@/shared/components/ui/badge';
 import { Button } from '@/shared/components/ui/button';
 import { cn } from '@/shared/lib/utils';
-import type { CmaCgmApiLog } from '@/features/shipping/types';
+import type { CmaCgmApiLog, CmaJourneySummary } from '@/features/shipping/types';
 import { getShipmentCmaApiLogs } from '../actions';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/components/ui/tabs';
+import { CmaJourneySummaryView } from './CmaJourneySummaryView';
 
 const SOURCE_LABELS: Record<CmaCgmApiLog['source'], string> = {
   daily_sync: 'Daily sync',
@@ -65,6 +67,9 @@ export function CmaApiLogsButton({ shipmentId, containerNumber }: CmaApiLogsButt
   const [logs, setLogs] = useState<CmaCgmApiLog[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+  // Nov 27 2026: readable summary of the newest reply
+  const [summary, setSummary] = useState<CmaJourneySummary | null>(null);
+  const [summaryFrom, setSummaryFrom] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -73,6 +78,8 @@ export function CmaApiLogsButton({ shipmentId, containerNumber }: CmaApiLogsButt
       const result = await getShipmentCmaApiLogs(shipmentId);
       if (result.success) {
         setLogs(result.data);
+        setSummary(result.summary);
+        setSummaryFrom(result.summaryFrom);
         setExpanded(result.data[0]?.id ?? null); // newest call open
       } else {
         setError(result.error);
@@ -100,7 +107,9 @@ export function CmaApiLogsButton({ shipmentId, containerNumber }: CmaApiLogsButt
   };
 
   return (
-    <>
+    // Nov 27 2026: clicks in the dialog portal (incl. the overlay used to close it)
+    // bubble through React to the table row and opened the drawer - stop them here
+    <span className="contents" onClick={(e) => e.stopPropagation()}>
       <Button
         variant="ghost"
         size="icon"
@@ -125,7 +134,30 @@ export function CmaApiLogsButton({ shipmentId, containerNumber }: CmaApiLogsButt
             </DialogDescription>
           </DialogHeader>
 
-          <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+          {/* Nov 27 2026: Summary tab (readable) + Raw responses tab (every call) */}
+          <Tabs defaultValue="summary" className="flex-1 min-h-0 flex flex-col">
+            <TabsList className="w-fit">
+              <TabsTrigger value="summary">Summary</TabsTrigger>
+              <TabsTrigger value="raw">Raw responses{logs ? ` (${logs.length})` : ''}</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="summary" className="flex-1 overflow-y-auto pr-1">
+              {loading && (
+                <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading…
+                </div>
+              )}
+              {!loading && error && <p className="py-6 text-center text-sm text-destructive">{error}</p>}
+              {!loading && !error && summary && <CmaJourneySummaryView summary={summary} summaryFrom={summaryFrom} />}
+              {!loading && !error && logs && !summary && (
+                <p className="py-10 text-center text-sm text-muted-foreground">
+                  No CMA events yet for this container - the summary shows once CMA reports a movement.
+                </p>
+              )}
+            </TabsContent>
+
+            <TabsContent value="raw" className="flex-1 overflow-y-auto pr-1">
+          <div className="space-y-2">
             {loading && (
               <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading…
@@ -202,8 +234,10 @@ export function CmaApiLogsButton({ shipmentId, containerNumber }: CmaApiLogsButt
                 );
               })}
           </div>
+            </TabsContent>
+          </Tabs>
         </DialogContent>
       </Dialog>
-    </>
+    </span>
   );
 }

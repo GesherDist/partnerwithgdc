@@ -22,6 +22,8 @@ import type {
   CmaCgmApiLog,
   CmaCgmApiLogSource,
   CmaCgmApiLogOutcome,
+  CmaJourneyPoint,
+  CmaJourneySummary,
 } from '../types';
 
 import {
@@ -537,7 +539,9 @@ function getEstimatedArrival(events: CmaCgmEvent[]): string | undefined {
  * Fetch tracking events from CMA CGM API
  */
 export async function fetchContainerEvents(
-  containerNumber: string
+  containerNumber: string,
+  // Nov 27 2026: ISO date-time - CMA returns the container's last trip before this date
+  before?: string
 ): Promise<CmaCgmTrackingResult> {
   // const apiKey = getApiKey();
   //
@@ -553,7 +557,10 @@ export async function fetchContainerEvents(
   }
 
   try {
-    const url = `${CMA_CGM_BASE_URL}/events?equipmentReference=${encodeURIComponent(containerNumber)}`;
+    // const url = `${CMA_CGM_BASE_URL}/events?equipmentReference=${encodeURIComponent(containerNumber)}`;
+    const url =
+      `${CMA_CGM_BASE_URL}/events?equipmentReference=${encodeURIComponent(containerNumber)}` +
+      (before ? `&eventDateTime=${encodeURIComponent(before)}` : '');
 
     console.log(`[CMA-CGM] Fetching events for container: ${containerNumber}`);
 
@@ -843,6 +850,80 @@ function otherTripMessage(containerNumber: string, otherTrip: CmaCgmOtherTrip): 
   return `${containerNumber} was emptied and picked up for another booking${when}${where}, so this load was already unloaded. Status not changed - please confirm the delivery date and mark it Delivered.`;
 }
 
+// ============================================
+// PREVIOUS TRIP OF A REUSED CONTAINER (Nov 27 2026)
+// ============================================
+// CMA's eventDateTime filter returns the container's last trip before a date.
+// Asking for the trip before the newest trip's first event gives our load's
+// own journey back (vessel, ports, gate out to consignee, empty return).
+
+/** Our load's trip, fetched again from CMA when the container was reused; null if not found */
+async function fetchPreviousTrip(
+  containerNumber: string,
+  current: CmaCgmTrackingResult
+): Promise<CmaCgmTrackingResult | null> {
+  const raw = Array.isArray(current.rawResponse) ? (current.rawResponse as CmaCgmEvent[]) : [];
+  const times = raw.map(eventTime).filter((t) => Number.isFinite(t));
+  if (times.length === 0) {
+    return null;
+  }
+  // const before = new Date(Math.min(...times) - 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  // await new Promise((resolve) => setTimeout(resolve, 1100)); // CMA rate limit
+  // const previous = await fetchContainerEvents(containerNumber, before);
+  // if (!previous.success || previous.otherTrip || !previous.latestEvent) {
+  //   return null;
+  // }
+  // return previous;
+  // CMA does not always cut exactly at the date given, so step further back
+  const earliest = Math.min(...times);
+  const DAY = 24 * 60 * 60 * 1000;
+  for (const back of [1000, DAY, 7 * DAY]) {
+    const before = new Date(earliest - back).toISOString().replace(/\.\d{3}Z$/, 'Z');
+    await new Promise((resolve) => setTimeout(resolve, 1100)); // CMA rate limit
+    const previous = await fetchContainerEvents(containerNumber, before);
+    if (!previous.success) {
+      return null;
+    }
+    if (!previous.otherTrip && previous.latestEvent) {
+      return previous;
+    }
+  }
+  return null;
+}
+
+/** e.g. "Gate out to Consignee on Nov 19, 2026 (KANSAS CITY, KS), empty returned on Nov 23, 2026" */
+function previousTripFacts(previous: CmaCgmTrackingResult): string {
+  const events = previous.events || [];
+  const gateOut = events.find(
+    (e) =>
+      e.eventClassifierCode === 'ACT' &&
+      isEquipmentEvent(e) &&
+      e.equipmentEventTypeCode === 'GTOT' &&
+      e.emptyIndicatorCode === 'LADEN' &&
+      eventPhase(e) === 'import'
+  );
+  const emptyBack = events.find(
+    (e) => e.eventClassifierCode === 'ACT' && isEquipmentEvent(e) && e.emptyIndicatorCode === 'EMPTY' && eventPhase(e) === 'import'
+  );
+  const parts: string[] = [];
+  if (gateOut) {
+    const place = eventPlace(gateOut);
+    parts.push(
+      `${gateOut.carrierSpecificData?.internalEventLabel || 'Gate out'} on ${formatTripDate(gateOut.eventDateTime || gateOut.eventCreatedDateTime)}${place ? ` (${place})` : ''}`
+    );
+  }
+  if (emptyBack) {
+    parts.push(`empty returned on ${formatTripDate(emptyBack.eventDateTime || emptyBack.eventCreatedDateTime)}`);
+  }
+  if (parts.length === 0 && previous.latestEvent) {
+    const e = previous.latestEvent;
+    parts.push(
+      `${e.carrierSpecificData?.internalEventLabel || 'last event'} on ${formatTripDate(e.eventDateTime || e.eventCreatedDateTime)}`
+    );
+  }
+  return parts.join(', ');
+}
+
 /** "2026-11-23T09:54:01-06:00" -> "Nov 23, 2026" (date as CMA reported it, no timezone shift) */
 function formatTripDate(iso: string): string {
   const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
@@ -906,6 +987,189 @@ async function pruneCmaCgmApiLogs(): Promise<void> {
   } catch (error) {
     console.error('[CMA-CGM] Old API logs not deleted:', error instanceof Error ? error.message : error);
   }
+}
+
+// ============================================
+// JOURNEY SUMMARY (Nov 27 2026)
+// ============================================
+// Turns one CMA reply into what people want to read: where the container is,
+// vessel / ports, transit days, delays against CMA's plan, time spent at each
+// place, and the timeline. Only our own trip is used (reused containers).
+
+const ISO_CONTAINER_TYPES: Record<string, string> = {
+  '22G1': "20' Standard",
+  '42G1': "40' Standard",
+  '45G1': "40' High Cube",
+  '22R1': "20' Reefer",
+  '45R1': "40' High Cube Reefer",
+  L5G1: "45' High Cube",
+};
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function eventTime(event: CmaCgmEvent): number {
+  return new Date(event.eventDateTime || event.eventCreatedDateTime).getTime();
+}
+
+function eventLocation(event: CmaCgmEvent) {
+  return isEquipmentEvent(event)
+    ? event.eventLocation || event.transportCall?.location
+    : event.transportCall?.location;
+}
+
+function toJourneyPoint(event: CmaCgmEvent): CmaJourneyPoint {
+  const loc = eventLocation(event);
+  const a = loc?.address;
+  const address = [a?.street, a?.city, a?.postCode, a?.country].filter(Boolean).join(', ');
+  return {
+    date: event.eventDateTime || event.eventCreatedDateTime,
+    label: event.carrierSpecificData?.internalEventLabel,
+    place: eventPlace(event),
+    facility: a?.name,
+    address: address || undefined,
+    mode: event.transportCall?.modeOfTransport,
+    laden: isEquipmentEvent(event) ? event.emptyIndicatorCode : undefined,
+    latitude: loc?.latitude,
+    longitude: loc?.longitude,
+  };
+}
+
+function daysBetween(fromMs: number, toMs: number): number {
+  return Math.round(((toMs - fromMs) / DAY_MS) * 10) / 10;
+}
+
+export function summarizeCmaJourney(rawEvents: CmaCgmEvent[]): CmaJourneySummary {
+  const empty: CmaJourneySummary = { delays: [], dwell: [], timeline: [] };
+  if (!Array.isArray(rawEvents) || rawEvents.length === 0) {
+    return empty;
+  }
+
+  const sortedDesc = [...rawEvents].sort((a, b) => eventTime(b) - eventTime(a));
+  const { ownEvents, otherTrip } = selectOwnTrip(sortedDesc);
+  if (otherTrip) {
+    return { ...empty, otherTrip };
+  }
+
+  const isAct = (e: CmaCgmEvent) => e.eventClassifierCode === 'ACT';
+  const isPlan = (e: CmaCgmEvent) => e.eventClassifierCode === 'PLN' || e.eventClassifierCode === 'EST';
+  const acts = ownEvents.filter(isAct).sort((a, b) => eventTime(a) - eventTime(b));
+  const locType = (e: CmaCgmEvent) => e.carrierSpecificData?.shipmentLocationType;
+  const transportCode = (e: CmaCgmEvent) => (isTransportEvent(e) ? e.transportEventTypeCode : undefined);
+
+  // Vessel / voyage / service (newest event that has them)
+  const withVessel = ownEvents.find((e) => e.transportCall?.vessel?.vesselName);
+  const withService = ownEvents.find((e) => e.transportCall?.carrierServiceCode);
+  const vessel = withVessel
+    ? {
+        name: withVessel.transportCall?.vessel?.vesselName,
+        imo: withVessel.transportCall?.vessel?.vesselIMONumber,
+        voyage:
+          withVessel.transportCall?.importVoyageNumber ||
+          withVessel.transportCall?.exportVoyageNumber ||
+          withVessel.carrierSpecificData?.bookingExportVoyageReference,
+        service: withService?.transportCall?.carrierServiceCode,
+      }
+    : undefined;
+
+  // Ports: POL departure / POD arrival (actual, and CMA's first plan)
+  const firstPlan = (list: CmaCgmEvent[]) =>
+    [...list].sort(
+      (a, b) => new Date(a.eventCreatedDateTime).getTime() - new Date(b.eventCreatedDateTime).getTime()
+    )[0];
+  const polEvents = ownEvents.filter((e) => locType(e) === 'POL' && transportCode(e) === 'DEPA');
+  const podEvents = ownEvents.filter((e) => locType(e) === 'POD' && transportCode(e) === 'ARRI');
+  const polAct = polEvents.find(isAct);
+  const podAct = podEvents.find(isAct);
+  const polPlan = firstPlan(polEvents.filter(isPlan));
+  const podPlan = firstPlan(podEvents.filter(isPlan));
+  const portOfLoading =
+    polEvents.length > 0
+      ? { place: eventPlace(polEvents[0]!), departedAt: polAct?.eventDateTime, plannedDeparture: polPlan?.eventDateTime }
+      : undefined;
+  const portOfDischarge =
+    podEvents.length > 0
+      ? { place: eventPlace(podEvents[0]!), arrivedAt: podAct?.eventDateTime, plannedArrival: podPlan?.eventDateTime }
+      : undefined;
+
+  // Progress: legs done out of the legs CMA planned
+  const total = Math.max(0, ...ownEvents.map((e) => e.carrierSpecificData?.transportCallSequenceTotal ?? 0));
+  const leg = Math.max(0, ...acts.map((e) => e.transportCall?.transportCallSequenceNumber ?? 0));
+  const progress = total > 0 && leg > 0 ? { leg, total } : undefined;
+
+  // Delays: each actual arrival/departure against CMA's first plan for the same move
+  const delays: CmaJourneySummary['delays'] = [];
+  for (const act of acts) {
+    const code = transportCode(act);
+    if (!code || !act.eventDateTime) {
+      continue;
+    }
+    const plans = ownEvents.filter(
+      (e) =>
+        isPlan(e) &&
+        transportCode(e) === code &&
+        eventLocationCode(e) === eventLocationCode(act) &&
+        e.transportCall?.modeOfTransport === act.transportCall?.modeOfTransport &&
+        e.eventDateTime
+    );
+    const plan = firstPlan(plans);
+    if (!plan?.eventDateTime) {
+      continue;
+    }
+    const days = daysBetween(new Date(plan.eventDateTime).getTime(), new Date(act.eventDateTime).getTime());
+    if (Math.abs(days) >= 1) {
+      delays.push({
+        label: act.carrierSpecificData?.internalEventLabel || code,
+        place: eventPlace(act),
+        planned: plan.eventDateTime,
+        actual: act.eventDateTime,
+        days,
+      });
+    }
+  }
+
+  // Dwell: consecutive actual events at the same place
+  const dwell: CmaJourneySummary['dwell'] = [];
+  let groupStart = 0;
+  for (let i = 1; i <= acts.length; i++) {
+    const prev = acts[i - 1]!;
+    const cur = acts[i];
+    if (cur && eventLocationCode(cur) === eventLocationCode(prev)) {
+      continue;
+    }
+    const first = acts[groupStart]!;
+    const days = daysBetween(eventTime(first), eventTime(prev));
+    if (i - groupStart >= 2 && days >= 0.5) {
+      dwell.push({
+        place: eventPlace(first) || eventLocationCode(first) || '-',
+        from: first.eventDateTime || first.eventCreatedDateTime,
+        to: prev.eventDateTime || prev.eventCreatedDateTime,
+        days,
+      });
+    }
+    groupStart = i;
+  }
+
+  const firstAct = acts[0];
+  const lastAct = acts[acts.length - 1];
+  const isoCode = acts.map((e) => (isEquipmentEvent(e) ? e.ISOEquipmentCode : undefined)).find(Boolean);
+
+  return {
+    current: lastAct ? toJourneyPoint(lastAct) : undefined,
+    vessel,
+    portOfLoading,
+    portOfDischarge,
+    progress,
+    oceanDays:
+      polAct?.eventDateTime && podAct?.eventDateTime
+        ? daysBetween(eventTime(polAct), eventTime(podAct))
+        : undefined,
+    totalDays: firstAct && lastAct && firstAct !== lastAct ? daysBetween(eventTime(firstAct), eventTime(lastAct)) : undefined,
+    containerType: isoCode ? ISO_CONTAINER_TYPES[isoCode] || isoCode : undefined,
+    estimatedArrival: getEstimatedArrival(sortedDesc.filter((e) => ownEvents.includes(e))),
+    delays,
+    dwell,
+    timeline: acts.map(toJourneyPoint),
+  };
 }
 
 /**
@@ -1076,10 +1340,26 @@ export async function syncAllContainers(): Promise<CmaCgmSyncResult> {
       if (result.otherTrip) {
         await saveOtherTrip(container.shipmentId);
         await logCall('other_trip', otherTripMessage(container.containerNumber, result.otherTrip));
+        // Nov 27 2026: fetch and log our load's own (previous) trip for the eye-icon summary
+        const previous = await fetchPreviousTrip(container.containerNumber, result);
+        const facts = previous ? previousTripFacts(previous) : '';
+        if (previous) {
+          await logCmaCgmApiCall({
+            shipmentId: container.shipmentId,
+            containerNumber: container.containerNumber,
+            source: 'daily_sync',
+            outcome: 'other_trip',
+            result: previous,
+            message: `This load's trip (before reuse): ${facts}`,
+          });
+        }
         skippedCount++;
         errors.push({
           containerNumber: container.containerNumber,
-          error: otherTripMessage(container.containerNumber, result.otherTrip),
+          // error: otherTripMessage(container.containerNumber, result.otherTrip),
+          error:
+            otherTripMessage(container.containerNumber, result.otherTrip) +
+            (facts ? ` CMA's earlier trip: ${facts}.` : ''),
         });
         await new Promise((resolve) => setTimeout(resolve, 1000));
         continue;
@@ -1224,11 +1504,25 @@ export async function syncShipmentContainer(
   if (result.otherTrip) {
     await saveOtherTrip(shipment.id);
     await logCall('other_trip', otherTripMessage(containerNumber, result.otherTrip));
+    // Nov 27 2026: fetch and log our load's own (previous) trip for the eye-icon summary
+    const previous = await fetchPreviousTrip(containerNumber, result);
+    const facts = previous ? previousTripFacts(previous) : '';
+    if (previous) {
+      await logCmaCgmApiCall({
+        shipmentId: shipment.id,
+        containerNumber,
+        source,
+        outcome: 'other_trip',
+        result: previous,
+        message: `This load's trip (before reuse): ${facts}`,
+      });
+    }
     // return { success: false, message: otherTripMessage(shipment.container_number, result.otherTrip) };
     return {
       success: false,
       needsConfirm: true,
-      message: otherTripMessage(shipment.container_number, result.otherTrip),
+      // message: otherTripMessage(shipment.container_number, result.otherTrip),
+      message: otherTripMessage(containerNumber, result.otherTrip) + (facts ? ` CMA's earlier trip: ${facts}.` : ''),
     };
   }
   if (!result.latestEvent) {

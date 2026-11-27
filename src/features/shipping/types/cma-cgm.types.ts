@@ -257,6 +257,41 @@ export interface CmaCgmTrackingResult {
 }
 
 /**
+ * Nov 27 2026: readable summary of one CMA reply (eye icon dialog).
+ * Dates are kept as CMA sent them (local time of the place, with offset).
+ */
+export interface CmaJourneyPoint {
+  date?: string;
+  label?: string;
+  place?: string;
+  facility?: string;
+  address?: string;
+  mode?: string;
+  laden?: string;
+  latitude?: string;
+  longitude?: string;
+}
+
+export interface CmaJourneySummary {
+  /** Set when the reply only holds another booking's trip */
+  otherTrip?: CmaCgmOtherTrip;
+  current?: CmaJourneyPoint;
+  vessel?: { name?: string; imo?: string; voyage?: string; service?: string };
+  portOfLoading?: { place?: string; departedAt?: string; plannedDeparture?: string };
+  portOfDischarge?: { place?: string; arrivedAt?: string; plannedArrival?: string };
+  progress?: { leg: number; total: number };
+  oceanDays?: number;
+  totalDays?: number;
+  containerType?: string;
+  estimatedArrival?: string;
+  /** Actual vs CMA's first plan for the same move (positive = late) */
+  delays: Array<{ label: string; place?: string; planned: string; actual: string; days: number }>;
+  /** Time spent at one place between the first and last actual event there */
+  dwell: Array<{ place: string; from: string; to: string; days: number }>;
+  timeline: CmaJourneyPoint[];
+}
+
+/**
  * Nov 27 2026: one logged CMA CGM call (table cma_cgm_api_logs)
  */
 export type CmaCgmApiLogSource = 'daily_sync' | 'track_now' | 'auto';
