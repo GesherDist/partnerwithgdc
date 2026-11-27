@@ -10,7 +10,8 @@
 #   backup  - last good DB backup newer than BACKUP_MAX_AGE_HOURS
 #
 # Sends ONE email when a problem starts, a reminder every ALERT_REPEAT_HOURS
-# while it lasts, and a "recovered" email when it is fixed. No spam every 5 min.
+# while it lasts. No spam every 5 min. (Nov 27 2026: no email on recovery -
+# it is only logged; a problem mail still lists anything recovered meanwhile.)
 #
 # Read-only: it changes nothing on the server except its own state files.
 # Config: read from the app's own .env (SMTP_*, SUPPORT_EMAIL,
@@ -230,7 +231,10 @@ check_backup
 # ----------------------------------------------------------------------------
 # One email per run, only when something changed
 # ----------------------------------------------------------------------------
-if (( ${#NEW_PROBLEMS[@]} + ${#REMINDERS[@]} + ${#RECOVERED[@]} )); then
+# if (( ${#NEW_PROBLEMS[@]} + ${#REMINDERS[@]} + ${#RECOVERED[@]} )); then
+# Nov 27 2026: email only for problems (new or still open). A recovery alone
+# sends nothing - it is written to the monitor log only.
+if (( ${#NEW_PROBLEMS[@]} + ${#REMINDERS[@]} )); then
   body="Server: $SERVER_NAME
 Time:   $(date '+%Y-%m-%d %H:%M:%S %Z')
 "

@@ -52,7 +52,7 @@ At https://betterstack.com/uptime, create a monitor of type "URL becomes unavail
 | cpu | The 5-minute load average is too high, as a share of the CPU cores | 90 % |
 | backup | `last-success.txt` from the DB backup is too old | 30 hours |
 
-It sends one email when a problem starts and a reminder every 6 hours while the problem lasts. It sends a **RECOVERED** email when the problem is fixed. It does not send an email every 5 minutes.
+It sends one email when a problem starts and a reminder every 6 hours while the problem lasts. It does not email when the problem is fixed (Nov 27 2026); the recovery is written to the monitor log only. It does not send an email every 5 minutes.
 
 ### Setup (one time, on the server)
 
@@ -74,9 +74,9 @@ sudo bash scripts/monitoring/server-health.sh
 sudo tail -n 20 /var/lib/gesher-monitor/monitor-$(date +%Y-%m).log
 ```
 
-On the first run, `backup` is reported as a problem if no backup has run yet. This is expected: it shows that alerts work. You get one email. When the first backup runs, a RECOVERED email follows.
+On the first run, `backup` is reported as a problem if no backup has run yet. This is expected: it shows that alerts work. You get one email. When the first backup runs, the recovery is logged (no email).
 
-To force a test alert, set `DISK_WARN_PCT=1` in the config and run the script once. You get a "disk" PROBLEM email. Set it back to 80 and run it again. You get a RECOVERED email.
+To force a test alert, set `DISK_WARN_PCT=1` in the config and run the script once. You get a "disk" PROBLEM email. Set it back to 80 and run it again. No email is sent; the monitor log shows RECOVERED.
 
 ### Cron (every 5 minutes)
 
