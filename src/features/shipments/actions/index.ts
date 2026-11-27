@@ -201,6 +201,8 @@ export async function getShipmentCmaApiLogs(id: string): Promise<
       /** Readable summary of the newest reply that has events */
       summary: import('@/features/shipping/types').CmaJourneySummary | null;
       summaryFrom: string | null;
+      /** Nov 27 2026: why there is no log yet (only when there are no logs) */
+      noLogReason?: { title: string; detail: string } | null;
     }
   | { success: false; error: string }
 > {
@@ -230,7 +232,13 @@ export async function getShipmentCmaApiLogs(id: string): Promise<
       summary = { ...ownTrip.s, otherTrip: newest.s.otherTrip };
       summaryFrom = ownTrip.log.createdAt;
     }
-    return { success: true, data: logs, summary, summaryFrom };
+    // return { success: true, data: logs, summary, summaryFrom };
+    let noLogReason: { title: string; detail: string } | null = null;
+    if (logs.length === 0) {
+      const { getCmaNoLogReason } = await import('@/features/shipping/services');
+      noLogReason = await getCmaNoLogReason(id);
+    }
+    return { success: true, data: logs, summary, summaryFrom, noLogReason };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Could not load the API log';
     // Table not created yet (migration 178 not run)

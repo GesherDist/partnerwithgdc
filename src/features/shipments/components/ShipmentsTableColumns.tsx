@@ -132,10 +132,18 @@ export function ShipmentsTableColumns(options: ColumnsOptions = {}): ColumnDef<S
           <span className="font-mono text-xs">{row.original.trackingNumber || '-'}</span>
           {/* {row.original.trackingNumber && ( */}
           {/* Nov 27 2026: only when there is at least one saved API response */}
-          {row.original.trackingNumber && cmaLogShipmentIds?.has(row.original.id) && (
+          {/* {row.original.trackingNumber && cmaLogShipmentIds?.has(row.original.id) && (
             <CmaApiLogsButton
               shipmentId={row.original.id}
               containerNumber={row.original.trackingNumber}
+            />
+          )} */}
+          {/* Nov 27 2026: always shown with a number; faded when no call is logged - the dialog says why */}
+          {row.original.trackingNumber && (
+            <CmaApiLogsButton
+              shipmentId={row.original.id}
+              containerNumber={row.original.trackingNumber}
+              hasLogs={cmaLogShipmentIds?.has(row.original.id) ?? false}
             />
           )}
         </span>

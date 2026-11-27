@@ -22,4 +22,5 @@ export {
   getCmaCgmApiLogs,
   getShipmentIdsWithCmaApiLogs,
   summarizeCmaJourney,
+  getCmaNoLogReason,
 } from './cma-cgm-tracking.service';

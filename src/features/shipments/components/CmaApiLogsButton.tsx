@@ -56,12 +56,24 @@ function formatDateTime(iso: string): string {
   });
 }
 
+/** Nov 27 2026: why there is no CMA call for this shipment */
+function NoLogReasonBox({ reason }: { reason: { title: string; detail: string } }) {
+  return (
+    <div className="my-4 rounded-md border bg-muted/30 p-4 text-sm">
+      <p className="font-medium">{reason.title}</p>
+      <p className="mt-1 text-muted-foreground">{reason.detail}</p>
+    </div>
+  );
+}
+
 interface CmaApiLogsButtonProps {
   shipmentId: string;
   containerNumber: string;
+  /** Nov 27 2026: false = no call logged yet - icon shown faded, dialog explains why */
+  hasLogs?: boolean;
 }
 
-export function CmaApiLogsButton({ shipmentId, containerNumber }: CmaApiLogsButtonProps) {
+export function CmaApiLogsButton({ shipmentId, containerNumber, hasLogs = true }: CmaApiLogsButtonProps) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [logs, setLogs] = useState<CmaCgmApiLog[] | null>(null);
@@ -70,6 +82,7 @@ export function CmaApiLogsButton({ shipmentId, containerNumber }: CmaApiLogsButt
   // Nov 27 2026: readable summary of the newest reply
   const [summary, setSummary] = useState<CmaJourneySummary | null>(null);
   const [summaryFrom, setSummaryFrom] = useState<string | null>(null);
+  const [noLogReason, setNoLogReason] = useState<{ title: string; detail: string } | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -80,6 +93,7 @@ export function CmaApiLogsButton({ shipmentId, containerNumber }: CmaApiLogsButt
         setLogs(result.data);
         setSummary(result.summary);
         setSummaryFrom(result.summaryFrom);
+        setNoLogReason(result.noLogReason ?? null);
         setExpanded(result.data[0]?.id ?? null); // newest call open
       } else {
         setError(result.error);
@@ -113,9 +127,11 @@ export function CmaApiLogsButton({ shipmentId, containerNumber }: CmaApiLogsButt
       <Button
         variant="ghost"
         size="icon"
-        className="h-6 w-6 text-muted-foreground hover:text-primary"
+        // className="h-6 w-6 text-muted-foreground hover:text-primary"
+        className={cn('h-6 w-6 hover:text-primary', hasLogs ? 'text-muted-foreground' : 'text-muted-foreground/40')}
         onClick={handleOpen}
-        title="View CMA CGM API responses"
+        // title="View CMA CGM API responses"
+        title={hasLogs ? 'View CMA CGM API responses' : 'No CMA CGM call yet - click to see why'}
         aria-label={`View CMA CGM API responses for ${containerNumber}`}
       >
         <Eye className="h-3.5 w-3.5" />
@@ -149,7 +165,10 @@ export function CmaApiLogsButton({ shipmentId, containerNumber }: CmaApiLogsButt
               )}
               {!loading && error && <p className="py-6 text-center text-sm text-destructive">{error}</p>}
               {!loading && !error && summary && <CmaJourneySummaryView summary={summary} summaryFrom={summaryFrom} />}
-              {!loading && !error && logs && !summary && (
+              {!loading && !error && logs && logs.length === 0 && noLogReason && (
+                <NoLogReasonBox reason={noLogReason} />
+              )}
+              {!loading && !error && logs && logs.length > 0 && !summary && (
                 <p className="py-10 text-center text-sm text-muted-foreground">
                   No CMA events yet for this container - the summary shows once CMA reports a movement.
                 </p>
@@ -168,11 +187,21 @@ export function CmaApiLogsButton({ shipmentId, containerNumber }: CmaApiLogsButt
               <p className="py-6 text-center text-sm text-destructive">{error}</p>
             )}
 
-            {!loading && !error && logs && logs.length === 0 && (
+            {/* {!loading && !error && logs && logs.length === 0 && (
               <p className="py-10 text-center text-sm text-muted-foreground">
                 No CMA CGM calls logged yet for this shipment. Calls are logged from the daily sync,
                 Track now, and when a container number is saved.
               </p>
+            )} */}
+            {!loading && !error && logs && logs.length === 0 && (
+              noLogReason ? (
+                <NoLogReasonBox reason={noLogReason} />
+              ) : (
+                <p className="py-10 text-center text-sm text-muted-foreground">
+                  No CMA CGM calls logged yet for this shipment. Calls are logged from the daily sync,
+                  Track now, and when a container number is saved.
+                </p>
+              )
             )}
 
             {!loading &&

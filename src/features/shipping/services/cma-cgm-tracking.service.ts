@@ -1222,6 +1222,64 @@ export async function getCmaCgmApiLogs(shipmentId: string, limit = 50): Promise<
   }));
 }
 
+/** API logging started on this day; older syncs left no log */
+const API_LOG_START = '2026-11-27';
+
+/**
+ * Nov 27 2026: why a shipment has no CMA API log yet (eye-icon dialog).
+ * Mirrors the rules of getActiveContainersForTracking / syncShipmentContainer.
+ */
+export async function getCmaNoLogReason(shipmentId: string): Promise<{ title: string; detail: string }> {
+  const { data: s, error } = await createAdminClient()
+    .from('shipments')
+    .select('container_number, tracking_number, tracking_status, status, actual_arrival, cma_cgm_last_sync, deleted_at')
+    .eq('id', shipmentId)
+    .maybeSingle();
+
+  if (error || !s) {
+    return { title: 'Shipment not found', detail: 'This shipment could not be read.' };
+  }
+  if (s.deleted_at) {
+    return { title: 'Shipment deleted', detail: 'Deleted shipments are not tracked.' };
+  }
+  if (!s.container_number) {
+    return {
+      title: 'No container number',
+      detail: s.tracking_number
+        ? `CMA tracking uses the Container Number field, which is empty. "${s.tracking_number}" is only in the tracking number. Add it as the container number to start tracking.`
+        : 'Add a container number to start CMA tracking.',
+    };
+  }
+  if (!isCmaCgmConfigured()) {
+    return { title: 'CMA CGM API not set up', detail: 'The CMA CGM API key is missing on this server, so no calls are made.' };
+  }
+
+  const lastSync = s.cma_cgm_last_sync ? formatTripDate(String(s.cma_cgm_last_sync)) : null;
+  const syncedBeforeLogs = !!s.cma_cgm_last_sync && String(s.cma_cgm_last_sync).slice(0, 10) < API_LOG_START;
+
+  if (s.tracking_status === 'delivered') {
+    const delivered = s.actual_arrival ? ` on ${formatTripDate(String(s.actual_arrival))}` : '';
+    return {
+      title: `Delivered${delivered}`,
+      detail:
+        'The daily sync only checks loads that are not delivered yet, so no CMA call is made for this load.' +
+        (syncedBeforeLogs
+          ? ` It was last synced on ${lastSync}, before API responses were kept (from ${formatTripDate(API_LOG_START)}).`
+          : ''),
+    };
+  }
+  if (syncedBeforeLogs) {
+    return {
+      title: `Last synced ${lastSync}`,
+      detail: `That was before API responses were kept (from ${formatTripDate(API_LOG_START)}). The next daily sync (06:00 UTC / 11:30 AM IST) or Track now will show here.`,
+    };
+  }
+  return {
+    title: 'Not tracked yet',
+    detail: 'No CMA call has been made for this container yet. The daily sync runs at 06:00 UTC (11:30 AM IST), or use Track now in the shipment.',
+  };
+}
+
 // ============================================
 // CONTAINER SYNC
 // ============================================
